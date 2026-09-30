@@ -1,3 +1,10 @@
+# .NET / C#
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+
 # Rust
 /target/
 **/*.rs.bk
@@ -10,7 +17,7 @@ dist/
 
 # Android / Gradle
 .gradle/
-build/
+**/build/
 local.properties
 *.apk
 *.aab
