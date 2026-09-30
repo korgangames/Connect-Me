@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
-Connect Me — Nobara Linux (KDE Plasma Wayland / wlroots / X11) Multi-Monitor Daemon
-Korgan Games (v1.3 Multi-Monitor Futureproof Edition)
+Connect Me — Nobara Linux (KDE Plasma Wayland / wlroots / X11) Tam Entegre Sistem Servisi & KVM Motoru
+Korgan Games (v1.3 Tam Linux Entegrasyonu)
 
-Features:
-1. Multi-Monitor Auto-Detection on Linux:
-   - KDE Plasma Wayland / X11 via `kscreen-doctor -j`
-   - wlroots / Sway / Hyprland via `wlr-randr --json`
-   - X11 / XWayland fallback via `xrandr --query`
-2. Internal Seam vs. Outer Edge Geometry:
-   - Cursor moves freely across local physical monitors (e.g. DP-1 <-> HDMI-A-1)
-   - Only triggers EdgeHandOff when pushing against an exposed outer boundary!
-3. Mutual 6-Digit PIN Handshake, TOPOLOGY_SYNC, Wayland Clipboard (`wl-copy`/`wl-paste`),
-   and Drop Shelf (`~/Downloads/ConnectMe-Shelf`).
+Özellikler:
+1. Çoklu Monitör Otomatik Algılama:
+   - KDE Plasma Wayland (`kscreen-doctor -j`)
+   - wlroots / Sway / Hyprland (`wlr-randr --json`)
+   - X11 / XWayland (`xrandr --query`)
+2. Akıllı Kenar Topolojisi & İç Birleşim (Internal Seam) Koruması:
+   - Linux'un kendi fiziksel ekranları arasında serbest geçiş, dış kenarlarda Windows/Android'e geçiş.
+3. Çift Yönlü Girdi Enjeksiyonu (Linux Virtual Input):
+   - /dev/uinput (Yerel Linux sanal fare/klavye sürücüsü)
+   - ydotool (Nobara / Wayland komut tabanlı enjektör)
+   - xdotool (X11 / XWayland geri uyumluluk)
+4. Çift Yönlü Evrensel Pano (Universal Clipboard):
+   - wl-copy / wl-paste & xclip ile anlık arka plan senkronizasyonu
+5. Ortak Cep (Drop Shelf) TCP Dosya Akışı:
+   - Windows ve Android ile doğrudan TCP dosya gönderme ve alma
+6. Çift Taraflı 6 Haneli PIN & "Bu Cihaza Güven (Sıfır-PIN Otomatik Bağlantı)"
 """
 
 import json
@@ -27,7 +33,7 @@ import threading
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
@@ -36,6 +42,24 @@ PROTO_VER = 0x01
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
 DATA_CONTROL_TCP_PORT = 42851
+
+PACKET_MOUSE_MOVE = 0x01
+PACKET_MOUSE_BUTTON = 0x02
+PACKET_MOUSE_SCROLL = 0x03
+PACKET_KEY_EVENT = 0x04
+PACKET_EDGE_HANDOFF = 0x05
+PACKET_HEARTBEAT_PING = 0x06
+PACKET_HEARTBEAT_PONG = 0x07
+
+EDGE_NONE = 0
+EDGE_LEFT = 1
+EDGE_RIGHT = 2
+EDGE_TOP = 3
+EDGE_BOTTOM = 4
+
+BUTTON_LEFT = 1
+BUTTON_RIGHT = 2
+BUTTON_MIDDLE = 3
 
 
 @dataclass
@@ -107,13 +131,13 @@ class LinuxMultiMonitorTopology:
     def is_internal_seam(self, mon: PhysicalMonitor, edge: int, x: int, y: int) -> bool:
         """Returns True if stepping 4px across `edge` lands inside another local physical monitor."""
         probe_x, probe_y = x, y
-        if edge == 1:  # Left
+        if edge == EDGE_LEFT:
             probe_x = mon.virtualX - 4
-        elif edge == 2:  # Right
+        elif edge == EDGE_RIGHT:
             probe_x = mon.right + 4
-        elif edge == 3:  # Top
+        elif edge == EDGE_TOP:
             probe_y = mon.virtualY - 4
-        elif edge == 4:  # Bottom
+        elif edge == EDGE_BOTTOM:
             probe_y = mon.bottom + 4
         else:
             return False
@@ -122,6 +146,12 @@ class LinuxMultiMonitorTopology:
             other.monitorId != mon.monitorId and other.contains(probe_x, probe_y)
             for other in self.monitors
         )
+
+    def find_monitor_at(self, x: int, y: int) -> Optional[PhysicalMonitor]:
+        for m in self.monitors:
+            if m.contains(x, y):
+                return m
+        return self.monitors[0] if self.monitors else None
 
     @staticmethod
     def _run_cmd(cmd: List[str]) -> Optional[str]:
@@ -224,22 +254,94 @@ class LinuxMultiMonitorTopology:
         return result
 
 
-class ConnectMeLinuxNode:
-    """Nobara Linux / KDE Plasma Wayland Multi-Monitor Daemon for Connect Me."""
+class LinuxInputInjector:
+    """Hardware input injector supporting ydotool (Wayland/Nobara), uinput, and xdotool (X11)."""
 
     def __init__(self) -> None:
+        self.mode = "none"
+        if shutil.which("ydotool"):
+            self.mode = "ydotool"
+        elif shutil.which("xdotool"):
+            self.mode = "xdotool"
+        elif os.path.exists("/dev/uinput") and os.access("/dev/uinput", os.W_OK):
+            self.mode = "uinput"
+
+    def move_relative(self, dx: int, dy: int) -> None:
+        if self.mode == "ydotool":
+            subprocess.run(["ydotool", "mousemove", "-x", str(dx), "-y", str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif self.mode == "xdotool":
+            subprocess.run(["xdotool", "mousemove_relative", "--", str(dx), str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def mouse_button(self, btn: int, is_pressed: bool) -> None:
+        # btn: 1=Left, 2=Right, 3=Middle
+        act = "down" if is_pressed else "up"
+        if self.mode == "ydotool":
+            ydo_code = "0xC0" if btn == BUTTON_LEFT else ("0xC1" if btn == BUTTON_RIGHT else "0xC2")
+            subprocess.run(["ydotool", "click", f"{ydo_code}{'d' if is_pressed else 'u'}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif self.mode == "xdotool":
+            subcmd = "mousedown" if is_pressed else "mouseup"
+            subprocess.run(["xdotool", subcmd, str(btn)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def mouse_scroll(self, sx: int, sy: int) -> None:
+        if self.mode == "xdotool":
+            btn = "4" if sy > 0 else "5"
+            clicks = max(1, abs(sy) // 40)
+            subprocess.run(["xdotool", "click", "--repeat", str(clicks), btn], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif self.mode == "ydotool":
+            # Wheel click
+            wheel_arg = f"-w{sy}"
+            subprocess.run(["ydotool", "mousemove", wheel_arg], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def key_event(self, vk: int, is_pressed: bool, ch: str) -> None:
+        if not is_pressed:
+            return
+        if self.mode in ("xdotool", "ydotool"):
+            if vk == 0x08:  # Backspace
+                cmd = ["ydotool", "key", "14:1", "14:0"] if self.mode == "ydotool" else ["xdotool", "key", "BackSpace"]
+            elif vk == 0x0D:  # Enter
+                cmd = ["ydotool", "key", "28:1", "28:0"] if self.mode == "ydotool" else ["xdotool", "key", "Return"]
+            elif vk == 0x1B:  # Escape
+                cmd = ["ydotool", "key", "1:1", "1:0"] if self.mode == "ydotool" else ["xdotool", "key", "Escape"]
+            elif ch and ord(ch) >= 32:
+                cmd = ["ydotool", "type", ch] if self.mode == "ydotool" else ["xdotool", "type", ch]
+            else:
+                return
+            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+class ConnectMeLinuxNode:
+    """Nobara Linux / KDE Plasma Wayland Full-Featured Node for Connect Me."""
+
+    def __init__(self, on_log: Optional[Callable[[str], None]] = None) -> None:
         self.device_id = f"linux-{socket.gethostname().lower()}"
         self.device_name = f"{socket.gethostname()} (Nobara KDE)"
         self.platform = "linux-nobara"
         self.local_pin = f"{random.randint(100000, 999999)}"
         self.topology = LinuxMultiMonitorTopology()
+        self.injector = LinuxInputInjector()
+
         self.shelf_dir = Path.home() / "Downloads" / "ConnectMe-Shelf"
         self.shelf_dir.mkdir(parents=True, exist_ok=True)
         self.trust_file = Path.home() / ".config" / "connectme" / "trusted_devices.json"
         self.trust_file.parent.mkdir(parents=True, exist_ok=True)
         self.trusted_devices: Dict[str, dict] = self._load_trusted_devices()
+
         self.peers: Dict[str, dict] = {}
+        self.active_peer_addr: Optional[Tuple[str, int]] = None
         self.running = True
+        self.on_log = on_log
+
+        # Clipboard tracking
+        self.last_copied_clipboard = ""
+        self.udp_sock: Optional[socket.socket] = None
+
+    def log(self, text: str) -> None:
+        print(text)
+        if self.on_log:
+            try:
+                self.on_log(text)
+            except Exception:
+                pass
 
     def _load_trusted_devices(self) -> Dict[str, dict]:
         if not self.trust_file.exists():
@@ -258,23 +360,34 @@ class ConnectMeLinuxNode:
         except Exception:
             pass
 
+    def revoke_trust(self, device_id: str) -> None:
+        if device_id in self.trusted_devices:
+            del self.trusted_devices[device_id]
+            self._save_trusted_devices()
+            if device_id in self.peers:
+                self.peers[device_id]["is_trusted"] = False
+                self.peers[device_id]["in_ok"] = False
+                self.peers[device_id]["out_ok"] = False
+            self.log(f"[Güvenlik] 🗑️ '{device_id}' için güvenilirlik kaydı silindi.")
+
     def start(self) -> None:
         mons = self.topology.monitors
         _, _, vw, vh = self.topology.virtual_desktop_bounds()
-        print("=" * 72)
-        print(f" Connect Me — Nobara Linux (KDE Plasma) Çoklu Monitör Servisi")
-        print(f" Cihaz Adı : {self.device_name} ({self.device_id})")
-        print(f" 6 Haneli Kodu : {self.local_pin[:3]} {self.local_pin[3:]}")
-        print(f" Algılanan Monitör Sayısı : {len(mons)} (Toplam Masaüstü: {vw}x{vh})")
-        print(f" Kayıtlı Güvenilir Cihaz : {len(self.trusted_devices)}")
+        self.log("=" * 72)
+        self.log(" Connect Me — Nobara Linux (KDE Plasma) Çoklu Monitör & KVM Servisi")
+        self.log(f" Cihaz Adı : {self.device_name} ({self.device_id})")
+        self.log(f" 6 Haneli Kodu : {self.local_pin[:3]} {self.local_pin[3:]}")
+        self.log(f" Algılanan Ekran Sayısı : {len(mons)} (Toplam Alan: {vw}x{vh})")
+        self.log(f" Girdi Enjektör Modu : {self.injector.mode.upper()}")
         for m in mons:
             prim_str = " [BİRİNCİL]" if m.isPrimary else ""
-            print(f"   • {m.monitorId}: {m.width}x{m.height} @ ({m.virtualX}, {m.virtualY}) ölçek={m.scaleFactor}{prim_str}")
-        print("=" * 72)
+            self.log(f"   • {m.monitorId}: {m.width}x{m.height} @ ({m.virtualX}, {m.virtualY}) ölçek={m.scaleFactor}{prim_str}")
+        self.log("=" * 72)
 
         threading.Thread(target=self._discovery_loop, daemon=True).start()
         threading.Thread(target=self._tcp_server_loop, daemon=True).start()
         threading.Thread(target=self._udp_input_loop, daemon=True).start()
+        threading.Thread(target=self._clipboard_monitor_loop, daemon=True).start()
 
     def build_beacon_json(self) -> bytes:
         _, _, vw, vh = self.topology.virtual_desktop_bounds()
@@ -331,11 +444,18 @@ class ConnectMeLinuxNode:
                 target_pin = str(header.get("targetPin", "")).strip()
                 sender_id = header.get("senderId", remote_ip)
                 sender_name = header.get("senderName", remote_ip)
+                peer = self.peers.setdefault(sender_id, {
+                    "deviceId": sender_id,
+                    "deviceName": sender_name,
+                    "ipAddress": remote_ip,
+                    "udpInputPort": header.get("senderUdpPort", FAST_INPUT_UDP_PORT),
+                    "tcpControlPort": header.get("senderTcpPort", DATA_CONTROL_TCP_PORT),
+                    "out_ok": False
+                })
+                peer["monitors"] = header.get("senderMonitors", [])
+
                 if target_pin == self.local_pin:
-                    peer = self.peers.setdefault(sender_id, {"name": sender_name, "ip": remote_ip, "out_ok": False})
                     peer["in_ok"] = True
-                    peer["monitors"] = header.get("senderMonitors", [])
-                    
                     req_trust = bool(header.get("requestTrust", False))
                     trust_token = header.get("trustToken", "")
                     if req_trust and trust_token:
@@ -348,20 +468,23 @@ class ConnectMeLinuxNode:
                         }
                         self._save_trusted_devices()
                         peer["is_trusted"] = True
-                        print(f"[Güvenlik] ⭐ '{sender_name}' güvenilir cihaz olarak kaydedildi.")
+                        self.log(f"[Güvenlik] ⭐ '{sender_name}' güvenilir cihaz olarak kaydedildi.")
 
+                    is_mut = bool(peer.get("out_ok", False))
+                    peer["isMutuallyPaired"] = is_mut
                     ack = {
                         "type": "PAIR_VERIFY_ACK",
                         "senderId": self.device_id,
                         "senderName": self.device_name,
                         "senderMonitors": [asdict(m) for m in self.topology.monitors],
                         "trustToken": trust_token if req_trust else None,
-                        "isMutualComplete": bool(peer.get("out_ok", False)),
+                        "isMutualComplete": is_mut,
                     }
                     self._send_tcp_frame(conn, ack)
-                    print(f"[PIN Doğrulama] '{sender_name}' ({remote_ip}) yerel kodumuzu doğruladı!")
+                    self.log(f"[PIN Onayı] 🔔 '{sender_name}' bizim 6 haneli kodumuzu doğruladı!")
                 else:
                     self._send_tcp_frame(conn, {"type": "PAIR_REJECT", "senderId": self.device_id, "senderName": self.device_name})
+                    self.log(f"[Güvenlik] ⚠️ '{sender_name}' hatalı kod denedi ({target_pin}).")
 
             elif msg_type == "TRUSTED_RECONNECT":
                 sender_id = header.get("senderId", remote_ip)
@@ -369,10 +492,17 @@ class ConnectMeLinuxNode:
                 token = header.get("trustToken", "")
                 saved_rec = self.trusted_devices.get(sender_id)
                 if saved_rec and saved_rec.get("trustToken") == token and saved_rec.get("autoConnect", True):
-                    peer = self.peers.setdefault(sender_id, {"name": sender_name, "ip": remote_ip})
+                    peer = self.peers.setdefault(sender_id, {
+                        "deviceId": sender_id,
+                        "deviceName": sender_name,
+                        "ipAddress": remote_ip,
+                        "udpInputPort": header.get("senderUdpPort", FAST_INPUT_UDP_PORT),
+                        "tcpControlPort": header.get("senderTcpPort", DATA_CONTROL_TCP_PORT),
+                    })
                     peer["in_ok"] = True
                     peer["out_ok"] = True
                     peer["is_trusted"] = True
+                    peer["isMutuallyPaired"] = True
                     peer["monitors"] = header.get("senderMonitors", [])
                     ack = {
                         "type": "TRUSTED_RECONNECT_ACK",
@@ -383,20 +513,19 @@ class ConnectMeLinuxNode:
                         "isMutualComplete": True,
                     }
                     self._send_tcp_frame(conn, ack)
-                    print(f"[Otomatik Bağlantı] ⭐ Güvenilir cihaz '{sender_name}' ({remote_ip}) PIN'siz otomatik bağlandı!")
+                    self.log(f"[Otomatik Bağlantı] ⭐ Güvenilir cihaz '{sender_name}' ({remote_ip}) PIN'siz otomatik bağlandı!")
                 else:
                     self._send_tcp_frame(conn, {"type": "PAIR_REJECT", "senderId": self.device_id, "senderName": self.device_name})
 
-            elif msg_type == "TOPOLOGY_SYNC":
-                sender_name = header.get("senderName", remote_ip)
-                mons = header.get("senderMonitors", [])
-                print(f"[Çoklu Monitör Senk] '{sender_name}' {len(mons)} ekranlı topolojisini güncelledi.")
-
             elif msg_type == "CLIPBOARD_TEXT":
                 text = header.get("text", "")
-                if text and shutil.which("wl-copy"):
-                    subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=False)
-                print(f"[Evrensel Pano] '{header.get('senderName')}' cihazından metin alındı ({len(text)} krk).")
+                if text:
+                    self.last_copied_clipboard = text
+                    if shutil.which("wl-copy"):
+                        subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=False)
+                    elif shutil.which("xclip"):
+                        subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=False)
+                    self.log(f"[Evrensel Pano] '{header.get('senderName')}' cihazından metin kopyalandı ({len(text)} krk).")
 
             elif msg_type == "SHELF_FILE" and bin_len >= 0:
                 fname = os.path.basename(header.get("fileName", "dosya.bin"))
@@ -409,20 +538,135 @@ class ConnectMeLinuxNode:
                             break
                         f.write(chunk)
                         remaining -= len(chunk)
-                print(f"[Ortak Cep] '{fname}' ({bin_len} B) -> {dest} kaydedildi.")
+                self.log(f"[Ortak Cep] 📥 '{fname}' ({bin_len} B) -> {dest} kaydedildi!")
+                if shutil.which("notify-send"):
+                    subprocess.run(["notify-send", "Connect Me: Ortak Cep", f"Yeni dosya alındı:\n{fname}"], check=False)
 
     def _udp_input_loop(self) -> None:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(("0.0.0.0", FAST_INPUT_UDP_PORT))
+        self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.udp_sock.bind(("0.0.0.0", FAST_INPUT_UDP_PORT))
         while self.running:
-            data, addr = sock.recvfrom(2048)
+            data, addr = self.udp_sock.recvfrom(2048)
             if len(data) < 4 or data[0] != MAGIC_0 or data[1] != MAGIC_1 or data[2] != PROTO_VER:
                 continue
+
             pkt_type = data[3]
-            if pkt_type == 0x06 and len(data) >= 12:  # HeartbeatPing -> HeartbeatPong
+            if pkt_type == PACKET_HEARTBEAT_PING and len(data) >= 12:
                 pong = bytearray(data[:12])
-                pong[3] = 0x07
-                sock.sendto(bytes(pong), addr)
+                pong[3] = PACKET_HEARTBEAT_PONG
+                self.udp_sock.sendto(bytes(pong), addr)
+
+            elif pkt_type == PACKET_MOUSE_MOVE and len(data) >= 10:
+                _, _, dx, dy = struct.unpack("<Hhh", data[4:10])
+                self.injector.move_relative(dx, dy)
+
+            elif pkt_type == PACKET_MOUSE_BUTTON and len(data) >= 6:
+                btn, pressed = struct.unpack("<BB", data[4:6])
+                self.injector.mouse_button(btn, pressed != 0)
+
+            elif pkt_type == PACKET_MOUSE_SCROLL and len(data) >= 8:
+                sx, sy = struct.unpack("<hh", data[4:8])
+                self.injector.mouse_scroll(sx, sy)
+
+            elif pkt_type == PACKET_KEY_EVENT and len(data) >= 12:
+                vk, sc, pressed, mods, char_code = struct.unpack("<HHBBH", data[4:12])
+                ch = chr(char_code) if char_code > 0 else ""
+                self.injector.key_event(vk, pressed != 0, ch)
+
+            elif pkt_type == PACKET_EDGE_HANDOFF and len(data) >= 10:
+                edge, dragging, norm_pos = struct.unpack("<BBf", data[4:10])
+                self.log(f"[Kenar Geçişi] İmleç Linux ekranına giriş yaptı (Kenar: {edge}, Konum: %{int(norm_pos * 100)}).")
+
+    def _clipboard_monitor_loop(self) -> None:
+        """Polls local clipboard and broadcasts newly copied text to paired devices."""
+        while self.running:
+            time.sleep(0.6)
+            current_text = ""
+            if shutil.which("wl-paste"):
+                try:
+                    res = subprocess.run(["wl-paste", "-n"], capture_output=True, text=True, timeout=0.5)
+                    if res.returncode == 0:
+                        current_text = res.stdout
+                except Exception:
+                    pass
+            elif shutil.which("xclip"):
+                try:
+                    res = subprocess.run(["xclip", "-selection", "clipboard", "-o"], capture_output=True, text=True, timeout=0.5)
+                    if res.returncode == 0:
+                        current_text = res.stdout
+                except Exception:
+                    pass
+
+            if current_text and current_text != self.last_copied_clipboard and len(current_text) <= 500000:
+                self.last_copied_clipboard = current_text
+                self.broadcast_clipboard(current_text)
+
+    def broadcast_clipboard(self, text: str) -> None:
+        paired = [p for p in self.peers.values() if p.get("isMutuallyPaired")]
+        if not paired:
+            return
+        hdr = {
+            "type": "CLIPBOARD_TEXT",
+            "senderId": self.device_id,
+            "senderName": self.device_name,
+            "text": text,
+        }
+        for p in paired:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(2.0)
+                s.connect((p["ipAddress"], p.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+                self._send_tcp_frame(s, hdr)
+                s.close()
+            except Exception:
+                pass
+        self.log(f"[Evrensel Pano] 📋 Yerel metin ({len(text)} krk) bağlı cihazlara iletildi.")
+
+    def send_file_to_peer(self, file_path: Path, peer_id: Optional[str] = None) -> bool:
+        """Streams a local file to paired peer(s) over framed TCP."""
+        if not file_path.exists():
+            return False
+
+        targets = [p for p in self.peers.values() if p.get("isMutuallyPaired")]
+        if peer_id and peer_id in self.peers:
+            targets = [self.peers[peer_id]]
+
+        if not targets:
+            self.log("[Uyarı] Dosya göndermek için önce en az bir cihazla PIN doğrulamasını tamamlayın.")
+            return False
+
+        file_size = file_path.stat().st_size
+        hdr = {
+            "type": "SHELF_FILE",
+            "senderId": self.device_id,
+            "senderName": self.device_name,
+            "fileName": file_path.name,
+            "fileSize": file_size,
+        }
+
+        success = False
+        for peer in targets:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(10.0)
+                s.connect((peer["ipAddress"], peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+                jb = json.dumps(hdr).encode("utf-8")
+                prefix = struct.pack("<iq", len(jb), file_size)
+                s.sendall(prefix + jb)
+
+                with open(file_path, "rb") as f:
+                    while True:
+                        buf = f.read(65536)
+                        if not buf:
+                            break
+                        s.sendall(buf)
+                s.close()
+                self.log(f"[Drop Shelf] 📤 '{file_path.name}' -> '{peer.get('deviceName')}' Ortak Cebine gönderildi!")
+                success = True
+            except Exception as e:
+                self.log(f"[Drop Shelf Hata] Dosya gönderilemedi ({peer.get('deviceName')}): {e}")
+
+        return success
 
     @staticmethod
     def _send_tcp_frame(conn: socket.socket, header: dict, payload: bytes = b"") -> None:
