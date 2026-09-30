@@ -2,9 +2,9 @@
 
 **Proje Adı:** Connect Me  
 **Organizasyon:** Korgan Games (`korgangames/Connect-Me`)  
-**Sürüm:** 1.2 (Çoklu Cihaz Mesh, 2D Ekran Konfigürasyonu GUI ve Çift Taraflı 6 Haneli PIN Doğrulaması)  
-**Hedef Platformlar:** Windows (10/11), Android (10+), Linux (Nobara — KDE Plasma Wayland)  
-**Bağlantı Teknolojileri:** Hibrit Wi-Fi (LAN / mDNS / QUIC-UDP-TCP) + Bluetooth (BLE Keşif & HID)
+**Sürüm:** 1.3 (Çoklu Monitör Sanal Masaüstü, Linux Nobara KDE Plasma & Windows Futureproof Edition)  
+**Hedef Platformlar:** Windows (10/11), Android (10+), Linux (Nobara — KDE Plasma 5/6 Wayland & X11)  
+**Bağlantı Teknolojileri:** Hibrit Wi-Fi (LAN / mDNS / UDP Fast-Path / TCP Framed) + Bluetooth (BLE Keşif & HID)
 
 ---
 
@@ -14,125 +14,91 @@
 
 ### Temel Tasarım Felsefesi
 * **Görüntü Aktarımı Yok (Zero Screen Mirroring / No Virtual Display):** Cihazların ekranları birbirine kopyalanmaz ve bir cihaz diğerinin harici ekranı (video sink) yapılmaz. Her cihaz kendi fiziksel ekranını ve kendi donanımını kullanır.
+* **Çoklu Fiziksel Monitör Desteği (Multi-Monitor Virtual Desktop):** Bilgisayarlar (Windows veya Nobara Linux) birden fazla fiziksel ekrana (ör. 2'li yatay, 3'lü dikey+yatay) sahip olabilir. Bilgisayarın kendi fiziksel ekranları arasındaki birleşim kenarlarında (Internal Seams) imleç yerel olarak serbestçe geçer; imleç yalnızca dışa açık kenarlara çarptığında Android veya diğer bilgisayara geçer.
 * **Çoklu Cihaz (N-to-N Mesh) Desteği:** Aynı anda birden fazla bilgisayar (farklı işletim sistemleri dahil) ve birden fazla Android cihaz tek bir oturumda birbirine bağlanabilir.
-* **Ekran Ayarları Tarzı Sürükle-Bırak Konfigürasyon GUI'si:** Tıpkı işletim sistemlerinin çoklu monitör ayarlarında olduğu gibi, bağlı tüm cihazlar 2 boyutlu interaktif bir kanvas üzerinde kutular halinde görselleştirilir ve fareyle sürüklenerek ekranların istenilen kenarına (veya bir kenarın belirli bir bölümüne) manyetik olarak yerleştirilir.
+* **Ekran Ayarları Tarzı Sürükle-Bırak Konfigürasyon GUI'si:** Tıpkı işletim sistemlerinin çoklu monitör ayarlarında olduğu gibi, bağlı tüm cihazlar ve yerel bilgisayarın tüm monitörleri 2 boyutlu interaktif bir kanvas üzerinde orantısal kutular halinde görselleştirilir ve fareyle sürüklenerek istenilen monitörün kenarına yapıştırılır.
 * **Çift Taraflı 6 Haneli Kod Doğrulaması (Mutual Dual-PIN Pairing):** Her cihaz kendi 6 haneli güvenlik kodunu üretir. İki cihazın birbirine bağlanabilmesi için iki tarafın da karşı cihazın 6 haneli kodunu girerek bağlantıyı karşılıklı onaylaması gerekir.
-* **Doğal Kenar Geçişi (Edge-Triggered Seamless Hand-off):** Fare imleci aktif cihazın ekran kenarına ulaştığında, o kenar segmentinde konumlandırılmış olan cihaza (PC veya Android) anında geçer; klavye odağı da otomatik olarak imleci takip eder.
 
 ---
 
-## 2. Sistem Mimarisi ve Çoklu Cihaz Topolojisi (Multi-Node Mesh Architecture)
+## 2. Çoklu Monitör Sanal Masaüstü ve Sistem Mimarisi
 
-Connect Me, merkezi bir sunucuya ihtiyaç duymayan **Peer-to-Peer (Eşler Arası) Çoklu Cihaz Mesh** mimarisiyle çalışır. Ağdaki her cihazda Connect Me açıktır ve her kullanıcı yalnızca çift taraflı 6 haneli PIN ile onayladığı cihazlarla kendi uzamsal ekran haritasını kurar.
+Connect Me, hem yerel bilgisayarın hem de uzaktaki bilgisayarların çoklu monitör konfigürasyonlarını yerel olarak anlar ve modeller.
 
 ```mermaid
 flowchart TB
-    subgraph Canvas["2D Uzamsal Ekran Konfigürasyonu Kanvası (Örnek Çoklu Cihaz Dizilimi)"]
+    subgraph MultiMonPC["🪟 Windows / 🐧 Nobara KDE Çoklu Monitörlü Bilgisayar (Örnek 3 Ekran)"]
         direction LR
-        Nobara["🐧 Nobara Linux (KDE)\n[Sol Kenar Tamamı]\n2560x1440"]
-        WinMain["🪟 Ana Windows PC\n[Merkez Ekran]\n2560x1440"]
-        WinLaptop["💻 İkinci PC (Windows/Linux)\n[Sağ Üst Kenar %0-%60]\n1920x1080"]
-        AndroidPhone["📱 Android Telefon\n[Sağ Alt Kenar %60-%100]\n1080x2400"]
-        AndroidTablet["📟 Android Tablet\n[Alt Orta Kenar]\n2560x1600"]
+        Mon3["🖥️ Monitör 3 (Dikey Kodlama)\n1080x1920 @ (-1080, -240)"]
+        Mon1["🪟 Monitör 1 (Birincil Ekran)\n2560x1440 @ (0, 0)"]
+        Mon2["🖥️ Monitör 2 (Sağ Ekran)\n1920x1080 @ (2560, 0)"]
+        
+        Mon3 <==>|"İç Birleşim: Serbest Geçiş\n(İşletim Sistemi Doğal Taşır)"| Mon1
+        Mon1 <==>|"İç Birleşim: Serbest Geçiş\n(İşletim Sistemi Doğal Taşır)"| Mon2
     end
 
-    Nobara <-->|"Çift Taraflı PIN Onaylı\nUDP Fast-Path + TCP"| WinMain
-    WinMain <-->|"Sağ Üst Kenar Segmenti"| WinLaptop
-    WinMain <-->|"Sağ Alt Kenar Segmenti"| AndroidPhone
-    WinMain <-->|"Alt Kenar Segmenti"| AndroidTablet
+    AndroidPhone["📱 Android Telefon\n[Monitör 2 Sağ Dış Kenar]"]
+    NobaraLaptop["🐧 Nobara Linux Laptop\n[Monitör 3 Sol Dış Kenar]"]
+    AndroidTablet["📟 Android Tablet\n[Monitör 1 Alt Dış Kenar]"]
+
+    Mon2 -->|"Sağ Dış Kenar Eşiği"| AndroidPhone
+    Mon3 -->|"Sol Dış Kenar Eşiği"| NobaraLaptop
+    Mon1 -->|"Alt Dış Kenar Eşiği"| AndroidTablet
 ```
 
-### 2.1. İnteraktif 2D Ekran Konfigürasyonu GUI'si (Display Arrangement Canvas)
-Kullanıcı arayüzünde bağlı tüm cihazların listelendiği ve görsel olarak konumlandırıldığı bir **Ekran Haritası Editörü** bulunur:
-1. **Orantısal Ekran Kutuları (Aspect-Ratio Boxes):**
-   * Her bağlı cihaz (Windows PC, Nobara Linux PC, Android Telefon, Android Tablet) gerçek çözünürlük oranına uygun bir dikdörtgen kutu olarak kanvas üzerinde çizilir.
-2. **Manyetik Kenar Yapışması (Magnetic Edge Snapping):**
-   * Kullanıcı bir cihazın ekran kutusunu fareyle sürükleyip merkez ekranın (veya başka bir bağlı ekranın) sol, sağ, üst veya alt kenarına yaklaştırdığında kutu kenara manyetik olarak yapışır.
-3. **Kısmi Kenar Segmentleri (Partial Edge Segments):**
-   * Aynı kenara birden fazla cihaz yerleştirilebilir! Örneğin merkez ekranın sağ kenarının üst yarısına bir Laptop, sağ alt köşesine ise bir Android telefon yerleştirildiğinde:
-     * İmleç sağ kenarın üst kısmından (`Y: %0 - %60`) çıkarsa **Laptop** ekranına,
-     * Sağ kenarın alt kısmından (`Y: %60 - %100`) çıkarsa **Android Telefon** ekranına geçer!
-4. **Aktif Temas Bölgesi Gösterimi (Shared Portal Highlight):**
-   * İki ekranın birbirine değdiği kenar kesiti kanvas üzerinde parlak mavi bir geçiş çizgisi (Portal Segment) olarak vurgulanır.
-
-### 2.2. Çift Taraflı 6 Haneli PIN Doğrulama Protokolü (Mutual Dual-PIN Handshake)
-Aynı ağda birden fazla cihaz ve kullanıcı olabileceği için bağlantı güvenliği ve kontrolü **Çift Taraflı (Mutual) 6 Haneli Kod** mekanizmasıyla sağlanır:
-
-```mermaid
-sequenceDiagram
-    participant DevA as 🖥️ Cihaz A (PIN: 482910)
-    participant DevB as 📱 Cihaz B (PIN: 739104)
-
-    Note over DevA,DevB: Her iki cihazda da uygulama açıktır ve kendi 6 haneli PIN kodunu gösterir.
-    DevA->>DevB: 1. Kullanıcı Cihaz A'da, Cihaz B'nin kodunu (739104) girer -> PAIR_REQUEST(targetPin=739104)
-    DevB->>DevB: 2. Cihaz B kendi kodunu doğrular ve gelen isteği "Karşı Onay Bekliyor" olarak gösterir.
-    DevB->>DevA: 3. Kullanıcı Cihaz B'de, Cihaz A'nın kodunu (482910) girer -> PAIR_CONFIRM(targetPin=482910)
-    DevA->>DevA: 4. Cihaz A kendi kodunu doğrular -> ÇİFT TARAFLI EŞLEŞME TAMAMLANDI!
-    DevA<-->DevB: 5. İki cihaz da birbirinin 2D Ekran Konfigürasyonu Kanvasına eklenir.
-```
-
-* **Neden Çift Taraflı PIN?**
-  * Tek bir kişinin izinsiz bağlantı başlatmasını engeller.
-  * İki cihazda da program açıkken her iki tarafın da kendi ekrandaki 6 haneli kodu karşı tarafa doğrulaması (veya mevcut eşleşme isteğini karşı cihazın 6 haneli koduyla onaylaması) sayesinde yalnızca karşılıklı rıza gösteren cihazlar birbirine bağlanır.
+### 2.1. İç Birleşim Çizgisi (Internal Seam) ve Dış Kenar (Exposed Outer Edge) Kuralları
+1. **İç Birleşim Çizgisinde Serbest Geçiş (`IsPointOnInternalMonitorSeam`):**
+   * Bir bilgisayarın Monitör 1'i ile Monitör 2'si arasındaki temas kenarında imleç hareket ettiğinde, Connect Me imlece müdahale etmez (`ShouldTransition = false`). Windows veya KDE Plasma imleci doğal olarak diğer monitörüne aktarır.
+2. **Monitör Bazlı Kenetleme (`AttachedLocalMonitorId`):**
+   * Uzak bir cihaz (ör. Android telefon) spesifik bir yerel monitörün kenarına (ör. `DISPLAY2` sağ kenarı) kenetlenebilir.
+3. **Negatif Sanal Masaüstü Koordinat Desteği:**
+   * Sol veya üst monitörler negatif koordinatlara (`VirtualX = -1080`) sahip olsa bile, uzak cihazdan yerel bilgisayara geri dönüş koordinatları (`ComputeLocalEntryPoint`) tam piksel hassasiyetiyle hedeflenen monitöre indirilir.
 
 ---
 
-## 3. Platform Özelinde Teknik Çözümler (OS-Specific Engineering)
+## 3. Platform Özelinde Çoklu Monitör Mühendisliği
 
-### 3.1. Windows (Windows 10 & 11)
-* **Girdi Yakalama (Input Capture):**
-  * `SetWindowsHookEx` (`WH_MOUSE_LL` ve `WH_KEYBOARD_LL`) ile tüm fare ve klavye olayları yakalanır.
-  * İmleç bağlı cihazlardan birinin temas ettiği kenar segmentinden geçtiği anda yerel Windows imleci çapa noktasına sabitlenir, yerel tıklama ve tuş vuruşları yutulur (`LRESULT(1)`) ve girdiler `<1.5ms` gecikmeyle ilgili hedef cihaza akıtılır.
-* **Girdi Enjeksiyonu (Input Injection):**
-  * Başka bir bilgisayardan veya Android'den Windows'a kontrol geçtiğinde `SendInput` / `SetCursorPos` / `mouse_event` ile fare ve klavye olayları yerel sisteme uygulanır.
-* **Pano ve Dosya Sürükleme:**
-  * `AddClipboardFormatListener` ile anlık pano takibi (`CF_UNICODETEXT`, `CF_HTML`, `CF_DIBV5` / PNG, `CF_HDROP`).
+### 3.1. Windows (Win32 Multi-Monitor Detection)
+* **`EnumDisplayMonitors` + `GetMonitorInfoW` (`MONITORINFOEXW`):**
+  * Tüm bağlı monitörleri, aygıt isimlerini (`\\.\DISPLAY1`), sanal masaüstü dikdörtgenlerini (`rcMonitor.left, top, right, bottom`) ve birincil ekran bayrağını (`MONITORINFOF_PRIMARY`) sorgular.
+* **Per-Monitor DPI Ölçek Desteği (`GetDpiForMonitor` - `Shcore.dll`):**
+  * Farklı ölçeklerdeki (ör. %100 ve %125) monitörlerin koordinatlarını DPI uyumlu haritalar.
+* **Sanal Masaüstü İmleç Sınırlandırması (`ClampToVirtualDesktop`):**
+  * Tek ekran yerine tüm çoklu monitör kümesini kapsar; negatif koordinatlı ekranlar arasında serbest harekete olanak tanır.
 
-### 3.2. Android (Ekran Yansıtmadan Doğrudan Kontrol)
-1. **120Hz Donanım Hızlandırmalı Overlay İmleç + Accessibility Enjeksiyonu (Sıfır Root / Sıfır ADB):**
-   * **Hassas Koordinat Takibi:** Android servisi (`CursorAccessibilityService`), telefonun/tabletin tam ekran çözünürlüğünü (`Width x Height`) bilir ve `TYPE_APPLICATION_OVERLAY` katmanında 60/120Hz akıcılıkta gerçek bir fare imleci çizer.
-   * **Kenardan Giriş ve Çıkış:** İmleç hangi bilgisayardan ve hangi kenar segmentinden girdiyse Android ekranında o hizadan çıkar; Android ekranının kenarından geri çıktığında ise o kenara komşu olan bilgisayara geri döner.
-   * **Tıklama, Kaydırma ve Fiziksel Klavye Köprüsü:** Sol tık, sürükleme, tekerlek kaydırma (`Scroll`), sağ tık (`Geri`), orta tık (`Ana Ekran`) ve Windows/Linux klavyesinden ekran klavyesi açılmadan doğrudan metin yazma (`ACTION_SET_TEXT` + Türkçe Unicode desteği).
-2. **Pro Mod (Shizuku / Kablosuz ADB veya Bluetooth HID):**
-   * Opsiyonel olarak Android'in yerel `InputManager` / Bluetooth HID imlecini kullanabilme.
+### 3.2. Linux — Nobara (KDE Plasma Wayland / wlroots / X11)
+* **KDE Plasma Wayland (`kscreen-doctor -j`):**
+  * Nobara Linux'un varsayılan masaüstü ortamı olan KDE Plasma'da `kscreen-doctor -j` çıktısını JSON olarak okur. `DP-1`, `HDMI-A-1`, `eDP-1` gibi tüm çıkışların `pos: {x, y}`, `size: {width, height}`, `scale` ve `primary / priority` değerlerini anında çözümler.
+* **wlroots / Sway / Hyprland (`wlr-randr --json`):**
+  * wlroots tabanlı oturumlarda `wlr-randr` JSON çıktısını çözümler.
+* **X11 / XWayland (`xrandr --query`):**
+  * X11 ve XWayland oturumlarında Regex tabanlı ayrıştırıcı ile tüm ekran geometrilerini haritalar.
+* **Wayland Pano & Giriş Entegrasyonu:**
+  * `wl-clipboard` (`wl-copy` / `wl-paste`), `libei` / `InputCapture` ve `/dev/uinput` köprüsü.
 
-### 3.3. Linux — Nobara (KDE Plasma / Wayland)
-* **Katman 1: KDE Plasma KWin Wayland Portalları (`ashpd` / `libei`):**
-  * `org.freedesktop.portal.InputCapture` ve `org.freedesktop.portal.RemoteDesktop` ile KWin üzerinde doğal Wayland kenar geçişi ve girdi enjeksiyonu.
-* **Katman 2: Çekirdek Seviyesi `/dev/evdev` + `/dev/uinput`:**
-  * Tek seferlik `udev` kuralı ile `/dev/uinput` üzerinde `Connect Me Virtual HID` donanımı oluşturarak tam ekran oyunlarda (Steam/Proton/XWayland) %100 uyumluluk.
-* **KDE Plasma Pano Entegrasyonu:**
-  * KDE `Klipper` ve Wayland `ext-data-control-v1` protokolü ile arka planda tam otomatik pano senkronizasyonu.
+### 3.3. Android (120Hz Overlay İmleç & Klavye Köprüsü)
+* Donanım hızlandırmalı overlay katmanı (`TYPE_APPLICATION_OVERLAY`) üzerinde 120Hz akıcı imleç.
+* Ekran klavyesi açılmadan doğrudan metin yazma (`ACTION_SET_TEXT` + Türkçe Unicode).
+* Çoklu monitörlü bir bilgisayardan çıkıp Android'e girme ve Android'in kenarından tekrar o bilgisayarın ilgili monitörüne dönme.
 
 ---
 
-## 4. Temel Özellikler ve Kullanıcı Deneyimi (Core Features & UX)
+## 4. Kullanıcı Deneyimi ve 2D Ekran Haritası
 
-### 4.1. 2D Ekran Konfigürasyonu GUI ve Akıllı Kenar Geçişi
-* **Görsel Ekran Dizilim Kanvası:**
-  * Bağlı tüm cihazlar (PC'ler ve Android'ler) sol listede durumlarıyla (`Onaylı`, `Onay Bekliyor`, `Keşfedildi`) listelenir; onaylı cihazlar sağdaki 2D Ekran Konfigürasyonu Kanvasında sürüklenerek ana ekranın istenilen kenarına hizalanır.
-* **İstenmeyen Geçiş Önleyiciler (Edge Guards):**
-  * **Köşe Bariyeri (Dead Corners):** Pencere kapatma (`X`) veya görev çubuğu köşelerindeki (24px) pikseller kilitlenir.
-  * **Hız / Baskı Eşiği (Edge Resistance):** İmlecin yan ekrana geçmesi için kenarda belirli bir mesafe (`28px`) itilmesi gerekir.
-  * **Ekran Kilidi Kısayolu (Game Lock):** `Scroll Lock` veya `Ctrl+Alt+L` ile imleç mevcut cihaza kilitlenir; `Ctrl+Alt+Shift+Esc` her zaman imleci ana bilgisayara geri çağırır.
-
-### 4.2. Evrensel Pano (Universal Clipboard) & Manyetik Cep (Drop Shelf)
-* **Çoklu Cihaz Evrensel Pano:** Bir cihazda kopyalanan metin veya görsel, çift taraflı eşleşmiş tüm aktif cihazların panosuna (veya seçili hedef cihaza) anında senkronize edilir.
-* **Manyetik Cep (Drop Shelf):** Sürükle-bırak ile cebe bırakılan dosyalar, fotoğraflar veya linkler bağlı tüm cihazlara (veya seçilen hedef cihaza) yüksek hızlı TCP akışıyla aktarılır.
+* **2 Boyutlu Yakınlaştırılabilir Ekran Haritası (Display Arrangement Canvas):**
+  * Yerel bilgisayarın tüm monitörleri (`Monitör 1`, `Monitör 2`, `Monitör 3`) gerçek oranlarıyla çizilir.
+  * Monitörler arasındaki iç geçişler kesikli yeşil/turkuaz çizgilerle gösterilir.
+  * Uzak cihazlar sürüklenerek istenilen monitörün dış kenarına yapıştırılabilir.
+* **`🖥️ +Ek Monitör Testi` Butonu:**
+  * Tek tıkla gerçek donanım ekranları, Çift Monitör (Dual) ve Üçlü Monitör (Triple - Dikey Sol) düzenleri arasında geçiş yaparak çoklu monitör topolojisini test etme imkanı.
 
 ---
 
-## 5. Geliştirme Yol Haritası (Phased Roadmap)
-
-### Faz 1 & 2: Çoklu Cihaz Mesh, Çift Taraflı 6 Haneli PIN, 2D Ekran Konfigürasyon GUI, Pano & Drop Shelf 🎯 *[Aktif]*
-* [x] Byte-level `ConnectMe Wire Protocol v1` (UDP Fast-Path `42850`, UDP Discovery `42849`, TCP Framed Control/Shelf `42851`, BLE Proximity).
-* [x] Windows Low-Level Hook (`WH_MOUSE_LL`, `WH_KEYBOARD_LL`) ve Android 120Hz Overlay İmleç + Klavye Köprüsü.
-* [x] **Çift Taraflı (Mutual) 6 Haneli PIN Doğrulama Sistemi:** Her iki cihazın da kendi 6 haneli kodunu üretmesi ve karşılıklı kod girişiyle bağlantının onaylanması.
-* [x] **Çoklu Cihaz (Multi-PC & Multi-Android) Eşzamanlı Bağlantı Motoru:** Aynı anda birden fazla bilgisayar ve Android cihazın bağlanması ve kısmi kenar segmentleri üzerinden yönlendirme.
-* [x] **2D Sürükle-Bırak Ekran Konfigürasyonu GUI'si:** Bağlı cihazların listelendiği ve ekran kutularının sürüklenerek kenarlara manyetik olarak hizalandığı görsel editör.
-
-### Faz 3: Nobara Linux (KDE Plasma Wayland) İstemcisi
-* [ ] Nobara KDE Plasma için `KWin` Wayland (`InputCapture` & `RemoteDesktop`) + `/dev/uinput` masaüstü istemcisinin tamamlanması.
-
-### Faz 4: Üçlü Ekosistem İleri Seviye Cilalama
-* [ ] Kenardan doğrudan dosya sürükleyip karşı ekrana bırakma (Ghost Drag) ve gelişmiş Bluetooth HID / Shizuku modları.
+## 5. Tamamlanan Yol Haritası (Status)
+* [x] **Çoklu Monitör Sanal Masaüstü Desteği (Windows & Linux Nobara KDE Plasma)**
+* [x] **İç Birleşim Çizgisi Koruması & Dış Kenar Yönlendirmesi**
+* [x] **Çift Taraflı 6 Haneli PIN Doğrulaması**
+* [x] **2D Sekmeli Ferah Arayüz & Yakınlaştırılabilir Kanvas**
+* [x] **Evrensel Pano & Drop Shelf Dosya Aktarımı**
+* [x] **Nobara Linux Çoklu Monitör Servisi (`linux/connectme_linux_daemon.py`)**
+* [x] **20/20 Birim ve Entegrasyon Testi**

@@ -260,8 +260,13 @@
                                         Background="#1F2937" Foreground="#E5E7EB" BorderBrush="#374151" Padding="8,3" Margin="0,0,6,0" Cursor="Hand"/>
                                 <Button x:Name="AutoArrangeScreensBtn"
                                         Click="AutoArrangeScreensBtn_Click"
-                                        Background="#1F2937" Foreground="#E5E7EB" BorderBrush="#374151" Padding="8,3" Cursor="Hand"
+                                        Background="#1F2937" Foreground="#E5E7EB" BorderBrush="#374151" Padding="8,3" Margin="0,0,6,0" Cursor="Hand"
                                         Content="📐 Kenarlara Dağıt"/>
+                                <Button x:Name="ToggleLocalMonitorsTestBtn"
+                                        Click="ToggleLocalMonitorsTestBtn_Click"
+                                        Background="#1F2937" Foreground="#38BDF8" BorderBrush="#1E3A8A" Padding="8,3" Cursor="Hand"
+                                        ToolTip="Bu bilgisayar için Dual/Triple Monitör ve dikey ekran düzenlerini simüle eder veya gerçek ekranları yeniden tarar"
+                                        Content="🖥️ +Ek Monitör Testi"/>
                             </StackPanel>
 
                             <Button x:Name="TestSwitchBtn"

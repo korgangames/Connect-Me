@@ -27,6 +27,7 @@ public partial class MainWindow : Window
 
     private PeerDeviceNode? _selectedPeer;
     private int _simDeviceCounter;
+    private int _simLocalMonitorStep;
 
     // 2D Canvas Dragging state
     private PeerDeviceNode? _draggingPeer;
@@ -76,7 +77,8 @@ public partial class MainWindow : Window
         }
 
         RedrawDisplayArrangementCanvas();
-        AppendLog($"[Sistem] Connect Me hazır ({_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin}");
+        int monCount = _topology.LocalMonitors.Count;
+        AppendLog($"[Sistem] Connect Me hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin}");
     }
 
     private async void MainWindow_Closed(object? sender, EventArgs e)
@@ -183,9 +185,13 @@ public partial class MainWindow : Window
                 restoreIdx = i;
 
             string icon = GetPlatformIcon(p.Platform);
+            string multiMonTag = p.RemoteMonitorCount > 1 ? $" [{p.RemoteMonitorCount} Ekran]" : string.Empty;
+            string monPrefix = !string.IsNullOrEmpty(p.AttachedLocalMonitorId) && _topology.LocalMonitors.Count > 1
+                ? $"{p.AttachedLocalMonitorId} "
+                : string.Empty;
             string stateBadge = p.PairingState switch
             {
-                PeerPairingState.MutuallyPaired => $"🟢 ONAYLI ({FormatEdgeShortTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-{p.EdgeOffsetEnd * 100:F0})",
+                PeerPairingState.MutuallyPaired => $"🟢 ONAYLI ({monPrefix}{FormatEdgeShortTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-{p.EdgeOffsetEnd * 100:F0})",
                 PeerPairingState.OutboundPinVerified => "🟡 KARŞI ONAY BEKLİYOR",
                 PeerPairingState.InboundPinVerified => "🟠 ONAYINIZ BEKLENİYOR",
                 _ => "⚪ PIN GEREKLİ"
@@ -193,7 +199,7 @@ public partial class MainWindow : Window
 
             var itemBlock = new TextBlock
             {
-                Text = $"{icon} {p.DeviceName} ({p.IpAddress})\n   {stateBadge}",
+                Text = $"{icon} {p.DeviceName}{multiMonTag} ({p.IpAddress})\n   {stateBadge}",
                 FontSize = 11.5,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(2, 3, 2, 3)
@@ -218,7 +224,8 @@ public partial class MainWindow : Window
         }
 
         var p = _selectedPeer;
-        SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DeviceName}";
+        string multiMonBadge = p.RemoteMonitorCount > 1 ? $" ({p.RemoteMonitorCount} Monitör)" : string.Empty;
+        SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DeviceName}{multiMonBadge}";
 
         string simHint = !string.IsNullOrEmpty(p.SimulatedLocalPin)
             ? $" (Kod: {p.SimulatedLocalPin})"
@@ -227,7 +234,7 @@ public partial class MainWindow : Window
         SelectedPeerStatusText.Text = p.PairingState switch
         {
             PeerPairingState.MutuallyPaired =>
-                "✅ Çift taraflı 6 haneli PIN onayı tamamlandı! Sağdaki 2D Haritada sürükleyerek konumlandırabilirsiniz.",
+                "✅ Çift taraflı 6 haneli PIN onayı tamamlandı! Sağdaki 2D Haritada istediğiniz monitörün kenarına sürükleyebilirsiniz.",
             PeerPairingState.OutboundPinVerified =>
                 $"⏳ Karşı kod doğrulandı! Şimdi '{p.DeviceName}' üzerinde sizin kodunuzu ({_network.PairingPin}) onaylayın.",
             PeerPairingState.InboundPinVerified =>
@@ -248,7 +255,7 @@ public partial class MainWindow : Window
     }
 
     // =========================================================================
-    // 2D Interactive Display Arrangement Canvas + Zoom / Auto-Fit
+    // 2D Interactive Multi-Monitor Display Arrangement Canvas + Zoom / Auto-Fit
     // =========================================================================
 
     private void DisplayArrangementCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -279,7 +286,92 @@ public partial class MainWindow : Window
     private void FitCanvasViewBtn_Click(object sender, RoutedEventArgs e)
     {
         int pairedCount = _topology.GetConfiguredPeers().Count(p => p.IsMutuallyPaired);
-        CanvasZoomSlider.Value = pairedCount >= 4 ? 0.80 : 0.95;
+        int localMonCount = _topology.LocalMonitors.Count;
+        CanvasZoomSlider.Value = (pairedCount >= 4 || localMonCount >= 3) ? 0.78 : 0.95;
+        RedrawDisplayArrangementCanvas();
+    }
+
+    private void ToggleLocalMonitorsTestBtn_Click(object sender, RoutedEventArgs e)
+    {
+        _simLocalMonitorStep = (_simLocalMonitorStep + 1) % 3;
+        var hardwareMonitors = Win32MonitorEnumerator.EnumerateLocalMonitors();
+        var primary = hardwareMonitors.FirstOrDefault(m => m.IsPrimary) ?? hardwareMonitors[0];
+
+        if (_simLocalMonitorStep == 0)
+        {
+            _topology.UpdateLocalMonitors(hardwareMonitors);
+            _network.LocalMonitors = hardwareMonitors;
+            AppendLog($"[Çoklu Monitör] Gerçek donanım ekranlarına dönüldü ({hardwareMonitors.Count} monitör).");
+        }
+        else if (_simLocalMonitorStep == 1)
+        {
+            // Dual-Monitor Setup: Primary + Right Secondary (1920x1080)
+            var dualList = new List<PhysicalMonitorDescriptor>
+            {
+                primary,
+                new()
+                {
+                    MonitorId = "DISPLAY2",
+                    Name = "Monitör 2 (HDMI-1 Sağ)",
+                    VirtualX = primary.Right,
+                    VirtualY = primary.VirtualY,
+                    Width = 1920,
+                    Height = 1080,
+                    ScaleFactor = 1.0,
+                    IsPrimary = false,
+                    IsSimulated = true
+                }
+            };
+            _topology.UpdateLocalMonitors(dualList);
+            _network.LocalMonitors = dualList;
+            AppendLog("[Çoklu Monitör Testi] 2'li Monitör (Dual-Monitor: Ana Ekran + Sağ 1920x1080) aktif! İç birleşim çizgisinde imleç serbest geçer.");
+        }
+        else
+        {
+            // Triple-Monitor Setup: Left Portrait (1080x1920) + Primary + Right Secondary (1920x1080)
+            var tripleList = new List<PhysicalMonitorDescriptor>
+            {
+                primary,
+                new()
+                {
+                    MonitorId = "DISPLAY2",
+                    Name = "Monitör 2 (HDMI-1 Sağ)",
+                    VirtualX = primary.Right,
+                    VirtualY = primary.VirtualY,
+                    Width = 1920,
+                    Height = 1080,
+                    ScaleFactor = 1.0,
+                    IsPrimary = false,
+                    IsSimulated = true
+                },
+                new()
+                {
+                    MonitorId = "DISPLAY3",
+                    Name = "Monitör 3 (DP-2 Dikey)",
+                    VirtualX = primary.VirtualX - 1080,
+                    VirtualY = primary.VirtualY - 240,
+                    Width = 1080,
+                    Height = 1920,
+                    ScaleFactor = 1.0,
+                    IsPrimary = false,
+                    IsSimulated = true
+                }
+            };
+            _topology.UpdateLocalMonitors(tripleList);
+            _network.LocalMonitors = tripleList;
+            CanvasZoomSlider.Value = 0.82;
+            AppendLog("[Çoklu Monitör Testi] 3'lü Monitör (Sol Dikey 1080x1920 + Ana Ekran + Sağ 1920x1080) aktif! Uzak cihazları istediğiniz monitöre sürükleyebilirsiniz.");
+        }
+
+        // Reset custom canvas positions so peers re-align around the updated monitor layout
+        foreach (var peer in _topology.GetConfiguredPeers())
+        {
+            peer.HasCustomCanvasPosition = false;
+            peer.AttachedLocalMonitorId = _topology.GetOutermostMonitorForEdge(peer.AssignedEdgeOnLocal).MonitorId;
+        }
+
+        _ = _network.BroadcastTopologySyncAsync();
+        RefreshPeersList();
         RedrawDisplayArrangementCanvas();
     }
 
@@ -291,15 +383,53 @@ public partial class MainWindow : Window
         DisplayArrangementCanvas.RenderTransformOrigin = new Point(0.5, 0.5);
     }
 
-    private (double Left, double Top, double Width, double Height) GetPrimaryBoxRectOnCanvas()
+    /// <summary>
+    /// Computes the proportional 2D Canvas rectangles for all physical monitors of the local computer.
+    /// </summary>
+    private List<(PhysicalMonitorDescriptor Monitor, double Left, double Top, double Width, double Height)> GetLocalMonitorBoxesOnCanvas()
     {
         double cw = Math.Max(420, DisplayArrangementCanvas.ActualWidth);
         double ch = Math.Max(280, DisplayArrangementCanvas.ActualHeight);
-        double primW = 164;
-        double primH = 98;
-        double primLeft = (cw - primW) / 2.0;
-        double primTop = (ch - primH) / 2.0;
-        return (primLeft, primTop, primW, primH);
+        var monitors = _topology.LocalMonitors;
+
+        if (monitors.Count <= 1)
+        {
+            var m = monitors.FirstOrDefault() ?? new PhysicalMonitorDescriptor { MonitorId = "DISPLAY1", Name = "Birincil Ekran", Width = 1920, Height = 1080, IsPrimary = true };
+            double primW = 164;
+            double primH = 98;
+            double primLeft = (cw - primW) / 2.0;
+            double primTop = (ch - primH) / 2.0;
+            return [(m, primLeft, primTop, primW, primH)];
+        }
+
+        int minVx = monitors.Min(m => m.VirtualX);
+        int minVy = monitors.Min(m => m.VirtualY);
+        int maxVx = monitors.Max(m => m.Right);
+        int maxVy = monitors.Max(m => m.Bottom);
+
+        double totalVw = Math.Max(800, maxVx - minVx);
+        double totalVh = Math.Max(600, maxVy - minVy);
+
+        double maxClusterW = Math.Min(360, cw * 0.56);
+        double maxClusterH = Math.Min(210, ch * 0.54);
+        double scale = Math.Min(maxClusterW / totalVw, maxClusterH / totalVh);
+
+        double clusterW = totalVw * scale;
+        double clusterH = totalVh * scale;
+        double clusterLeft = (cw - clusterW) / 2.0;
+        double clusterTop = (ch - clusterH) / 2.0;
+
+        var list = new List<(PhysicalMonitorDescriptor Monitor, double Left, double Top, double Width, double Height)>(monitors.Count);
+        foreach (var m in monitors)
+        {
+            double l = clusterLeft + (m.VirtualX - minVx) * scale;
+            double t = clusterTop + (m.VirtualY - minVy) * scale;
+            double w = Math.Max(64, m.Width * scale);
+            double h = Math.Max(54, m.Height * scale);
+            list.Add((m, l, t, w, h));
+        }
+
+        return list;
     }
 
     private (double Width, double Height) GetScaledPeerBoxSize(PeerDeviceNode peer)
@@ -313,7 +443,11 @@ public partial class MainWindow : Window
         {
             return (104, 70); // Android Tablet
         }
-        return (132, 78); // Windows / Nobara Linux Desktop or Laptop Monitor
+        if (peer.RemoteMonitorCount > 1)
+        {
+            return (148, 82); // Multi-Monitor Remote Desktop (Windows / Nobara KDE)
+        }
+        return (132, 78); // Single-Monitor Desktop or Laptop
     }
 
     private void RedrawDisplayArrangementCanvas()
@@ -322,59 +456,99 @@ public partial class MainWindow : Window
             return;
 
         DisplayArrangementCanvas.Children.Clear();
-        var (primLeft, primTop, primW, primH) = GetPrimaryBoxRectOnCanvas();
-
         DrawCanvasGridLines(DisplayArrangementCanvas.ActualWidth, DisplayArrangementCanvas.ActualHeight);
 
-        // 1. Primary Local Monitor Box in the Center
-        var primaryBorder = new Border
-        {
-            Width = primW,
-            Height = primH,
-            Background = new SolidColorBrush(Color.FromRgb(23, 37, 84)),
-            BorderBrush = _inputEngine.ActiveRemotePeer == null
-                ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
-                : new SolidColorBrush(Color.FromRgb(56, 189, 248)),
-            BorderThickness = new Thickness(2.5),
-            CornerRadius = new CornerRadius(8)
-        };
+        var localBoxes = GetLocalMonitorBoxesOnCanvas();
 
-        var primStack = new StackPanel
+        // 1. Draw all Local Physical Monitors of this Computer
+        foreach (var (mon, mLeft, mTop, mW, mH) in localBoxes)
         {
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Center
-        };
-        primStack.Children.Add(new TextBlock
-        {
-            Text = "🪟 BU BİLGİSAYAR",
-            FontWeight = FontWeights.Bold,
-            FontSize = 12,
-            Foreground = Brushes.White,
-            HorizontalAlignment = HorizontalAlignment.Center
-        });
-        primStack.Children.Add(new TextBlock
-        {
-            Text = $"{_topology.LocalWidth} x {_topology.LocalHeight}",
-            FontSize = 10.5,
-            Foreground = new SolidColorBrush(Color.FromRgb(147, 197, 253)),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 2, 0, 0)
-        });
-        primStack.Children.Add(new TextBlock
-        {
-            Text = _inputEngine.ActiveRemotePeer == null ? "● İmleç Burada" : "○ Uzak Ekranda",
-            FontSize = 10,
-            Foreground = _inputEngine.ActiveRemotePeer == null
-                ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
-                : new SolidColorBrush(Color.FromRgb(156, 163, 175)),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 3, 0, 0)
-        });
+            var monBorder = new Border
+            {
+                Width = mW,
+                Height = mH,
+                Background = mon.IsPrimary
+                    ? new SolidColorBrush(Color.FromRgb(23, 37, 84))
+                    : new SolidColorBrush(Color.FromRgb(15, 23, 42)),
+                BorderBrush = _inputEngine.ActiveRemotePeer == null
+                    ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
+                    : new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                BorderThickness = new Thickness(mon.IsPrimary ? 2.5 : 1.8),
+                CornerRadius = new CornerRadius(7),
+                ToolTip = $"Bu Bilgisayar — {mon.Name}\nKonum: ({mon.VirtualX}, {mon.VirtualY}) | Çözünürlük: {mon.Width}x{mon.Height} | Ölçek: %{mon.ScaleFactor * 100:F0}"
+            };
 
-        primaryBorder.Child = primStack;
-        Canvas.SetLeft(primaryBorder, primLeft);
-        Canvas.SetTop(primaryBorder, primTop);
-        DisplayArrangementCanvas.Children.Add(primaryBorder);
+            var monStack = new StackPanel
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(3)
+            };
+
+            monStack.Children.Add(new TextBlock
+            {
+                Text = mon.IsPrimary ? $"🪟 {mon.MonitorId} (Ana)" : $"🖥️ {mon.MonitorId}",
+                FontWeight = FontWeights.Bold,
+                FontSize = localBoxes.Count > 1 ? 10.5 : 12,
+                Foreground = Brushes.White,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+
+            monStack.Children.Add(new TextBlock
+            {
+                Text = $"{mon.Width}x{mon.Height}",
+                FontSize = localBoxes.Count > 1 ? 9.5 : 10.5,
+                Foreground = new SolidColorBrush(Color.FromRgb(147, 197, 253)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 1, 0, 0)
+            });
+
+            if (mon.IsPrimary)
+            {
+                monStack.Children.Add(new TextBlock
+                {
+                    Text = _inputEngine.ActiveRemotePeer == null ? "● İmleç Yerelde" : "○ Uzak Ekranda",
+                    FontSize = 9.5,
+                    Foreground = _inputEngine.ActiveRemotePeer == null
+                        ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
+                        : new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 2, 0, 0)
+                });
+            }
+
+            monBorder.Child = monStack;
+            Canvas.SetLeft(monBorder, mLeft);
+            Canvas.SetTop(monBorder, mTop);
+            DisplayArrangementCanvas.Children.Add(monBorder);
+        }
+
+        // Draw Internal Monitor Seam indicators between adjacent local physical monitors
+        for (int i = 0; i < localBoxes.Count; i++)
+        {
+            for (int j = i + 1; j < localBoxes.Count; j++)
+            {
+                var a = localBoxes[i];
+                var b = localBoxes[j];
+                if (Math.Abs((a.Left + a.Width) - b.Left) < 3.0 || Math.Abs((b.Left + b.Width) - a.Left) < 3.0)
+                {
+                    double seamX = Math.Abs((a.Left + a.Width) - b.Left) < 3.0 ? b.Left : a.Left;
+                    double seamTop = Math.Max(a.Top, b.Top) + 4;
+                    double seamBottom = Math.Min(a.Top + a.Height, b.Top + b.Height) - 4;
+                    if (seamBottom > seamTop)
+                    {
+                        DisplayArrangementCanvas.Children.Add(new Line
+                        {
+                            X1 = seamX, Y1 = seamTop, X2 = seamX, Y2 = seamBottom,
+                            Stroke = new SolidColorBrush(Color.FromRgb(16, 185, 129)),
+                            StrokeThickness = 3,
+                            StrokeDashArray = new DoubleCollection([2, 2]),
+                            ToolTip = "İç Monitör Birleşim Kenarı (İmleç işletim sistemi tarafından yerel ekranlar arasında serbestçe geçirilir)"
+                        });
+                    }
+                }
+            }
+        }
 
         // 2. Draw all Mutually Paired Peer Display Boxes & Shared Portal Lines
         var pairedPeers = _topology.GetConfiguredPeers().Where(p => p.IsMutuallyPaired).ToList();
@@ -384,15 +558,41 @@ public partial class MainWindow : Window
             peer.CanvasWidth = boxW;
             peer.CanvasHeight = boxH;
 
-            if (!peer.HasCustomCanvasPosition)
+            var attachedMonBox = localBoxes.FirstOrDefault(b => b.Monitor.MonitorId == peer.AttachedLocalMonitorId);
+            if (attachedMonBox.Monitor == null)
             {
-                ComputeCanvasPosFromEdgeAndSegment(peer, primLeft, primTop, primW, primH, boxW, boxH);
+                var outermost = _topology.GetOutermostMonitorForEdge(peer.AssignedEdgeOnLocal);
+                attachedMonBox = localBoxes.FirstOrDefault(b => b.Monitor.MonitorId == outermost.MonitorId);
+                if (attachedMonBox.Monitor == null)
+                    attachedMonBox = localBoxes[0];
+                peer.AttachedLocalMonitorId = attachedMonBox.Monitor.MonitorId;
             }
 
-            DrawSharedEdgePortalLine(peer, primLeft, primTop, primW, primH);
+            if (!peer.HasCustomCanvasPosition)
+            {
+                ComputeCanvasPosFromEdgeAndSegment(
+                    peer,
+                    attachedMonBox.Left,
+                    attachedMonBox.Top,
+                    attachedMonBox.Width,
+                    attachedMonBox.Height,
+                    boxW,
+                    boxH);
+            }
+
+            DrawSharedEdgePortalLine(
+                peer,
+                attachedMonBox.Left,
+                attachedMonBox.Top,
+                attachedMonBox.Width,
+                attachedMonBox.Height);
 
             bool isSelected = _selectedPeer?.DeviceId == peer.DeviceId;
             bool isCursorHere = _inputEngine.ActiveRemotePeer?.DeviceId == peer.DeviceId;
+
+            string multiMonInfo = peer.RemoteMonitorCount > 1
+                ? $" ({peer.RemoteMonitorCount} Monitörlü Masaüstü)"
+                : $" ({peer.ScreenWidth}x{peer.ScreenHeight})";
 
             var peerBorder = new Border
             {
@@ -412,7 +612,7 @@ public partial class MainWindow : Window
                 CornerRadius = new CornerRadius(7),
                 Cursor = Cursors.SizeAll,
                 Tag = peer,
-                ToolTip = $"{peer.DeviceName} ({peer.ScreenWidth}x{peer.ScreenHeight}) — Kenar: {FormatEdgeTr(peer.AssignedEdgeOnLocal)} (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek başka bir kenara veya hizaya taşıyabilirsiniz."
+                ToolTip = $"{peer.DeviceName}{multiMonInfo}\nBağlı Yerel Monitör: {peer.AttachedLocalMonitorId} — {FormatEdgeTr(peer.AssignedEdgeOnLocal)} Kenar (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek herhangi bir yerel monitörün dış kenarına yapıştırabilirsiniz."
             };
 
             var stack = new StackPanel
@@ -433,14 +633,29 @@ public partial class MainWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Center
             });
 
+            string subLabel = localBoxes.Count > 1
+                ? $"{peer.AttachedLocalMonitorId} {FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}"
+                : $"{FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}";
+
             stack.Children.Add(new TextBlock
             {
-                Text = $"{FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}",
-                FontSize = 9.5,
+                Text = subLabel,
+                FontSize = 9.2,
                 Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 2, 0, 0)
             });
+
+            if (peer.RemoteMonitorCount > 1)
+            {
+                stack.Children.Add(new TextBlock
+                {
+                    Text = $"🖥️ {peer.RemoteMonitorCount} Monitör",
+                    FontSize = 8.8,
+                    Foreground = new SolidColorBrush(Color.FromRgb(167, 243, 208)),
+                    HorizontalAlignment = HorizontalAlignment.Center
+                });
+            }
 
             if (isCursorHere)
             {
@@ -489,10 +704,10 @@ public partial class MainWindow : Window
 
     private void ComputeCanvasPosFromEdgeAndSegment(
         PeerDeviceNode peer,
-        double primLeft,
-        double primTop,
-        double primW,
-        double primH,
+        double monLeft,
+        double monTop,
+        double monW,
+        double monH,
         double boxW,
         double boxH)
     {
@@ -502,20 +717,20 @@ public partial class MainWindow : Window
         switch (peer.AssignedEdgeOnLocal)
         {
             case ScreenEdge.Left:
-                peer.CanvasX = primLeft - boxW - gap;
-                peer.CanvasY = primTop + mid * primH - boxH / 2.0;
+                peer.CanvasX = monLeft - boxW - gap;
+                peer.CanvasY = monTop + mid * monH - boxH / 2.0;
                 break;
             case ScreenEdge.Right:
-                peer.CanvasX = primLeft + primW + gap;
-                peer.CanvasY = primTop + mid * primH - boxH / 2.0;
+                peer.CanvasX = monLeft + monW + gap;
+                peer.CanvasY = monTop + mid * monH - boxH / 2.0;
                 break;
             case ScreenEdge.Top:
-                peer.CanvasX = primLeft + mid * primW - boxW / 2.0;
-                peer.CanvasY = primTop - boxH - gap;
+                peer.CanvasX = monLeft + mid * monW - boxW / 2.0;
+                peer.CanvasY = monTop - boxH - gap;
                 break;
             case ScreenEdge.Bottom:
-                peer.CanvasX = primLeft + mid * primW - boxW / 2.0;
-                peer.CanvasY = primTop + primH + gap;
+                peer.CanvasX = monLeft + mid * monW - boxW / 2.0;
+                peer.CanvasY = monTop + monH + gap;
                 break;
         }
         peer.HasCustomCanvasPosition = true;
@@ -523,33 +738,33 @@ public partial class MainWindow : Window
 
     private void DrawSharedEdgePortalLine(
         PeerDeviceNode peer,
-        double primLeft,
-        double primTop,
-        double primW,
-        double primH)
+        double monLeft,
+        double monTop,
+        double monW,
+        double monH)
     {
         double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
         switch (peer.AssignedEdgeOnLocal)
         {
             case ScreenEdge.Left:
-                x1 = x2 = primLeft - 2;
-                y1 = primTop + peer.EdgeOffsetStart * primH;
-                y2 = primTop + peer.EdgeOffsetEnd * primH;
+                x1 = x2 = monLeft - 2;
+                y1 = monTop + peer.EdgeOffsetStart * monH;
+                y2 = monTop + peer.EdgeOffsetEnd * monH;
                 break;
             case ScreenEdge.Right:
-                x1 = x2 = primLeft + primW + 2;
-                y1 = primTop + peer.EdgeOffsetStart * primH;
-                y2 = primTop + peer.EdgeOffsetEnd * primH;
+                x1 = x2 = monLeft + monW + 2;
+                y1 = monTop + peer.EdgeOffsetStart * monH;
+                y2 = monTop + peer.EdgeOffsetEnd * monH;
                 break;
             case ScreenEdge.Top:
-                y1 = y2 = primTop - 2;
-                x1 = primLeft + peer.EdgeOffsetStart * primW;
-                x2 = primLeft + peer.EdgeOffsetEnd * primW;
+                y1 = y2 = monTop - 2;
+                x1 = monLeft + peer.EdgeOffsetStart * monW;
+                x2 = monLeft + peer.EdgeOffsetEnd * monW;
                 break;
             case ScreenEdge.Bottom:
-                y1 = y2 = primTop + primH + 2;
-                x1 = primLeft + peer.EdgeOffsetStart * primW;
-                x2 = primLeft + peer.EdgeOffsetEnd * primW;
+                y1 = y2 = monTop + monH + 2;
+                x1 = monLeft + peer.EdgeOffsetStart * monW;
+                x2 = monLeft + peer.EdgeOffsetEnd * monW;
                 break;
         }
 
@@ -591,23 +806,20 @@ public partial class MainWindow : Window
             double newLeft = canvasPt.X - _dragMouseOffset.X;
             double newTop = canvasPt.Y - _dragMouseOffset.Y;
 
-            var (primLeft, primTop, primW, primH) = GetPrimaryBoxRectOnCanvas();
-            _topology.SnapPeerBoxToPrimaryOnCanvas(
+            var localBoxes = GetLocalMonitorBoxesOnCanvas();
+            _topology.SnapPeerBoxToLocalMonitorsOnCanvas(
                 _draggingPeer,
                 newLeft,
                 newTop,
                 _draggingBorder.Width,
                 _draggingBorder.Height,
-                primLeft,
-                primTop,
-                primW,
-                primH);
+                localBoxes);
 
             Canvas.SetLeft(_draggingBorder, _draggingPeer.CanvasX);
             Canvas.SetTop(_draggingBorder, _draggingPeer.CanvasY);
 
             CanvasSelectionInfoText.Text =
-                $"🎯 {_draggingPeer.DeviceName}: {FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} Kenar (%{_draggingPeer.EdgeOffsetStart * 100:F0} - %{_draggingPeer.EdgeOffsetEnd * 100:F0} kesiti)";
+                $"🎯 {_draggingPeer.DeviceName} -> {_draggingPeer.AttachedLocalMonitorId} {FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} Kenar (%{_draggingPeer.EdgeOffsetStart * 100:F0} - %{_draggingPeer.EdgeOffsetEnd * 100:F0} kesiti)";
         }
     }
 
@@ -617,7 +829,7 @@ public partial class MainWindow : Window
         {
             _draggingBorder.ReleaseMouseCapture();
             AppendLog(
-                $"[Ekran Konfigürasyonu] '{_draggingPeer.DeviceName}' -> {FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} kenarına (%{_draggingPeer.EdgeOffsetStart * 100:F0} - %{_draggingPeer.EdgeOffsetEnd * 100:F0}) hizalandı.");
+                $"[Ekran Konfigürasyonu] '{_draggingPeer.DeviceName}' -> {_draggingPeer.AttachedLocalMonitorId} ({FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} kenar, %{_draggingPeer.EdgeOffsetStart * 100:F0}-%{_draggingPeer.EdgeOffsetEnd * 100:F0}) hizalandı.");
             _draggingBorder = null;
             _draggingPeer = null;
             RefreshPeersList();
@@ -644,8 +856,10 @@ public partial class MainWindow : Window
         }
 
         var oldEdge = _selectedPeer.AssignedEdgeOnLocal;
+        var outermostMon = _topology.GetOutermostMonitorForEdge(edge);
         _selectedPeer.HasCustomCanvasPosition = false;
-        _topology.AssignPeerToEdgeSegment(_selectedPeer, edge, 0.0f, 1.0f);
+        _selectedPeer.AttachedLocalMonitorId = outermostMon.MonitorId;
+        _topology.AssignPeerToEdgeSegment(_selectedPeer, edge, 0.0f, 1.0f, outermostMon.MonitorId);
         if (oldEdge != edge && oldEdge != ScreenEdge.None)
         {
             DistributePeersOnEdge(oldEdge);
@@ -654,7 +868,7 @@ public partial class MainWindow : Window
 
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();
-        AppendLog($"[Ekran Konfigürasyonu] '{_selectedPeer.DeviceName}' -> {FormatEdgeTr(edge)} kenara taşındı.");
+        AppendLog($"[Ekran Konfigürasyonu] '{_selectedPeer.DeviceName}' -> {outermostMon.MonitorId} {FormatEdgeTr(edge)} kenara taşındı.");
     }
 
     private void AutoArrangeScreensBtn_Click(object sender, RoutedEventArgs e)
@@ -666,7 +880,9 @@ public partial class MainWindow : Window
         ScreenEdge[] edgesOrder = [ScreenEdge.Right, ScreenEdge.Left, ScreenEdge.Bottom, ScreenEdge.Top];
         for (int i = 0; i < paired.Count; i++)
         {
-            paired[i].AssignedEdgeOnLocal = edgesOrder[i % edgesOrder.Length];
+            var edge = edgesOrder[i % edgesOrder.Length];
+            paired[i].AssignedEdgeOnLocal = edge;
+            paired[i].AttachedLocalMonitorId = _topology.GetOutermostMonitorForEdge(edge).MonitorId;
         }
 
         foreach (var edge in edgesOrder)
@@ -676,7 +892,7 @@ public partial class MainWindow : Window
 
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();
-        AppendLog("[Ekran Konfigürasyonu] Tüm bağlı ekranlar dört kenara dengeli şekilde dağıtıldı.");
+        AppendLog("[Ekran Konfigürasyonu] Tüm bağlı ekranlar dış monitör kenarlarına dengeli şekilde dağıtıldı.");
     }
 
     // =========================================================================
@@ -731,8 +947,8 @@ public partial class MainWindow : Window
         (string name, string platform, int w, int h, ScreenEdge preferredEdge) = (_simDeviceCounter % 4) switch
         {
             1 => ($"Android Telefon #{_simDeviceCounter}", "android", 1080, 2400, ScreenEdge.Right),
-            2 => ($"Nobara KDE PC #{_simDeviceCounter}", "linux-nobara", 2560, 1440, ScreenEdge.Left),
-            3 => ($"Windows Laptop #{_simDeviceCounter}", "windows", 1920, 1080, ScreenEdge.Right),
+            2 => ($"Nobara KDE PC #{_simDeviceCounter}", "linux-nobara", 4480, 1440, ScreenEdge.Left),
+            3 => ($"Windows İş İstasyonu #{_simDeviceCounter}", "windows", 3840, 1080, ScreenEdge.Right),
             _ => ($"Android Tablet #{_simDeviceCounter}", "android", 2560, 1600, ScreenEdge.Bottom)
         };
 
@@ -751,7 +967,25 @@ public partial class MainWindow : Window
             simulatedPin: simPin,
             autoMutuallyPair: false);
 
+        if (platform == "linux-nobara")
+        {
+            simPeer.RemoteMonitors =
+            [
+                new PhysicalMonitorDescriptor { MonitorId = "DP-1", Name = "DP-1 (Ana)", VirtualX = 0, VirtualY = 0, Width = 2560, Height = 1440, ScaleFactor = 1.25, IsPrimary = true },
+                new PhysicalMonitorDescriptor { MonitorId = "HDMI-A-1", Name = "HDMI-A-1", VirtualX = 2560, VirtualY = 0, Width = 1920, Height = 1080, ScaleFactor = 1.0, IsPrimary = false }
+            ];
+        }
+        else if (platform == "windows")
+        {
+            simPeer.RemoteMonitors =
+            [
+                new PhysicalMonitorDescriptor { MonitorId = "DISPLAY1", Name = "DISPLAY1", VirtualX = 0, VirtualY = 0, Width = 1920, Height = 1080, ScaleFactor = 1.0, IsPrimary = true },
+                new PhysicalMonitorDescriptor { MonitorId = "DISPLAY2", Name = "DISPLAY2", VirtualX = 1920, VirtualY = 0, Width = 1920, Height = 1080, ScaleFactor = 1.0, IsPrimary = false }
+            ];
+        }
+
         simPeer.AssignedEdgeOnLocal = preferredEdge;
+        simPeer.AttachedLocalMonitorId = _topology.GetOutermostMonitorForEdge(preferredEdge).MonitorId;
         _selectedPeer = simPeer;
         RemotePinInputBox.Text = simPin;
 
@@ -760,7 +994,7 @@ public partial class MainWindow : Window
         RefreshPeersList();
         UpdateSelectedPeerPairingPanel();
         AppendLog(
-            $"[Simülatör] '{name}' ({w}x{h}) eklendi (Kod: {simPin}). Sol alttan '✅ Doğrula' ve '📲 Karşı Cihazda Onayla' ile eşleştirin.");
+            $"[Simülatör] '{name}' ({simPeer.RemoteMonitorCount} ekran, {w}x{h}) eklendi (Kod: {simPin}). Sol alttan '✅ Doğrula' ve '📲 Karşı Cihazda Onayla' ile eşleştirin.");
     }
 
     private async Task RunSimulatedDeviceNodeLoopAsync(PeerDeviceNode simPeer, UdpClient simUdp, CancellationToken ct)

@@ -23,6 +23,11 @@ public static class Program
         TestBleProximityCodec();
         TestSpatialTopologyEdgeSwitchingAndDeadCorners();
         TestMultiDevicePartialEdgeSegmentsAndCanvasSnapping();
+        TestMultiMonitorInternalSeamPassThrough();
+        TestMultiMonitorNegativeCoordinateReturn();
+        TestLinuxKScreenDoctorJsonParser();
+        TestLinuxXRandrOutputParser();
+        TestMultiMonitorCanvasMagneticSnapping();
         await TestTcpFrameCodecAsync();
         await TestEndToEndMutualSixDigitPinAndLoopbackAsync();
 
@@ -227,6 +232,164 @@ public static class Program
             Math.Abs(phonePeer.EdgeOffsetStart - 0.5f) < 0.01f &&
             Math.Abs(phonePeer.EdgeOffsetEnd - 1.0f) < 0.01f,
             "2D Ekran Konfigürasyonu GUI Manyetik Kenar Yapışması (SnapPeerBoxToPrimaryOnCanvas)");
+    }
+
+    private static void TestMultiMonitorInternalSeamPassThrough()
+    {
+        var topo = new SpatialTopologyEngine
+        {
+            CornerDeadZonePixels = 16,
+            EdgeResistancePixels = 20.0
+        };
+
+        // Dual-Monitor Setup: Monitor 1 (0, 0, 2560, 1440) + Monitor 2 (2560, 0, 1920, 1080)
+        var mon1 = new PhysicalMonitorDescriptor { MonitorId = "DISPLAY1", Name = "Monitör 1", VirtualX = 0, VirtualY = 0, Width = 2560, Height = 1440, IsPrimary = true };
+        var mon2 = new PhysicalMonitorDescriptor { MonitorId = "DISPLAY2", Name = "Monitör 2", VirtualX = 2560, VirtualY = 0, Width = 1920, Height = 1080, IsPrimary = false };
+        topo.UpdateLocalMonitors([mon1, mon2]);
+
+        var androidPeer = new PeerDeviceNode
+        {
+            DeviceId = "android-dual",
+            DeviceName = "Android Tablet",
+            Platform = "android",
+            MyEnteredPinVerifiedByRemote = true,
+            RemoteEnteredMyPinVerified = true
+        };
+        // Dock Android against Monitor 2's Right outer edge
+        topo.AssignPeerToEdge(ScreenEdge.Right, androidPeer, targetLocalMonitorId: "DISPLAY2");
+
+        // 1. Internal Seam: Moving from Monitor 1 rightwards across X=2559 into Monitor 2 at Y=500 MUST NOT switch to Android!
+        bool isSeam = topo.IsPointOnInternalMonitorSeam(mon1, ScreenEdge.Right, 2559, 500);
+        var seamAttempt = topo.EvaluateCursorStep(2559, 500, deltaX: 40, deltaY: 0);
+
+        // 2. Outer Edge: Moving from Monitor 2 rightwards across X=4479 (2560 + 1920 - 1) at Y=500 MUST transition to Android!
+        bool isMon2OuterSeam = topo.IsPointOnInternalMonitorSeam(mon2, ScreenEdge.Right, 4479, 500);
+        var outerTransition = topo.EvaluateCursorStep(4479, 500, deltaX: 30, deltaY: 0);
+
+        AssertTrue(
+            isSeam && !seamAttempt.ShouldTransition &&
+            !isMon2OuterSeam && outerTransition.ShouldTransition &&
+            outerTransition.TargetPeer?.DeviceId == "android-dual" &&
+            outerTransition.SourceMonitorId == "DISPLAY2",
+            "Çoklu Monitör İç Birleşim Koruması: Monitör 1 -> Monitör 2 geçişinde imleç serbest, Monitör 2 dış kenarında Android'e geçiş");
+    }
+
+    private static void TestMultiMonitorNegativeCoordinateReturn()
+    {
+        var topo = new SpatialTopologyEngine();
+        // Triple-Monitor Setup: Monitor 3 is on the left at VirtualX = -1080
+        var mon1 = new PhysicalMonitorDescriptor { MonitorId = "DISPLAY1", Name = "Monitör 1", VirtualX = 0, VirtualY = 0, Width = 2560, Height = 1440, IsPrimary = true };
+        var mon3 = new PhysicalMonitorDescriptor { MonitorId = "DISPLAY3", Name = "Monitör 3 Sol Dikey", VirtualX = -1080, VirtualY = -240, Width = 1080, Height = 1920, IsPrimary = false };
+        topo.UpdateLocalMonitors([mon1, mon3]);
+
+        var nobaraPeer = new PeerDeviceNode
+        {
+            DeviceId = "nobara-left",
+            DeviceName = "Nobara KDE",
+            Platform = "linux-nobara",
+            AttachedLocalMonitorId = "DISPLAY3",
+            AssignedEdgeOnLocal = ScreenEdge.Left,
+            MyEnteredPinVerifiedByRemote = true,
+            RemoteEnteredMyPinVerified = true
+        };
+
+        // When returning from Nobara through the left edge of Monitor 3 at 50% height
+        var (retX, retY) = topo.ComputeLocalEntryPoint(ScreenEdge.Left, 0.50f, nobaraPeer);
+
+        // Expected X: -1080 + 8 = -1072, Expected Y: -240 + 960 = 720
+        AssertTrue(
+            retX == -1072 && retY == 720,
+            $"Çoklu Monitör Negatif Koordinat Geri Dönüşü (DISPLAY3 sol dikey ekran: {retX}, {retY})");
+    }
+
+    private static void TestLinuxKScreenDoctorJsonParser()
+    {
+        string sampleKdeJson = """
+        {
+            "outputs": [
+                {
+                    "connected": true,
+                    "enabled": true,
+                    "name": "DP-1",
+                    "primary": true,
+                    "scale": 1.25,
+                    "pos": { "x": 0, "y": 0 },
+                    "size": { "width": 2560, "height": 1440 }
+                },
+                {
+                    "connected": true,
+                    "enabled": true,
+                    "name": "HDMI-A-1",
+                    "primary": false,
+                    "scale": 1.0,
+                    "pos": { "x": 2560, "y": 0 },
+                    "size": { "width": 1920, "height": 1080 }
+                }
+            ]
+        }
+        """;
+
+        var monitors = CrossPlatformMonitorDetector.ParseKScreenDoctorJson(sampleKdeJson);
+        AssertTrue(
+            monitors.Count == 2 &&
+            monitors[0].MonitorId == "DP-1" && monitors[0].Width == 2560 && monitors[0].IsPrimary &&
+            monitors[1].MonitorId == "HDMI-A-1" && monitors[1].VirtualX == 2560 && monitors[1].Height == 1080,
+            "Linux KDE Plasma Wayland (kscreen-doctor -j) Çoklu Monitör JSON Ayrıştırıcı");
+    }
+
+    private static void TestLinuxXRandrOutputParser()
+    {
+        string sampleXRandr = """
+        Screen 0: minimum 320 x 200, current 4480 x 1440, maximum 16384 x 16384
+        DP-1 connected primary 2560x1440+0+0 (normal left inverted right x axis y axis) 597mm x 336mm
+           2560x1440    143.91*+
+        HDMI-A-1 connected 1920x1080+2560+0 (normal left inverted right x axis y axis) 527mm x 296mm
+           1920x1080     60.00*+
+        DP-2 disconnected (normal left inverted right x axis y axis)
+        """;
+
+        var monitors = CrossPlatformMonitorDetector.ParseXRandrOutput(sampleXRandr);
+        AssertTrue(
+            monitors.Count == 2 &&
+            monitors[0].MonitorId == "DP-1" && monitors[0].IsPrimary && monitors[0].Width == 2560 &&
+            monitors[1].MonitorId == "HDMI-A-1" && monitors[1].VirtualX == 2560 && monitors[1].Width == 1920,
+            "Linux X11/XWayland (xrandr --query) Çoklu Monitör Çıktı Ayrıştırıcı");
+    }
+
+    private static void TestMultiMonitorCanvasMagneticSnapping()
+    {
+        var topo = new SpatialTopologyEngine();
+        var mon1 = new PhysicalMonitorDescriptor { MonitorId = "DISPLAY1", Name = "Monitör 1", Width = 2560, Height = 1440, IsPrimary = true };
+        var mon2 = new PhysicalMonitorDescriptor { MonitorId = "DISPLAY2", Name = "Monitör 2", VirtualX = 2560, VirtualY = 0, Width = 1920, Height = 1080, IsPrimary = false };
+        topo.UpdateLocalMonitors([mon1, mon2]);
+
+        var phonePeer = new PeerDeviceNode
+        {
+            DeviceId = "phone-mon2",
+            DeviceName = "Android Telefon",
+            Platform = "android"
+        };
+
+        // Canvas monitor cluster: Mon 1 at (100, 100, 140, 90), Mon 2 at (244, 100, 110, 70)
+        var monitorBoxes = new List<(PhysicalMonitorDescriptor, double, double, double, double)>
+        {
+            (mon1, 100, 100, 140, 90),
+            (mon2, 244, 100, 110, 70)
+        };
+
+        // Drag phone near the RIGHT edge of Monitör 2 (draggedLeft = 360, draggedTop = 110)
+        topo.SnapPeerBoxToLocalMonitorsOnCanvas(
+            phonePeer,
+            draggedLeft: 360,
+            draggedTop: 110,
+            peerBoxW: 50,
+            peerBoxH: 70,
+            monitorCanvasBoxes: monitorBoxes);
+
+        AssertTrue(
+            phonePeer.AttachedLocalMonitorId == "DISPLAY2" &&
+            phonePeer.AssignedEdgeOnLocal == ScreenEdge.Right,
+            "2D Çoklu Monitör Kanvasında İstenen Monitöre (DISPLAY2 Sağ Kenar) Manyetik Kenetleme");
     }
 
     private static async Task TestTcpFrameCodecAsync()

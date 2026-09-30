@@ -104,6 +104,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     public int LocalScreenWidth { get; set; } = 1920;
     public int LocalScreenHeight { get; set; } = 1080;
+    public List<PhysicalMonitorDescriptor> LocalMonitors { get; set; } = new();
 
     // Events
     public event Action<PeerDeviceNode>? PeerDiscoveredOrUpdated;
@@ -341,6 +342,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 SenderTcpPort = ControlTcpPort,
                 SenderScreenWidth = LocalScreenWidth,
                 SenderScreenHeight = LocalScreenHeight,
+                SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
                 TargetPin = cleanPin
             };
 
@@ -350,6 +352,10 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             if (respHeader != null && respHeader.Type == "PAIR_VERIFY_ACK")
             {
                 peer.MyEnteredPinVerifiedByRemote = true;
+                if (respHeader.SenderMonitors != null && respHeader.SenderMonitors.Count > 0)
+                {
+                    peer.RemoteMonitors = respHeader.SenderMonitors;
+                }
                 if (respHeader.IsMutualComplete == true)
                 {
                     peer.RemoteEnteredMyPinVerified = true;
@@ -694,6 +700,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         TcpControlPort = beacon.TcpControlPort,
                         ScreenWidth = beacon.ScreenWidth,
                         ScreenHeight = beacon.ScreenHeight,
+                        RemoteMonitors = beacon.Monitors ?? new List<PhysicalMonitorDescriptor>(),
                         LastSeen = DateTimeOffset.UtcNow
                     },
                     (_, existing) =>
@@ -705,6 +712,10 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         existing.TcpControlPort = beacon.TcpControlPort;
                         existing.ScreenWidth = beacon.ScreenWidth;
                         existing.ScreenHeight = beacon.ScreenHeight;
+                        if (beacon.Monitors is { Count: > 0 })
+                        {
+                            existing.RemoteMonitors = beacon.Monitors;
+                        }
                         existing.LastSeen = DateTimeOffset.UtcNow;
                         return existing;
                     });
@@ -867,6 +878,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                             TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
                             ScreenWidth = header.SenderScreenWidth ?? 1080,
                             ScreenHeight = header.SenderScreenHeight ?? 2400,
+                            RemoteMonitors = header.SenderMonitors ?? new List<PhysicalMonitorDescriptor>(),
                             LastSeen = DateTimeOffset.UtcNow
                         },
                         (_, existing) =>
@@ -884,6 +896,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                                 existing.ScreenWidth = header.SenderScreenWidth.Value;
                             if (header.SenderScreenHeight.HasValue)
                                 existing.ScreenHeight = header.SenderScreenHeight.Value;
+                            if (header.SenderMonitors is { Count: > 0 })
+                                existing.RemoteMonitors = header.SenderMonitors;
                             existing.LastSeen = DateTimeOffset.UtcNow;
                             return existing;
                         });
@@ -897,6 +911,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                             Type = "PAIR_VERIFY_ACK",
                             SenderId = LocalDeviceId,
                             SenderName = LocalDeviceName,
+                            SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
                             IsMutualComplete = peer.IsMutuallyPaired
                         };
                         await TcpFrameCodec.WriteFrameAsync(stream, ack, null, 0, ct).ConfigureAwait(false);
@@ -923,6 +938,22 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         };
                         await TcpFrameCodec.WriteFrameAsync(stream, rej, null, 0, ct).ConfigureAwait(false);
                         Log($"[Güvenlik] ⚠️ '{peer.DeviceName}' ({remoteIp}) hatalı PIN kodu denedi ({submittedPin}).");
+                    }
+                    break;
+                }
+
+                case "TOPOLOGY_SYNC":
+                {
+                    if (header.SenderMonitors is { Count: > 0 })
+                    {
+                        var peer = _peers.Values.FirstOrDefault(p => p.DeviceId == header.SenderId || p.IpAddress == remoteIp);
+                        if (peer != null)
+                        {
+                            peer.RemoteMonitors = header.SenderMonitors;
+                            peer.LastSeen = DateTimeOffset.UtcNow;
+                            Log($"[Çoklu Monitör Senk] '{peer.DeviceName}' {peer.RemoteMonitors.Count} fiziksel ekran düzenini bildirdi.");
+                            PeerDiscoveredOrUpdated?.Invoke(peer);
+                        }
                     }
                     break;
                 }
@@ -995,6 +1026,28 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         }
     }
 
+    public async Task BroadcastTopologySyncAsync()
+    {
+        if (LocalMonitors.Count == 0)
+            return;
+
+        var header = new TcpControlHeader
+        {
+            Type = "TOPOLOGY_SYNC",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform,
+            SenderScreenWidth = LocalScreenWidth,
+            SenderScreenHeight = LocalScreenHeight,
+            SenderMonitors = LocalMonitors.ToList()
+        };
+
+        foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired))
+        {
+            await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
+        }
+    }
+
     private DiscoveryBeacon CreateLocalBeacon() => new()
     {
         DeviceId = LocalDeviceId,
@@ -1004,6 +1057,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         TcpControlPort = ControlTcpPort,
         ScreenWidth = LocalScreenWidth,
         ScreenHeight = LocalScreenHeight,
+        Monitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
     };
 

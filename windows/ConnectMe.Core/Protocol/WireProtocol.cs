@@ -244,6 +244,50 @@ public static class WirePacketCodec
 }
 
 /// <summary>
+/// Represents a single physical monitor within a computer's virtual desktop space
+/// (Windows Virtual Screen or Linux Wayland/KScreen/RandR output layout).
+/// Coordinates (VirtualX, VirtualY) may be negative when secondary monitors are placed left/above the primary monitor.
+/// </summary>
+public sealed class PhysicalMonitorDescriptor
+{
+    [JsonPropertyName("monitorId")]
+    public string MonitorId { get; set; } = "DISPLAY1";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "Monitör 1";
+
+    [JsonPropertyName("virtualX")]
+    public int VirtualX { get; set; }
+
+    [JsonPropertyName("virtualY")]
+    public int VirtualY { get; set; }
+
+    [JsonPropertyName("width")]
+    public int Width { get; set; } = 1920;
+
+    [JsonPropertyName("height")]
+    public int Height { get; set; } = 1080;
+
+    [JsonPropertyName("scaleFactor")]
+    public double ScaleFactor { get; set; } = 1.0;
+
+    [JsonPropertyName("isPrimary")]
+    public bool IsPrimary { get; set; } = true;
+
+    [JsonIgnore]
+    public bool IsSimulated { get; set; }
+
+    [JsonIgnore]
+    public int Right => VirtualX + Width;
+
+    [JsonIgnore]
+    public int Bottom => VirtualY + Height;
+
+    public bool ContainsPoint(int x, int y) =>
+        x >= VirtualX && x < Right && y >= VirtualY && y < Bottom;
+}
+
+/// <summary>
 /// UDP Discovery Beacon exchanged on port 42849.
 /// Note: The device's 6-digit PIN is NEVER broadcast in discovery beacons for security;
 /// each user must read the 6-digit PIN from the target device's screen and enter it.
@@ -274,12 +318,15 @@ public sealed class DiscoveryBeacon
     [JsonPropertyName("screenHeight")]
     public int ScreenHeight { get; set; } = 1080;
 
+    [JsonPropertyName("monitors")]
+    public List<PhysicalMonitorDescriptor>? Monitors { get; set; }
+
     [JsonPropertyName("timestamp")]
     public long Timestamp { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 }
 
 /// <summary>
-/// Control, Mutual PIN Pairing, Clipboard, and Drop Shelf message header sent over TCP port 42851.
+/// Control, Mutual PIN Pairing, Multi-Monitor Topology Sync, Clipboard, and Drop Shelf message header sent over TCP port 42851.
 /// Followed by optional binary payload of length BinaryPayloadLength.
 /// </summary>
 public sealed class TcpControlHeader
@@ -290,6 +337,7 @@ public sealed class TcpControlHeader
     // - "PAIR_REQUEST": Sender submits TargetPin (the receiver's 6-digit PIN) to verify sender -> receiver
     // - "PAIR_VERIFY_ACK": Receiver confirms TargetPin matched receiver's LocalPin (and includes whether mutual pairing is now complete)
     // - "PAIR_REJECT": Receiver rejects wrong 6-digit PIN
+    // - "TOPOLOGY_SYNC": Sender broadcasts its updated multi-monitor layout (SenderMonitors)
     // - "CLIPBOARD_TEXT": Universal clipboard text sync
     // - "CLIPBOARD_IMAGE": Universal clipboard PNG sync
     // - "SHELF_FILE": Drop Shelf file transfer
@@ -314,6 +362,9 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("senderScreenHeight")]
     public int? SenderScreenHeight { get; set; }
+
+    [JsonPropertyName("senderMonitors")]
+    public List<PhysicalMonitorDescriptor>? SenderMonitors { get; set; }
 
     [JsonPropertyName("targetPin")]
     public string? TargetPin { get; set; }

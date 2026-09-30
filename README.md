@@ -3,18 +3,22 @@
 **Connect Me**, **Windows**, **Android** ve **Linux (Nobara — KDE Plasma Wayland)** cihazlarınızı ekran yansıtma (screen mirroring) olmadan tek bir fiziksel klavye ve fare ile kontrol etmenizi, ortak pano (Universal Clipboard) kullanmanızı ve cihazlar arasında sürükle-bırak / manyetik cep (Drop Shelf) ile kolayca eşya paylaşmanızı sağlayan hibrit (**Wi-Fi + Bluetooth**) bir ekosistem uygulamasıdır.
 
 > 📄 **Mimari ve Protokol Dokümanları:**
-> - [**App Design Document (`docs/ADD.md` v1.2)**](docs/ADD.md)
-> - [**Wire Protocol v1.2 (`protocol/WIRE_PROTOCOL.md`)**](protocol/WIRE_PROTOCOL.md)
+> - [**App Design Document (`docs/ADD.md` v1.3)**](docs/ADD.md)
+> - [**Wire Protocol v1.3 (`protocol/WIRE_PROTOCOL.md`)**](protocol/WIRE_PROTOCOL.md)
+> - [**Linux Kurulum ve Çalıştırma Kılavuzu (`linux/README.md`)**](linux/README.md)
 
 ---
 
 ## ✨ Temel Özellikler
 
-1. **Çoklu Cihaz (Multi-PC & Multi-Android) Eşzamanlı Bağlantı:**
-   - Aynı anda birden fazla bilgisayar (Windows, Nobara Linux vb.) ve birden fazla Android cihaz (telefon, tablet) tek bir oturumda birbirine bağlanabilir.
+1. **Çoklu Monitör Sanal Masaüstü Desteği (Multi-Monitor Futureproof — Windows & Linux):**
+   - Bilgisayarlar (Windows veya Nobara Linux) birden fazla fiziksel ekrana (ör. 2'li yatay, 3'lü dikey+yatay) sahip olabilir.
+   - **İç Birleşim Koruması (Internal Seam Rule):** Bilgisayarın kendi fiziksel monitörleri arasında (ör. DP-1 ile HDMI-1 arasında) imleç yerel olarak serbestçe geçer. Connect Me imlece müdahale etmez. İmleç yalnızca dışa açık kenara çarptığında Android veya diğer bilgisayara geçer.
+   - **Monitör Bazlı Kenetleme (`AttachedLocalMonitorId`):** 2D Ekran Haritasında Android veya Linux cihazı istediğiniz yerel monitörün kenarına yapıştırabilirsiniz.
+   - **Linux KDE Plasma Wayland Entegrasyonu:** `kscreen-doctor -j`, `wlr-randr` ve `xrandr` ile Linux'taki tüm çoklu ekran düzenlerini otomatik algılar.
 2. **Ekran Ayarları Tarzı 2D Sürükle-Bırak Ekran Konfigürasyonu GUI'si:**
-   - Bağlı tüm cihazlar sol panelde listelenir ve sağdaki **2D Ekran Konfigürasyonu Kanvası (Display Arrangement Canvas)** üzerinde gerçek çözünürlük oranlarıyla kutular halinde gösterilir.
-   - Ekran kutularını fareyle tutup merkez ekranın **Sol**, **Sağ**, **Üst** veya **Alt** kenarına (hatta bir kenarın belirli bir kesitine, örn. sağ üst yarısına Laptop, sağ alt yarısına Android telefon) manyetik olarak yerleştirebilirsiniz!
+   - Yerel bilgisayarın tüm monitörleri ve bağlı tüm cihazlar **2D Ekran Konfigürasyonu Kanvası (Display Arrangement Canvas)** üzerinde gerçek oranlarıyla kutular halinde gösterilir.
+   - Yakınlaştırma (Zoom Slider + Fare Tekerleği) ve `🎯 Merkeze Sığdır` desteği ile tüm çalışma alanını rahatça yönetebilirsiniz.
 3. **Çift Taraflı 6 Haneli PIN Kodu Doğrulaması (Mutual Dual-PIN Pairing):**
    - İki cihazda da program açıkken her cihaz kendi **6 haneli PIN kodunu** üretir.
    - Bağlantının aktifleşmesi için iki tarafın da karşı cihazın 6 haneli kodunu girerek bağlantıyı karşılıklı onaylaması gerekir (`Mutual Verified`).
@@ -29,14 +33,20 @@
 ```powershell
 dotnet run --project "windows\ConnectMe.Windows\ConnectMe.Windows.csproj" -c Release
 ```
-* **Çoklu Cihaz Simülatörü ile Anında Test:** Arayüzdeki **🧪 Simülasyon Cihazı Ekle** butonuna basarak sanal Android Telefon, Android Tablet veya Nobara Linux PC oluşturabilir; çift taraflı 6 haneli PIN onayını deneyebilir ve **2D Ekran Kanvası** üzerinde ekranları sürükleyip kenarlara yerleştirerek çoklu cihaz kenar geçişini test edebilirsiniz.
-* **İmleci Geri Çağırma / Ekran Kilidi:** İmleç başka bir cihazdayken ekran kenarından geri çekebilir veya klavyeden **`Scroll Lock`** / **`Ctrl + Alt + L`** (acil durum için `Ctrl + Alt + Shift + Esc`) tuşlarına basarak anında ana ekrana dönebilirsiniz.
+* **Çoklu Monitör Test Butonu:** Arayüzdeki **`🖥️ +Ek Monitör Testi`** butonuna basarak anında Tek Ekran, Çift Monitör (Dual) ve Üçlü Monitör (Triple - Sol Dikey Ekran) düzenlerini deneyimleyebilirsiniz.
+* **Çoklu Cihaz Simülatörü ile Anında Test:** **`🧪 +Simüle Et`** butonuna basarak sanal Android Telefon, Android Tablet, Windows İş İstasyonu veya çoklu monitörlü Nobara Linux PC oluşturabilirsiniz.
+* **İmleci Geri Çağırma / Ekran Kilidi:** Klavyeden **`Scroll Lock`** / **`Ctrl + Alt + L`** (acil durum için `Ctrl + Alt + Shift + Esc`) tuşlarına basarak anında ana ekrana dönebilirsiniz.
 
-### 2. Android Uygulamasını Kurma
+### 2. Linux (Nobara / KDE Plasma Wayland) Daemon'ı Çalıştırma
+```bash
+python3 linux/connectme_linux_daemon.py
+```
+* Detaylı Linux talimatları için [**`linux/README.md`**](linux/README.md) dosyasına göz atabilirsiniz.
+
+### 3. Android Uygulamasını Kurma
 * Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-Android-APK`** dosyasını derler.
-* Android uygulamasında kendi 6 haneli PIN kodunuzu görebilir ve bağlanmak istediğiniz bilgisayarın 6 haneli PIN kodunu girerek çift taraflı eşleşmeyi tamamlayabilirsiniz.
 
-### 3. Test Paketi Çalıştırma
+### 4. Test Paketi Çalıştırma (20/20 Test)
 ```powershell
 dotnet run --project "windows\ConnectMe.Tests\ConnectMe.Tests.csproj" -c Release
 ```

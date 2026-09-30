@@ -123,11 +123,12 @@ public sealed class Win32InputEngine : IDisposable
 
     public void RefreshMonitorBounds()
     {
-        int width = Math.Max(800, GetSystemMetrics(0));  // SM_CXSCREEN
-        int height = Math.Max(600, GetSystemMetrics(1)); // SM_CYSCREEN
-        _topology.UpdateLocalScreenBounds(0, 0, width, height);
-        _network.LocalScreenWidth = width;
-        _network.LocalScreenHeight = height;
+        var monitors = Win32MonitorEnumerator.EnumerateLocalMonitors();
+        _topology.UpdateLocalMonitors(monitors);
+        _network.LocalMonitors = monitors;
+        var primary = monitors.FirstOrDefault(m => m.IsPrimary) ?? monitors[0];
+        _network.LocalScreenWidth = primary.Width;
+        _network.LocalScreenHeight = primary.Height;
     }
 
     /// <summary>
@@ -137,8 +138,9 @@ public sealed class Win32InputEngine : IDisposable
     {
         if (GetCursorPos(out POINT pt))
         {
-            _anchorX = Math.Clamp(pt.X, _topology.LocalLeft + 2, _topology.LocalLeft + _topology.LocalWidth - 3);
-            _anchorY = Math.Clamp(pt.Y, _topology.LocalTop + 2, _topology.LocalTop + _topology.LocalHeight - 3);
+            var (clampedX, clampedY) = _topology.ClampToVirtualDesktop(pt.X, pt.Y);
+            _anchorX = clampedX;
+            _anchorY = clampedY;
             SetCursorPos(_anchorX, _anchorY);
         }
 
@@ -227,14 +229,13 @@ public sealed class Win32InputEngine : IDisposable
 
                 if (remote == null)
                 {
-                    // Local Windows mode: check if cursor hits an active edge toward Android/Linux
+                    // Local Windows mode: check if cursor hits an active outer edge toward Android/Linux
                     if (msg == WM_MOUSEMOVE)
                     {
                         int dx = info.pt.X - _lastCursorX;
                         int dy = info.pt.Y - _lastCursorY;
 
-                        int clampedX = Math.Clamp(info.pt.X, _topology.LocalLeft, _topology.LocalLeft + _topology.LocalWidth - 1);
-                        int clampedY = Math.Clamp(info.pt.Y, _topology.LocalTop, _topology.LocalTop + _topology.LocalHeight - 1);
+                        var (clampedX, clampedY) = _topology.ClampToVirtualDesktop(info.pt.X, info.pt.Y);
 
                         _lastCursorX = clampedX;
                         _lastCursorY = clampedY;
