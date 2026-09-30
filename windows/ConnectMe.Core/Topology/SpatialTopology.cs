@@ -2,17 +2,56 @@ using ConnectMe.Core.Protocol;
 
 namespace ConnectMe.Core.Topology;
 
+public enum PeerPairingState
+{
+    Discovered = 0,
+    OutboundPinVerified = 1, // Biz karşı tarafın 6 haneli kodunu doğru girdik; karşı tarafın bizim kodumuzu girmesi bekleniyor
+    InboundPinVerified = 2,  // Karşı taraf bizim 6 haneli kodumuzu doğru girdi; bizim onun kodunu girmemiz bekleniyor
+    MutuallyPaired = 3       // İki taraf da birbirinin 6 haneli kodunu doğruladı (Aktif Bağlantı!)
+}
+
 public sealed class PeerDeviceNode
 {
     public string DeviceId { get; set; } = string.Empty;
     public string DeviceName { get; set; } = string.Empty;
-    public string Platform { get; set; } = "android";
+    public string Platform { get; set; } = "android"; // "windows", "linux-nobara", "android"
     public string IpAddress { get; set; } = string.Empty;
     public int UdpInputPort { get; set; } = ProtocolConstants.FastInputUdpPort;
     public int TcpControlPort { get; set; } = ProtocolConstants.DataControlTcpPort;
     public int ScreenWidth { get; set; } = 1080;
     public int ScreenHeight { get; set; } = 2400;
+
+    // Mutual 6-Digit PIN Handshake State
+    public bool MyEnteredPinVerifiedByRemote { get; set; }
+    public bool RemoteEnteredMyPinVerified { get; set; }
+    public bool IsMutuallyPaired => MyEnteredPinVerifiedByRemote && RemoteEnteredMyPinVerified;
+
+    public PeerPairingState PairingState => (MyEnteredPinVerifiedByRemote, RemoteEnteredMyPinVerified) switch
+    {
+        (true, true) => PeerPairingState.MutuallyPaired,
+        (true, false) => PeerPairingState.OutboundPinVerified,
+        (false, true) => PeerPairingState.InboundPinVerified,
+        _ => PeerPairingState.Discovered
+    };
+
+    /// <summary>
+    /// Optional simulated PIN for local multi-device simulator nodes.
+    /// Real remote devices validate their own PIN on their own host.
+    /// </summary>
+    public string? SimulatedLocalPin { get; set; }
+
+    // 2D Display Arrangement & Partial Edge Segment Mapping
     public ScreenEdge AssignedEdgeOnLocal { get; set; } = ScreenEdge.Right;
+    public float EdgeOffsetStart { get; set; } = 0.0f;
+    public float EdgeOffsetEnd { get; set; } = 1.0f;
+
+    // 2D GUI Canvas Coordinates
+    public double CanvasX { get; set; }
+    public double CanvasY { get; set; }
+    public double CanvasWidth { get; set; } = 90;
+    public double CanvasHeight { get; set; } = 130;
+    public bool HasCustomCanvasPosition { get; set; }
+
     public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
     public double LatencyMs { get; set; }
     public bool DiscoveredViaBle { get; set; }
@@ -26,13 +65,14 @@ public readonly record struct EdgeTransitionResult(
     float NormalizedPosition);
 
 /// <summary>
-/// Manages the 2D spatial arrangement of devices around the local screen,
-/// dead-corner guards, edge resistance, and proportional coordinate mapping.
+/// Manages the 2D multi-device spatial arrangement around the local screen,
+/// partial edge segments (multiple devices on the same or different edges),
+/// magnetic edge snapping for the GUI canvas, dead-corner guards, and edge resistance.
 /// </summary>
 public sealed class SpatialTopologyEngine
 {
     private readonly object _sync = new();
-    private readonly Dictionary<ScreenEdge, PeerDeviceNode> _edgePeers = new();
+    private readonly Dictionary<string, PeerDeviceNode> _peersById = new();
     private double _accumulatedPush;
     private ScreenEdge _pushingEdge = ScreenEdge.None;
 
@@ -49,7 +89,6 @@ public sealed class SpatialTopologyEngine
 
     /// <summary>
     /// Cumulative pixels the user must push against an active edge before switching.
-    /// Prevents accidental transitions when casually brushing the screen border.
     /// </summary>
     public double EdgeResistancePixels { get; set; } = 28.0;
 
@@ -69,54 +108,55 @@ public sealed class SpatialTopologyEngine
         }
     }
 
-    public void AssignPeerToEdge(ScreenEdge localEdge, PeerDeviceNode peer)
+    /// <summary>
+    /// Assigns a device to a specific edge and fractional segment [offsetStart..offsetEnd] (0.0 to 1.0).
+    /// Allows multiple devices to sit on different edges OR share different parts of the same edge!
+    /// </summary>
+    public void AssignPeerToEdgeSegment(
+        PeerDeviceNode peer,
+        ScreenEdge localEdge,
+        float offsetStart = 0.0f,
+        float offsetEnd = 1.0f)
     {
-        if (localEdge == ScreenEdge.None)
+        if (localEdge == ScreenEdge.None || string.IsNullOrEmpty(peer.DeviceId))
             return;
+
+        float start = Math.Clamp(Math.Min(offsetStart, offsetEnd), 0.0f, 0.95f);
+        float end = Math.Clamp(Math.Max(offsetStart, offsetEnd), start + 0.05f, 1.0f);
 
         lock (_sync)
         {
-            // Remove existing assignment for the same device if moved to a new edge
-            var existingEdges = _edgePeers
-                .Where(kv => kv.Value.DeviceId == peer.DeviceId)
-                .Select(kv => kv.Key)
-                .ToList();
-            foreach (var e in existingEdges)
-            {
-                _edgePeers.Remove(e);
-            }
-
             peer.AssignedEdgeOnLocal = localEdge;
-            _edgePeers[localEdge] = peer;
+            peer.EdgeOffsetStart = start;
+            peer.EdgeOffsetEnd = end;
+            _peersById[peer.DeviceId] = peer;
         }
     }
+
+    public void AssignPeerToEdge(ScreenEdge localEdge, PeerDeviceNode peer)
+        => AssignPeerToEdgeSegment(peer, localEdge, 0.0f, 1.0f);
 
     public void RemovePeer(string deviceId)
     {
         lock (_sync)
         {
-            var keys = _edgePeers
-                .Where(kv => kv.Value.DeviceId == deviceId)
-                .Select(kv => kv.Key)
-                .ToList();
-            foreach (var k in keys)
-                _edgePeers.Remove(k);
+            _peersById.Remove(deviceId);
         }
     }
 
-    public PeerDeviceNode? GetPeerOnEdge(ScreenEdge localEdge)
+    public IReadOnlyList<PeerDeviceNode> GetConfiguredPeers()
     {
         lock (_sync)
         {
-            return _edgePeers.TryGetValue(localEdge, out var peer) ? peer : null;
+            return _peersById.Values.ToList();
         }
     }
 
-    public IReadOnlyDictionary<ScreenEdge, PeerDeviceNode> GetAssignedPeers()
+    public PeerDeviceNode? GetPeerOnEdge(ScreenEdge localEdge, float normalizedPos = 0.5f)
     {
         lock (_sync)
         {
-            return new Dictionary<ScreenEdge, PeerDeviceNode>(_edgePeers);
+            return FindMatchingPeerOnEdgeLocked(localEdge, normalizedPos);
         }
     }
 
@@ -130,14 +170,90 @@ public sealed class SpatialTopologyEngine
     };
 
     /// <summary>
+    /// Magnetically snaps a dragged peer monitor box on the 2D Display Arrangement Canvas
+    /// to the nearest border (Left, Right, Top, Bottom) of the Primary Screen rectangle,
+    /// and computes its exact fractional edge segment [EdgeOffsetStart..EdgeOffsetEnd].
+    /// </summary>
+    public void SnapPeerBoxToPrimaryOnCanvas(
+        PeerDeviceNode peer,
+        double draggedLeft,
+        double draggedTop,
+        double peerBoxW,
+        double peerBoxH,
+        double primaryLeft,
+        double primaryTop,
+        double primaryW,
+        double primaryH)
+    {
+        double peerCenterX = draggedLeft + peerBoxW / 2.0;
+        double peerCenterY = draggedTop + peerBoxH / 2.0;
+        double primCenterX = primaryLeft + primaryW / 2.0;
+        double primCenterY = primaryTop + primaryH / 2.0;
+
+        double normDx = (peerCenterX - primCenterX) / (primaryW / 2.0);
+        double normDy = (peerCenterY - primCenterY) / (primaryH / 2.0);
+
+        const double gap = 4.0;
+        ScreenEdge snappedEdge;
+        double finalX;
+        double finalY;
+        float segStart;
+        float segEnd;
+
+        if (Math.Abs(normDx) >= Math.Abs(normDy))
+        {
+            // Snap to Left or Right edge of the Primary monitor box
+            snappedEdge = normDx < 0 ? ScreenEdge.Left : ScreenEdge.Right;
+            finalX = snappedEdge == ScreenEdge.Left
+                ? primaryLeft - peerBoxW - gap
+                : primaryLeft + primaryW + gap;
+
+            // Clamp Y so at least 25% of the peer box touches the primary monitor's vertical span
+            double minY = primaryTop - peerBoxH * 0.70;
+            double maxY = primaryTop + primaryH - peerBoxH * 0.30;
+            finalY = Math.Clamp(draggedTop, minY, maxY);
+
+            double overlapTop = Math.Max(primaryTop, finalY);
+            double overlapBottom = Math.Min(primaryTop + primaryH, finalY + peerBoxH);
+            segStart = (float)Math.Clamp((overlapTop - primaryTop) / primaryH, 0.0, 0.95);
+            segEnd = (float)Math.Clamp((overlapBottom - primaryTop) / primaryH, segStart + 0.05, 1.0);
+        }
+        else
+        {
+            // Snap to Top or Bottom edge of the Primary monitor box
+            snappedEdge = normDy < 0 ? ScreenEdge.Top : ScreenEdge.Bottom;
+            finalY = snappedEdge == ScreenEdge.Top
+                ? primaryTop - peerBoxH - gap
+                : primaryTop + primaryH + gap;
+
+            double minX = primaryLeft - peerBoxW * 0.70;
+            double maxX = primaryLeft + primaryW - peerBoxW * 0.30;
+            finalX = Math.Clamp(draggedLeft, minX, maxX);
+
+            double overlapLeft = Math.Max(primaryLeft, finalX);
+            double overlapRight = Math.Min(primaryLeft + primaryW, finalX + peerBoxW);
+            segStart = (float)Math.Clamp((overlapLeft - primaryLeft) / primaryW, 0.0, 0.95);
+            segEnd = (float)Math.Clamp((overlapRight - primaryLeft) / primaryW, segStart + 0.05, 1.0);
+        }
+
+        peer.CanvasX = finalX;
+        peer.CanvasY = finalY;
+        peer.CanvasWidth = peerBoxW;
+        peer.CanvasHeight = peerBoxH;
+        peer.HasCustomCanvasPosition = true;
+
+        AssignPeerToEdgeSegment(peer, snappedEdge, segStart, segEnd);
+    }
+
+    /// <summary>
     /// Evaluates cursor position and movement vector to determine if the cursor
-    /// should seamlessly cross over to an adjacent device.
+    /// should seamlessly cross over to a mutually paired device positioned at that edge segment.
     /// </summary>
     public EdgeTransitionResult EvaluateCursorStep(int cursorX, int cursorY, int deltaX, int deltaY)
     {
         lock (_sync)
         {
-            if (IsScreenLocked || _edgePeers.Count == 0)
+            if (IsScreenLocked || _peersById.Count == 0)
             {
                 ResetPush();
                 return default;
@@ -146,46 +262,51 @@ public sealed class SpatialTopologyEngine
             int relX = cursorX - LocalLeft;
             int relY = cursorY - LocalTop;
 
-            // Detect if cursor is at any outer boundary and pushing outward
             ScreenEdge hitEdge = ScreenEdge.None;
             double outwardPush = 0;
-            float normalizedPos = 0.5f;
+            float localEdgeNormPos = 0.5f;
 
             bool inVerticalCorner = relY < CornerDeadZonePixels || relY > (LocalHeight - CornerDeadZonePixels);
             bool inHorizontalCorner = relX < CornerDeadZonePixels || relX > (LocalWidth - CornerDeadZonePixels);
 
-            if (relX <= 1 && deltaX < 0 && !inVerticalCorner && _edgePeers.ContainsKey(ScreenEdge.Left))
+            if (relX <= 1 && deltaX < 0 && !inVerticalCorner)
             {
                 hitEdge = ScreenEdge.Left;
                 outwardPush = -deltaX;
-                normalizedPos = Math.Clamp((float)relY / LocalHeight, 0f, 1f);
+                localEdgeNormPos = Math.Clamp((float)relY / LocalHeight, 0f, 1f);
             }
-            else if (relX >= LocalWidth - 2 && deltaX > 0 && !inVerticalCorner && _edgePeers.ContainsKey(ScreenEdge.Right))
+            else if (relX >= LocalWidth - 2 && deltaX > 0 && !inVerticalCorner)
             {
                 hitEdge = ScreenEdge.Right;
                 outwardPush = deltaX;
-                normalizedPos = Math.Clamp((float)relY / LocalHeight, 0f, 1f);
+                localEdgeNormPos = Math.Clamp((float)relY / LocalHeight, 0f, 1f);
             }
-            else if (relY <= 1 && deltaY < 0 && !inHorizontalCorner && _edgePeers.ContainsKey(ScreenEdge.Top))
+            else if (relY <= 1 && deltaY < 0 && !inHorizontalCorner)
             {
                 hitEdge = ScreenEdge.Top;
                 outwardPush = -deltaY;
-                normalizedPos = Math.Clamp((float)relX / LocalWidth, 0f, 1f);
+                localEdgeNormPos = Math.Clamp((float)relX / LocalWidth, 0f, 1f);
             }
-            else if (relY >= LocalHeight - 2 && deltaY > 0 && !inHorizontalCorner && _edgePeers.ContainsKey(ScreenEdge.Bottom))
+            else if (relY >= LocalHeight - 2 && deltaY > 0 && !inHorizontalCorner)
             {
                 hitEdge = ScreenEdge.Bottom;
                 outwardPush = deltaY;
-                normalizedPos = Math.Clamp((float)relX / LocalWidth, 0f, 1f);
+                localEdgeNormPos = Math.Clamp((float)relX / LocalWidth, 0f, 1f);
             }
 
             if (hitEdge == ScreenEdge.None)
             {
-                // If moved away from the border, reset accumulated push
                 if (relX > 6 && relX < LocalWidth - 7 && relY > 6 && relY < LocalHeight - 7)
                 {
                     ResetPush();
                 }
+                return default;
+            }
+
+            var targetPeer = FindMatchingPeerOnEdgeLocked(hitEdge, localEdgeNormPos);
+            if (targetPeer == null)
+            {
+                ResetPush();
                 return default;
             }
 
@@ -198,30 +319,55 @@ public sealed class SpatialTopologyEngine
             _accumulatedPush += outwardPush;
             if (_accumulatedPush >= EdgeResistancePixels)
             {
-                var targetPeer = _edgePeers[hitEdge];
                 var targetEntrance = GetOppositeEdge(hitEdge);
+                float span = Math.Max(0.05f, targetPeer.EdgeOffsetEnd - targetPeer.EdgeOffsetStart);
+                float peerRelativePos = Math.Clamp((localEdgeNormPos - targetPeer.EdgeOffsetStart) / span, 0f, 1f);
+
                 ResetPush();
                 return new EdgeTransitionResult(
                     ShouldTransition: true,
                     TargetPeer: targetPeer,
                     LocalExitEdge: hitEdge,
                     TargetEntranceEdge: targetEntrance,
-                    NormalizedPosition: normalizedPos);
+                    NormalizedPosition: peerRelativePos);
             }
 
             return default;
         }
     }
 
+    private PeerDeviceNode? FindMatchingPeerOnEdgeLocked(ScreenEdge edge, float localEdgeNormPos)
+    {
+        // Only mutually paired devices can receive edge transitions
+        var candidates = _peersById.Values
+            .Where(p => p.IsMutuallyPaired && p.AssignedEdgeOnLocal == edge)
+            .ToList();
+
+        if (candidates.Count == 0)
+            return null;
+
+        // First look for exact segment match [EdgeOffsetStart .. EdgeOffsetEnd]
+        var exact = candidates.FirstOrDefault(
+            p => localEdgeNormPos >= p.EdgeOffsetStart - 0.01f && localEdgeNormPos <= p.EdgeOffsetEnd + 0.01f);
+
+        return exact;
+    }
+
     /// <summary>
     /// Computes the exact pixel coordinate on the local screen when the cursor returns
-    /// from an adjacent device along the given local entrance edge.
+    /// from a specific adjacent device along its assigned edge segment.
     /// </summary>
-    public (int X, int Y) ComputeLocalEntryPoint(ScreenEdge localEntranceEdge, float normalizedPosition)
+    public (int X, int Y) ComputeLocalEntryPoint(
+        ScreenEdge localEntranceEdge,
+        float peerNormalizedPosition,
+        PeerDeviceNode? returningPeer = null)
     {
         lock (_sync)
         {
-            float t = Math.Clamp(normalizedPosition, 0.02f, 0.98f);
+            float segStart = returningPeer?.EdgeOffsetStart ?? 0.0f;
+            float segEnd = returningPeer?.EdgeOffsetEnd ?? 1.0f;
+            float mappedNorm = segStart + Math.Clamp(peerNormalizedPosition, 0.0f, 1.0f) * (segEnd - segStart);
+            float t = Math.Clamp(mappedNorm, 0.02f, 0.98f);
             const int insetPixels = 8;
 
             return localEntranceEdge switch

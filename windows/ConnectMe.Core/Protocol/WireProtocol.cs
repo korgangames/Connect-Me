@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace ConnectMe.Core.Protocol;
 
 /// <summary>
-/// Connect Me Wire Protocol v1 constants and port allocations.
+/// Connect Me Wire Protocol v1.2 constants and port allocations.
 /// Shared across Windows, Android, and Nobara Linux (KDE Plasma).
 /// </summary>
 public static class ProtocolConstants
@@ -245,6 +245,8 @@ public static class WirePacketCodec
 
 /// <summary>
 /// UDP Discovery Beacon exchanged on port 42849.
+/// Note: The device's 6-digit PIN is NEVER broadcast in discovery beacons for security;
+/// each user must read the 6-digit PIN from the target device's screen and enter it.
 /// </summary>
 public sealed class DiscoveryBeacon
 {
@@ -277,19 +279,47 @@ public sealed class DiscoveryBeacon
 }
 
 /// <summary>
-/// Control, Clipboard, and Drop Shelf message header sent over TCP port 42851.
+/// Control, Mutual PIN Pairing, Clipboard, and Drop Shelf message header sent over TCP port 42851.
 /// Followed by optional binary payload of length BinaryPayloadLength.
 /// </summary>
 public sealed class TcpControlHeader
 {
     [JsonPropertyName("type")]
-    public string Type { get; set; } = string.Empty; // "PAIR_HELLO", "CLIPBOARD_TEXT", "CLIPBOARD_IMAGE", "SHELF_FILE"
+    public string Type { get; set; } = string.Empty;
+    // Supported types:
+    // - "PAIR_REQUEST": Sender submits TargetPin (the receiver's 6-digit PIN) to verify sender -> receiver
+    // - "PAIR_VERIFY_ACK": Receiver confirms TargetPin matched receiver's LocalPin (and includes whether mutual pairing is now complete)
+    // - "PAIR_REJECT": Receiver rejects wrong 6-digit PIN
+    // - "CLIPBOARD_TEXT": Universal clipboard text sync
+    // - "CLIPBOARD_IMAGE": Universal clipboard PNG sync
+    // - "SHELF_FILE": Drop Shelf file transfer
 
     [JsonPropertyName("senderId")]
     public string SenderId { get; set; } = string.Empty;
 
     [JsonPropertyName("senderName")]
     public string SenderName { get; set; } = string.Empty;
+
+    [JsonPropertyName("senderPlatform")]
+    public string? SenderPlatform { get; set; }
+
+    [JsonPropertyName("senderUdpPort")]
+    public int? SenderUdpPort { get; set; }
+
+    [JsonPropertyName("senderTcpPort")]
+    public int? SenderTcpPort { get; set; }
+
+    [JsonPropertyName("senderScreenWidth")]
+    public int? SenderScreenWidth { get; set; }
+
+    [JsonPropertyName("senderScreenHeight")]
+    public int? SenderScreenHeight { get; set; }
+
+    [JsonPropertyName("targetPin")]
+    public string? TargetPin { get; set; }
+
+    [JsonPropertyName("isMutualComplete")]
+    public bool? IsMutualComplete { get; set; }
 
     [JsonPropertyName("text")]
     public string? Text { get; set; }
@@ -299,9 +329,6 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("mimeType")]
     public string? MimeType { get; set; }
-
-    [JsonPropertyName("pinCode")]
-    public string? PinCode { get; set; }
 
     [JsonPropertyName("contentHash")]
     public string? ContentHash { get; set; }

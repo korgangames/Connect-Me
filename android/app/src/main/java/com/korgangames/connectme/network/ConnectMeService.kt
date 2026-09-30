@@ -40,18 +40,24 @@ import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
 data class DiscoveredPcPeer(
     val deviceId: String,
-    val deviceName: String,
-    val platform: String,
-    val ipAddress: String,
-    val udpInputPort: Int,
-    val tcpControlPort: Int,
+    var deviceName: String,
+    var platform: String,
+    var ipAddress: String,
+    var udpInputPort: Int,
+    var tcpControlPort: Int,
+    var myEnteredPinVerifiedByRemote: Boolean = false,
+    var remoteEnteredMyPinVerified: Boolean = false,
     var lastSeenMs: Long = System.currentTimeMillis()
-)
+) {
+    val isMutuallyPaired: Boolean
+        get() = myEnteredPinVerifiedByRemote && remoteEnteredMyPinVerified
+}
 
 data class AndroidShelfItem(
     val fileName: String,
@@ -98,6 +104,10 @@ class ConnectMeService : Service() {
     val localDeviceName: String = "${Build.MANUFACTURER} ${Build.MODEL}"
 
     @Volatile
+    var localPairingPin: String = generateSixDigitPin()
+        private set
+
+    @Volatile
     var activePcAddress: InetAddress? = null
 
     @Volatile
@@ -111,7 +121,7 @@ class ConnectMeService : Service() {
         instance = this
         startForegroundWithNotification()
         startNetworkLoops()
-        log("[Servis] Connect Me Android Ağ ve Girdi Motoru başlatıldı.")
+        log("[Servis] Connect Me Android başlatıldı (Yerel 6 Haneli PIN: $localPairingPin).")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -129,6 +139,17 @@ class ConnectMeService : Service() {
             instance = null
         }
         super.onDestroy()
+    }
+
+    fun regeneratePin(): String {
+        localPairingPin = generateSixDigitPin()
+        log("[Güvenlik] Yeni 6 haneli PIN üretildi: $localPairingPin")
+        return localPairingPin
+    }
+
+    private fun generateSixDigitPin(): String {
+        val num = 100000 + SecureRandom().nextInt(900000)
+        return num.toString()
     }
 
     private fun startForegroundWithNotification() {
@@ -150,8 +171,8 @@ class ConnectMeService : Service() {
         )
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Connect Me Aktif")
-            .setContentText("Windows/Linux kenar geçişi, ortak pano ve Drop Shelf hazır")
+            .setContentTitle("Connect Me Aktif (PIN: $localPairingPin)")
+            .setContentText("Çoklu cihaz kenar geçişi, çift taraflı PIN ve Drop Shelf hazır")
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -193,7 +214,7 @@ class ConnectMeService : Service() {
             }
         }
 
-        // 3. TCP Clipboard & Drop Shelf Server (42851)
+        // 3. TCP Mutual PIN, Clipboard & Drop Shelf Server (42851)
         scope.launch {
             try {
                 val server = ServerSocket().apply {
@@ -201,7 +222,7 @@ class ConnectMeService : Service() {
                     bind(InetSocketAddress(ProtocolConstants.DATA_CONTROL_TCP_PORT))
                 }
                 tcpServerSocket = server
-                log("[Veri Kanalı] TCP 42851 Pano & Drop Shelf sunucusu hazır.")
+                log("[Veri & PIN Kanalı] TCP 42851 sunucusu hazır.")
                 while (isActive) {
                     val client = server.accept()
                     launch { handleTcpClient(client) }
@@ -219,34 +240,86 @@ class ConnectMeService : Service() {
         }
     }
 
-    fun triggerManualConnectToPc(ipAddress: String) {
+    fun triggerManualConnectAndVerifyPin(ipAddress: String, enteredRemotePin: String) {
         scope.launch {
             try {
-                val addr = InetAddress.getByName(ipAddress.trim())
+                val cleanIp = ipAddress.trim()
+                val cleanPin = enteredRemotePin.trim().replace(" ", "").replace("-", "")
+                val addr = InetAddress.getByName(cleanIp)
                 activePcAddress = addr
-                activePcUdpPort = ProtocolConstants.FAST_INPUT_UDP_PORT
-                activePcTcpPort = ProtocolConstants.DATA_CONTROL_TCP_PORT
 
-                val existing = discoveredPeers.find { it.ipAddress == ipAddress }
-                if (existing == null) {
-                    discoveredPeers.add(
-                        0,
-                        DiscoveredPcPeer(
-                            deviceId = "pc-$ipAddress",
-                            deviceName = "Windows PC ($ipAddress)",
-                            platform = "windows",
-                            ipAddress = ipAddress,
-                            udpInputPort = ProtocolConstants.FAST_INPUT_UDP_PORT,
-                            tcpControlPort = ProtocolConstants.DATA_CONTROL_TCP_PORT
-                        )
+                var peer = discoveredPeers.find { it.ipAddress == cleanIp }
+                if (peer == null) {
+                    peer = DiscoveredPcPeer(
+                        deviceId = "pc-$cleanIp",
+                        deviceName = "Cihaz ($cleanIp)",
+                        platform = "windows",
+                        ipAddress = cleanIp,
+                        udpInputPort = ProtocolConstants.FAST_INPUT_UDP_PORT,
+                        tcpControlPort = ProtocolConstants.DATA_CONTROL_TCP_PORT
                     )
+                    discoveredPeers.add(0, peer)
                 }
 
                 discoverySocket?.let { sendDiscoveryBeacon(it, addr) }
-                log("[Bağlantı] Windows PC ($ipAddress) hedeflendi ve keşif sinyali gönderildi.")
+
+                if (cleanPin.length == 6) {
+                    submitRemotePinToPeerInternal(peer, cleanPin)
+                } else {
+                    log("[Keşif] $cleanIp eklendi. Eşleşmek için karşı cihazın 6 haneli PIN kodunu girin.")
+                }
             } catch (e: Exception) {
-                log("[Hata] Geçersiz PC IP adresi: ${e.message}")
+                log("[Hata] Bağlantı hatası: ${e.message}")
             }
+        }
+    }
+
+    fun submitRemotePinToPeer(peer: DiscoveredPcPeer, enteredRemotePin: String) {
+        scope.launch {
+            submitRemotePinToPeerInternal(peer, enteredRemotePin.trim().replace(" ", "").replace("-", ""))
+        }
+    }
+
+    private fun submitRemotePinToPeerInternal(peer: DiscoveredPcPeer, cleanPin: String) {
+        if (cleanPin.length != 6) {
+            log("[PIN Uyarı] Lütfen karşı cihazdaki 6 haneli kodu eksiksiz girin.")
+            return
+        }
+
+        try {
+            val cursorSvc = CursorAccessibilityService.instance
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 6000)
+                val reqHeader = JSONObject().apply {
+                    put("type", "PAIR_REQUEST")
+                    put("senderId", localDeviceId)
+                    put("senderName", localDeviceName)
+                    put("senderPlatform", "android")
+                    put("senderUdpPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                    put("senderTcpPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
+                    put("senderScreenWidth", cursorSvc?.screenWidth ?: 1080)
+                    put("senderScreenHeight", cursorSvc?.screenHeight ?: 2400)
+                    put("targetPin", cleanPin)
+                }
+                TcpFrameCodec.writeFrame(socket.getOutputStream(), reqHeader)
+
+                val resp = TcpFrameCodec.readHeader(socket.getInputStream())
+                if (resp != null && resp.first.optString("type") == "PAIR_VERIFY_ACK") {
+                    peer.myEnteredPinVerifiedByRemote = true
+                    if (resp.first.optBoolean("isMutualComplete", false)) {
+                        peer.remoteEnteredMyPinVerified = true
+                    }
+                    if (peer.isMutuallyPaired) {
+                        log("[Çift Taraflı Eşleşme] ✅ '${peer.deviceName}' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!")
+                    } else {
+                        log("[PIN Doğrulama] ✅ '${peer.deviceName}' kodu doğrulandı! Şimdi karşı cihazda da sizin kodunuzu ($localPairingPin) girin.")
+                    }
+                } else {
+                    log("[PIN Red] ❌ '${peer.deviceName}' girdiğiniz 6 haneli kodu ($cleanPin) reddetti.")
+                }
+            }
+        } catch (e: Exception) {
+            log("[PIN Hata] '${peer.deviceName}' (${peer.ipAddress}) ulaşılamadı: ${e.message}")
         }
     }
 
@@ -288,17 +361,18 @@ class ConnectMeService : Service() {
                 val udpPort = json.optInt("udpInputPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
                 val tcpPort = json.optInt("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
 
-                activePcAddress = pkt.address
-                activePcUdpPort = udpPort
-                activePcTcpPort = tcpPort
-
-                val existingIdx = discoveredPeers.indexOfFirst { it.deviceId == deviceId || it.ipAddress == senderIp }
-                val peer = DiscoveredPcPeer(deviceId, deviceName, platform, senderIp, udpPort, tcpPort)
-                if (existingIdx >= 0) {
-                    discoveredPeers[existingIdx] = peer
+                val existing = discoveredPeers.find { it.deviceId == deviceId || it.ipAddress == senderIp }
+                if (existing != null) {
+                    existing.deviceName = deviceName
+                    existing.platform = platform
+                    existing.ipAddress = senderIp
+                    existing.udpInputPort = udpPort
+                    existing.tcpControlPort = tcpPort
+                    existing.lastSeenMs = System.currentTimeMillis()
                 } else {
+                    val peer = DiscoveredPcPeer(deviceId, deviceName, platform, senderIp, udpPort, tcpPort)
                     discoveredPeers.add(0, peer)
-                    log("[Keşif] Bilgisayar bulundu: $deviceName ($senderIp)")
+                    log("[Keşif] Cihaz bulundu: $deviceName ($senderIp) — Çift taraflı 6 haneli PIN ile eşleşebilirsiniz.")
                     sendDiscoveryBeacon(sock, pkt.address)
                 }
                 onStateUpdated?.invoke()
@@ -316,6 +390,13 @@ class ConnectMeService : Service() {
                 val len = pkt.length
                 if (!WirePacketCodec.isValidHeader(buf, len)) continue
 
+                val senderIp = pkt.address.hostAddress ?: continue
+                val senderPeer = discoveredPeers.find { it.ipAddress == senderIp }
+                if (senderPeer != null && !senderPeer.isMutuallyPaired) {
+                    // Reject input from unverified peers
+                    continue
+                }
+
                 activePcAddress = pkt.address
                 activePcUdpPort = pkt.port
 
@@ -324,7 +405,7 @@ class ConnectMeService : Service() {
                     ProtocolConstants.PACKET_EDGE_HANDOFF -> {
                         WirePacketCodec.decodeEdgeHandOff(buf, len)?.let { ho ->
                             cursorSvc?.onEdgeHandOffEnter(ho.targetEntranceEdge, ho.normalizedPosition)
-                            log("[Kenar Geçişi] İmleç Windows'tan Android ekranına geçti (%${(ho.normalizedPosition * 100).toInt()}).")
+                            log("[Kenar Geçişi] İmleç Android ekranına geçti (%${(ho.normalizedPosition * 100).toInt()}).")
                         }
                     }
 
@@ -364,10 +445,6 @@ class ConnectMeService : Service() {
         }
     }
 
-    /**
-     * Sends an EDGE_HANDOFF packet back to the active Windows PC when the cursor
-     * leaves the Android screen edge.
-     */
     fun sendEdgeHandOffBackToPeer(windowsEntranceEdge: Byte, normalizedPos: Float) {
         scope.launch {
             try {
@@ -377,7 +454,7 @@ class ConnectMeService : Service() {
                 val dp = DatagramPacket(bytes, bytes.size, targetAddr, activePcUdpPort)
                 sock.send(dp)
                 sock.send(dp)
-                log("[Kenar Geçişi] İmleç Android'den Windows ekranına geri döndü.")
+                log("[Kenar Geçişi] İmleç Android'den bilgisayar ekranına geri döndü.")
             } catch (_: Exception) {
             }
         }
@@ -386,41 +463,42 @@ class ConnectMeService : Service() {
     fun sendClipboardTextToPc(text: String) {
         if (text.isBlank()) return
         scope.launch {
-            val targetAddr = activePcAddress ?: discoveredPeers.firstOrNull()?.let { InetAddress.getByName(it.ipAddress) }
-            if (targetAddr == null) {
-                log("[Uyarı] Pano göndermek için bağlı bilgisayar bulunamadı.")
+            val pairedTargets = discoveredPeers.filter { it.isMutuallyPaired }
+            if (pairedTargets.isEmpty()) {
+                log("[Uyarı] Pano göndermek için önce en az bir cihazla çift taraflı 6 haneli PIN onayını tamamlayın.")
                 return@launch
             }
 
-            try {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(targetAddr, activePcTcpPort), 5000)
-                    val header = JSONObject().apply {
-                        put("type", "CLIPBOARD_TEXT")
-                        put("senderId", localDeviceId)
-                        put("senderName", localDeviceName)
-                        put("text", text)
+            for (peer in pairedTargets) {
+                try {
+                    Socket().use { socket ->
+                        socket.connect(InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 5000)
+                        val header = JSONObject().apply {
+                            put("type", "CLIPBOARD_TEXT")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                            put("text", text)
+                        }
+                        TcpFrameCodec.writeFrame(socket.getOutputStream(), header)
                     }
-                    TcpFrameCodec.writeFrame(socket.getOutputStream(), header)
-                    log("[Evrensel Pano] Metin (${text.length} krk) Windows panosuna gönderildi.")
+                } catch (_: Exception) {
                 }
-            } catch (e: Exception) {
-                log("[Pano Hata] Gönderilemedi: ${e.message}")
             }
+            log("[Evrensel Pano] Metin (${text.length} krk) tüm onaylı cihazlara gönderildi.")
         }
     }
 
     fun sendStreamToPcShelf(fileName: String, inputStream: InputStream, fileSize: Long) {
         scope.launch {
-            val targetAddr = activePcAddress ?: discoveredPeers.firstOrNull()?.let { InetAddress.getByName(it.ipAddress) }
-            if (targetAddr == null) {
-                log("[Uyarı] Dosya göndermek için bağlı bilgisayar bulunamadı.")
+            val targetPeer = discoveredPeers.firstOrNull { it.isMutuallyPaired } ?: discoveredPeers.firstOrNull()
+            if (targetPeer == null || !targetPeer.isMutuallyPaired) {
+                log("[Uyarı] Dosya göndermek için önce çift taraflı 6 haneli PIN onayını tamamlayın.")
                 return@launch
             }
 
             try {
                 Socket().use { socket ->
-                    socket.connect(InetSocketAddress(targetAddr, activePcTcpPort), 8000)
+                    socket.connect(InetSocketAddress(targetPeer.ipAddress, targetPeer.tcpControlPort), 8000)
                     val header = JSONObject().apply {
                         put("type", "SHELF_FILE")
                         put("senderId", localDeviceId)
@@ -438,11 +516,11 @@ class ConnectMeService : Service() {
                         fileName = fileName,
                         filePath = "",
                         fileSizeBytes = fileSize,
-                        senderName = "$localDeviceName -> PC",
+                        senderName = "$localDeviceName -> ${targetPeer.deviceName}",
                         isOutgoing = true
                     )
                 )
-                log("[Drop Shelf] '$fileName' Windows Ortak Cebine gönderildi!")
+                log("[Drop Shelf] '$fileName' -> '${targetPeer.deviceName}' Ortak Cebine gönderildi!")
             } catch (e: Exception) {
                 log("[Drop Shelf Hata] '$fileName' gönderilemedi: ${e.message}")
             }
@@ -452,11 +530,69 @@ class ConnectMeService : Service() {
     private fun handleTcpClient(client: Socket) {
         client.use { sock ->
             val input = sock.getInputStream()
+            val output = sock.getOutputStream()
             val (header, binLen) = TcpFrameCodec.readHeader(input) ?: return
             val type = header.optString("type", "")
-            val senderName = header.optString("senderName", "Windows PC")
+            val senderId = header.optString("senderId", "")
+            val senderName = header.optString("senderName", "Cihaz")
+            val remoteIp = sock.inetAddress.hostAddress ?: "0.0.0.0"
 
             when (type) {
+                "PAIR_REQUEST" -> {
+                    val submittedPin = header.optString("targetPin", "").trim()
+                    val udpPort = header.optInt("senderUdpPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                    val tcpPort = header.optInt("senderTcpPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
+                    val platform = header.optString("senderPlatform", "windows")
+
+                    var peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
+                    if (peer == null) {
+                        peer = DiscoveredPcPeer(
+                            deviceId = if (senderId.isNotEmpty()) senderId else "peer-$remoteIp",
+                            deviceName = senderName,
+                            platform = platform,
+                            ipAddress = remoteIp,
+                            udpInputPort = udpPort,
+                            tcpControlPort = tcpPort
+                        )
+                        discoveredPeers.add(0, peer)
+                    } else {
+                        peer.deviceName = senderName
+                        peer.ipAddress = remoteIp
+                        peer.udpInputPort = udpPort
+                        peer.tcpControlPort = tcpPort
+                    }
+
+                    if (submittedPin == localPairingPin) {
+                        peer.remoteEnteredMyPinVerified = true
+                        activePcAddress = sock.inetAddress
+                        activePcUdpPort = udpPort
+                        activePcTcpPort = tcpPort
+
+                        val ack = JSONObject().apply {
+                            put("type", "PAIR_VERIFY_ACK")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                            put("isMutualComplete", peer.isMutuallyPaired)
+                        }
+                        TcpFrameCodec.writeFrame(output, ack)
+
+                        if (peer.isMutuallyPaired) {
+                            log("[Çift Taraflı Eşleşme] ✅ '$senderName' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!")
+                        } else {
+                            log("[PIN İsteği] 🔔 '$senderName' sizin kodunuzu ($localPairingPin) doğruladı! Bağlantıyı tamamlamak için siz de onun 6 haneli kodunu girin.")
+                        }
+                    } else {
+                        val rej = JSONObject().apply {
+                            put("type", "PAIR_REJECT")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                        }
+                        TcpFrameCodec.writeFrame(output, rej)
+                        log("[Güvenlik] ⚠️ '$senderName' hatalı 6 haneli kod denedi ($submittedPin).")
+                    }
+                    onStateUpdated?.invoke()
+                }
+
                 "CLIPBOARD_TEXT" -> {
                     val text = header.optString("text", "")
                     if (text.isNotEmpty()) {

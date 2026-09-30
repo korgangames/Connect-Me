@@ -28,10 +28,12 @@ import com.korgangames.connectme.service.CursorAccessibilityService
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusIpText: TextView
+    private lateinit var localPinBadgeText: TextView
     private lateinit var overlayStatusText: TextView
     private lateinit var accessibilityStatusText: TextView
     private lateinit var peersStatusText: TextView
     private lateinit var pcIpInput: EditText
+    private lateinit var remotePinInput: EditText
     private lateinit var shelfListText: TextView
     private lateinit var logViewText: TextView
 
@@ -44,7 +46,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Start Foreground Network Service
         val svcIntent = Intent(this, ConnectMeService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(svcIntent)
@@ -71,7 +72,9 @@ class MainActivity : AppCompatActivity() {
     private fun refreshUiState() {
         val svc = ConnectMeService.instance
         val localIp = svc?.getLocalIpv4Address() ?: "Bağlanıyor..."
-        statusIpText.text = "📱 Android IP: $localIp  |  UDP Girdi: 42850  |  TCP Veri: 42851"
+        val pin = svc?.localPairingPin ?: "------"
+        statusIpText.text = "📱 Android IP: $localIp  |  UDP Girdi: 42850  |  TCP Veri & PIN: 42851"
+        localPinBadgeText.text = "🔐 BU CİHAZIN 6 HANELİ KODU: $pin"
 
         val hasOverlay = Settings.canDrawOverlays(this)
         overlayStatusText.text = if (hasOverlay) {
@@ -91,14 +94,22 @@ class MainActivity : AppCompatActivity() {
 
         val peers = ConnectMeService.discoveredPeers
         peersStatusText.text = if (peers.isEmpty()) {
-            "🔍 Aynı Wi-Fi ağındaki Windows bilgisayar aranıyor..."
+            "🔍 Ağdaki bilgisayarlar ve cihazlar aranıyor..."
         } else {
-            peers.joinToString("\n") { "🪟 Bağlı PC: ${it.deviceName} (${it.ipAddress}:${it.udpInputPort})" }
+            peers.joinToString("\n\n") { p ->
+                val state = when {
+                    p.isMutuallyPaired -> "🟢 ÇİFT TARAFLI ONAYLI (Aktif)"
+                    p.myEnteredPinVerifiedByRemote -> "🟡 KARŞI ONAY BEKLİYOR (PC'de $pin kodunu girin)"
+                    p.remoteEnteredMyPinVerified -> "🟠 SİZİN ONAYINIZ BEKLENİYOR (PC'nin kodunu aşağıya girin)"
+                    else -> "⚪ EŞLEŞMEDİ (6 Haneli PIN Gerekli)"
+                }
+                "🖥️ ${p.deviceName} (${p.ipAddress})\n   Durum: $state"
+            }
         }
 
         val items = ConnectMeService.shelfItems
         shelfListText.text = if (items.isEmpty()) {
-            "Henüz ortak cepte eşya yok. Windows'tan sürükleyip bırakabilir veya aşağıdan dosya seçebilirsiniz."
+            "Henüz ortak cepte eşya yok. Bilgisayardan sürükleyip bırakabilir veya aşağıdan dosya seçebilirsiniz."
         } else {
             items.take(8).joinToString("\n") { item ->
                 val prefix = if (item.isOutgoing) "📤 Gönderildi" else "📥 Alındı"
@@ -110,12 +121,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendPickedUriToPc(uri: Uri) {
-        val svc = ConnectMeService.instance
-        if (svc == null) {
-            Toast.makeText(this, "Servis henüz hazır değil", Toast.LENGTH_SHORT).show()
-            return
-        }
-
+        val svc = ConnectMeService.instance ?: return
         var fileName = "paylasilan_dosya"
         var fileSize = 0L
         contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -135,7 +141,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 svc.sendStreamToPcShelf(fileName, stream, fileSize)
             }
-            Toast.makeText(this, "'$fileName' Windows Ortak Cebine gönderiliyor...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "'$fileName' Ortak Cebe gönderiliyor...", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -150,10 +156,9 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(42, 56, 42, 56)
+            setPadding(42, 52, 42, 52)
         }
 
-        // Header
         root.addView(TextView(this).apply {
             text = "🌐 Connect Me"
             textSize = 24f
@@ -163,11 +168,28 @@ class MainActivity : AppCompatActivity() {
 
         statusIpText = TextView(this).apply {
             text = "📱 Android IP: Yükleniyor..."
-            textSize = 13f
+            textSize = 12.5f
             setTextColor(Color.parseColor("#9CA3AF"))
-            setPadding(0, 8, 0, 28)
+            setPadding(0, 8, 0, 14)
         }
         root.addView(statusIpText)
+
+        // Local 6-Digit PIN Card
+        val pinCard = createCardLayout()
+        localPinBadgeText = TextView(this).apply {
+            text = "🔐 BU CİHAZIN 6 HANELİ KODU: ------"
+            textSize = 18f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.parseColor("#38BDF8"))
+        }
+        pinCard.addView(localPinBadgeText)
+        pinCard.addView(TextView(this).apply {
+            text = "Bağlanmak istediğiniz bilgisayarda veya diğer cihazda bu 6 haneli kodu girin."
+            textSize = 12f
+            setTextColor(Color.parseColor("#9CA3AF"))
+            setPadding(0, 6, 0, 0)
+        })
+        root.addView(pinCard)
 
         // Permissions Card
         val permCard = createCardLayout()
@@ -177,11 +199,12 @@ class MainActivity : AppCompatActivity() {
             textSize = 13.5f
             setPadding(0, 12, 0, 12)
             setOnClickListener {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
                 )
-                startActivity(intent)
             }
         }
         permCard.addView(overlayStatusText)
@@ -196,31 +219,64 @@ class MainActivity : AppCompatActivity() {
         permCard.addView(accessibilityStatusText)
         root.addView(permCard)
 
-        // PC Connection Card
+        // Mutual 6-Digit PIN & PC Connection Card
         val pcCard = createCardLayout()
-        pcCard.addView(createSectionTitle("🪟 2. Windows / Linux Bilgisayar Bağlantısı"))
+        pcCard.addView(createSectionTitle("🔗 2. Çoklu Cihaz & Çift Taraflı 6 Haneli Kod Onayı"))
 
         peersStatusText = TextView(this).apply {
             textSize = 13f
             setTextColor(Color.parseColor("#E5E7EB"))
-            setPadding(0, 10, 0, 16)
+            setPadding(0, 12, 0, 16)
         }
         pcCard.addView(peersStatusText)
 
+        remotePinInput = EditText(this).apply {
+            hint = "Karşı Cihazın 6 Haneli Kodu (Örn: 482910)"
+            setHintTextColor(Color.parseColor("#6B7280"))
+            setTextColor(Color.parseColor("#38BDF8"))
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setBackgroundColor(Color.parseColor("#0D1117"))
+            setPadding(28, 22, 28, 22)
+        }
+        pcCard.addView(remotePinInput)
+
+        val verifyPinBtn = createStyledButton("✅ Karşı Cihazın 6 Haneli Kodunu Doğrula", "#059669") {
+            val enteredPin = remotePinInput.text.toString().trim()
+            val firstPeer = ConnectMeService.discoveredPeers.firstOrNull()
+            if (firstPeer != null) {
+                ConnectMeService.instance?.submitRemotePinToPeer(firstPeer, enteredPin)
+            } else {
+                val ip = pcIpInput.text.toString().trim()
+                if (ip.isNotEmpty()) {
+                    ConnectMeService.instance?.triggerManualConnectAndVerifyPin(ip, enteredPin)
+                } else {
+                    Toast.makeText(this, "Önce cihazın keşfedilmesini bekleyin veya IP girin", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        pcCard.addView(verifyPinBtn)
+
         pcIpInput = EditText(this).apply {
-            hint = "Windows PC IP Adresi (Örn: 192.168.1.35)"
+            hint = "Opsiyonel: Manuel Cihaz IP Adresi (Örn: 192.168.1.35)"
             setHintTextColor(Color.parseColor("#6B7280"))
             setTextColor(Color.WHITE)
             inputType = InputType.TYPE_CLASS_PHONE
             setBackgroundColor(Color.parseColor("#0D1117"))
             setPadding(28, 22, 28, 22)
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            lp.setMargins(0, 20, 0, 0)
+            layoutParams = lp
         }
         pcCard.addView(pcIpInput)
 
-        val connectBtn = createStyledButton("➕ Windows PC IP'sine Bağlan", "#2563EB") {
+        val connectBtn = createStyledButton("➕ IP ile Cihaz Ekle ve Kodu Gönder", "#2563EB") {
             val ip = pcIpInput.text.toString().trim()
+            val pin = remotePinInput.text.toString().trim()
             if (ip.isNotEmpty()) {
-                ConnectMeService.instance?.triggerManualConnectToPc(ip)
+                ConnectMeService.instance?.triggerManualConnectAndVerifyPin(ip, pin)
                 refreshUiState()
             }
         }
@@ -229,19 +285,19 @@ class MainActivity : AppCompatActivity() {
 
         // Universal Clipboard & Drop Shelf Card
         val shelfCard = createCardLayout()
-        shelfCard.addView(createSectionTitle("🧲 3. Manyetik Ortak Cep (Drop Shelf) & Pano"))
+        shelfCard.addView(createSectionTitle("🧲 3. Ortak Cep (Drop Shelf) & Evrensel Pano"))
 
-        val sendFileBtn = createStyledButton("📤 Dosya / Fotoğraf Seç ve Windows'a Gönder", "#0284C7") {
+        val sendFileBtn = createStyledButton("📤 Dosya / Fotoğraf Seç ve Gönder", "#0284C7") {
             pickFileLauncher.launch("*/*")
         }
         shelfCard.addView(sendFileBtn)
 
-        val sendClipBtn = createStyledButton("📋 Android Panosunu Şimdi Windows'a Gönder", "#059669") {
+        val sendClipBtn = createStyledButton("📋 Panoyu Tüm Onaylı Cihazlara Gönder", "#059669") {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val txt = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString() ?: ""
             if (txt.isNotEmpty()) {
                 ConnectMeService.instance?.sendClipboardTextToPc(txt)
-                Toast.makeText(this, "Pano Windows'a gönderildi!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Pano onaylı cihazlara gönderildi!", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Panoda metin bulunamadı", Toast.LENGTH_SHORT).show()
             }
@@ -286,7 +342,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            lp.setMargins(0, 0, 0, 32)
+            lp.setMargins(0, 0, 0, 28)
             layoutParams = lp
         }
     }
@@ -315,7 +371,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            lp.setMargins(0, 18, 0, 0)
+            lp.setMargins(0, 16, 0, 0)
             layoutParams = lp
             setOnClickListener { onClick() }
         }

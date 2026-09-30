@@ -21,13 +21,11 @@ public sealed record ShelfItemEntry(
     bool IsOutgoing);
 
 /// <summary>
-/// Compact 16-byte BLE Manufacturer Specific Data payload so Windows and Android
-/// can discover each other's Wi-Fi IP & Port over Bluetooth Low Energy (BLE)
-/// even when router AP isolation or broadcast filtering is active.
+/// Compact 16-byte BLE Manufacturer Specific Data payload so devices
+/// can discover each other's Wi-Fi IP & Port over Bluetooth Low Energy (BLE).
 /// </summary>
 public static class BleProximityCodec
 {
-    // Format: [0x43 'C'][0x4D 'M'][Ver=1][Platform: 1=Win, 2=Android, 3=Linux][IPv4 4B][UdpPort 2B LE][DeviceIdHash 6B]
     public static byte[] EncodeAdvPayload(byte platformCode, IPAddress ipv4, ushort udpPort, string deviceId)
     {
         byte[] buf = new byte[16];
@@ -78,8 +76,9 @@ public static class BleProximityCodec
 }
 
 /// <summary>
-/// Unified Peer-to-Peer Network Engine managing:
+/// Unified Peer-to-Peer Multi-Device Network Engine managing:
 /// - UDP Discovery Broadcast/Unicast (42849)
+/// - Mutual 6-Digit PIN Handshake over TCP (42851)
 /// - UDP Fast-Path Input Streaming & Edge Handoff (42850)
 /// - TCP Framed Clipboard & Drop Shelf File Transfer (42851)
 /// </summary>
@@ -96,7 +95,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public string LocalDeviceId { get; }
     public string LocalDeviceName { get; }
     public string LocalPlatform { get; }
-    public string PairingPin { get; }
+    public string PairingPin { get; private set; }
     public string ShelfReceiveDirectory { get; }
 
     public int DiscoveryPort { get; private set; } = ProtocolConstants.DiscoveryUdpPort;
@@ -108,6 +107,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     // Events
     public event Action<PeerDeviceNode>? PeerDiscoveredOrUpdated;
+    public event Action<PeerDeviceNode>? PeerPairingStatusChanged;
     public event Action<EdgeHandOffPacket, IPEndPoint>? RemoteEdgeHandOffReceived;
     public event Action<MouseMovePacket>? RemoteMouseMoveReceived;
     public event Action<MouseButtonPacket>? RemoteMouseButtonReceived;
@@ -122,12 +122,13 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         string? deviceId = null,
         string? deviceName = null,
         string platform = "windows",
-        string? shelfDirectory = null)
+        string? shelfDirectory = null,
+        string? fixedPin = null)
     {
         LocalDeviceId = deviceId ?? Guid.NewGuid().ToString("N")[..12];
         LocalDeviceName = deviceName ?? Environment.MachineName;
         LocalPlatform = platform;
-        PairingPin = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+        PairingPin = fixedPin ?? RandomNumberGenerator.GetInt32(100000, 999999).ToString();
 
         ShelfReceiveDirectory = shelfDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -137,6 +138,14 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     }
 
     public IReadOnlyCollection<PeerDeviceNode> DiscoveredPeers => _peers.Values.ToList();
+    public IReadOnlyCollection<PeerDeviceNode> MutuallyPairedPeers => _peers.Values.Where(p => p.IsMutuallyPaired).ToList();
+
+    public string RegenerateLocalPin()
+    {
+        PairingPin = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+        Log($"[Güvenlik] Yerel 6 haneli eşleşme kodu yenilendi: {PairingPin}");
+        return PairingPin;
+    }
 
     public void Start(
         int discoveryPort = ProtocolConstants.DiscoveryUdpPort,
@@ -156,7 +165,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             _discoveryUdp.EnableBroadcast = true;
             _ = Task.Run(() => DiscoveryReceiveLoopAsync(_cts.Token));
             _ = Task.Run(() => DiscoveryBroadcastLoopAsync(_cts.Token));
-            Log($"[Keşif] UDP Discovery {DiscoveryPort} portunda başlatıldı.");
+            Log($"[Keşif] Çoklu Cihaz UDP Discovery {DiscoveryPort} portunda başlatıldı.");
         }
         catch (Exception ex)
         {
@@ -177,7 +186,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         _tcpListener.Start();
         ControlTcpPort = ((IPEndPoint)_tcpListener.LocalEndpoint).Port;
         _ = Task.Run(() => TcpAcceptLoopAsync(_cts.Token));
-        Log($"[Veri Kanalı] Pano & Drop Shelf TCP Sunucusu {ControlTcpPort} portunda aktif.");
+        Log($"[Veri & PIN Kanalı] TCP Sunucusu {ControlTcpPort} portunda aktif (Yerel PIN: {PairingPin}).");
     }
 
     public static List<IPAddress> GetLocalIPv4Addresses()
@@ -221,9 +230,12 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         int tcpPort = ProtocolConstants.DataControlTcpPort,
         int screenWidth = 1080,
         int screenHeight = 2400,
-        bool viaBle = false)
+        bool viaBle = false,
+        string? customDeviceId = null,
+        string? simulatedPin = null,
+        bool autoMutuallyPair = false)
     {
-        string id = $"{platform}-{ipAddress}:{udpPort}";
+        string id = customDeviceId ?? $"{platform}-{ipAddress}:{udpPort}";
         var peer = _peers.AddOrUpdate(
             id,
             _ => new PeerDeviceNode
@@ -237,7 +249,10 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 ScreenWidth = screenWidth,
                 ScreenHeight = screenHeight,
                 LastSeen = DateTimeOffset.UtcNow,
-                DiscoveredViaBle = viaBle
+                DiscoveredViaBle = viaBle,
+                SimulatedLocalPin = simulatedPin,
+                MyEnteredPinVerifiedByRemote = autoMutuallyPair,
+                RemoteEnteredMyPinVerified = autoMutuallyPair
             },
             (_, existing) =>
             {
@@ -245,15 +260,149 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 existing.DeviceName = deviceName;
                 existing.UdpInputPort = udpPort;
                 existing.TcpControlPort = tcpPort;
+                existing.ScreenWidth = screenWidth;
+                existing.ScreenHeight = screenHeight;
                 existing.LastSeen = DateTimeOffset.UtcNow;
                 existing.DiscoveredViaBle |= viaBle;
+                if (simulatedPin != null)
+                    existing.SimulatedLocalPin = simulatedPin;
+                if (autoMutuallyPair)
+                {
+                    existing.MyEnteredPinVerifiedByRemote = true;
+                    existing.RemoteEnteredMyPinVerified = true;
+                }
                 return existing;
             });
 
-        // Also send a direct unicast discovery beacon to that IP immediately
-        _ = SendDiscoveryBeaconToAsync(new IPEndPoint(IPAddress.Parse(ipAddress), DiscoveryPort));
+        if (IPAddress.TryParse(ipAddress, out var parsedIp) && !IPAddress.IsLoopback(parsedIp))
+        {
+            _ = SendDiscoveryBeaconToAsync(new IPEndPoint(parsedIp, DiscoveryPort));
+        }
+
         PeerDiscoveredOrUpdated?.Invoke(peer);
         return peer;
+    }
+
+    // =========================================================================
+    // Mutual 6-Digit PIN Handshake Engine
+    // =========================================================================
+
+    /// <summary>
+    /// Submits the target device's 6-digit PIN to verify local -> remote trust.
+    /// Both devices must verify each other's 6-digit PIN to achieve MutuallyPaired status!
+    /// </summary>
+    public async Task<(bool Accepted, bool IsNowMutuallyPaired, string Message)> SubmitRemotePinForPairingAsync(
+        PeerDeviceNode peer,
+        string enteredRemotePin)
+    {
+        string cleanPin = enteredRemotePin.Trim().Replace("-", "").Replace(" ", "");
+        if (cleanPin.Length != 6 || !cleanPin.All(char.IsDigit))
+        {
+            return (false, false, "Lütfen karşı cihazdaki 6 haneli rakam kodunu eksiksiz girin.");
+        }
+
+        // Handle local simulated device verification
+        if (!string.IsNullOrEmpty(peer.SimulatedLocalPin))
+        {
+            if (cleanPin == peer.SimulatedLocalPin)
+            {
+                peer.MyEnteredPinVerifiedByRemote = true;
+                PeerPairingStatusChanged?.Invoke(peer);
+                PeerDiscoveredOrUpdated?.Invoke(peer);
+                string statusMsg = peer.IsMutuallyPaired
+                    ? $"✅ '{peer.DeviceName}' ile ÇİFT TARAFLI eşleşme tamamlandı! Ekran kanvasında konumlandırabilirsiniz."
+                    : $"✅ '{peer.DeviceName}' cihazının kodu ({cleanPin}) doğrulandı! Şimdi karşı cihazdan da sizin kodunuzun ({PairingPin}) onaylanması bekleniyor.";
+                Log($"[PIN Doğrulama] {statusMsg}");
+                return (true, peer.IsMutuallyPaired, statusMsg);
+            }
+            else
+            {
+                string errMsg = $"❌ Hatalı kod! '{peer.DeviceName}' ekranındaki 6 haneli kod ({peer.SimulatedLocalPin}) ile uyuşmadı.";
+                Log($"[PIN Hata] {errMsg}");
+                return (false, false, errMsg);
+            }
+        }
+
+        // Real network peer over TCP 42851
+        try
+        {
+            using var client = new TcpClient();
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+            await client.ConnectAsync(peer.IpAddress, peer.TcpControlPort, timeoutCts.Token).ConfigureAwait(false);
+            await using var stream = client.GetStream();
+
+            var reqHeader = new TcpControlHeader
+            {
+                Type = "PAIR_REQUEST",
+                SenderId = LocalDeviceId,
+                SenderName = LocalDeviceName,
+                SenderPlatform = LocalPlatform,
+                SenderUdpPort = InputUdpPort,
+                SenderTcpPort = ControlTcpPort,
+                SenderScreenWidth = LocalScreenWidth,
+                SenderScreenHeight = LocalScreenHeight,
+                TargetPin = cleanPin
+            };
+
+            await TcpFrameCodec.WriteFrameAsync(stream, reqHeader, null, 0, timeoutCts.Token).ConfigureAwait(false);
+            var (respHeader, _) = await TcpFrameCodec.ReadHeaderAsync(stream, timeoutCts.Token).ConfigureAwait(false);
+
+            if (respHeader != null && respHeader.Type == "PAIR_VERIFY_ACK")
+            {
+                peer.MyEnteredPinVerifiedByRemote = true;
+                if (respHeader.IsMutualComplete == true)
+                {
+                    peer.RemoteEnteredMyPinVerified = true;
+                }
+
+                PeerPairingStatusChanged?.Invoke(peer);
+                PeerDiscoveredOrUpdated?.Invoke(peer);
+
+                string msg = peer.IsMutuallyPaired
+                    ? $"✅ '{peer.DeviceName}' ile ÇİFT TARAFLI 6 haneli kod doğrulaması tamamlandı!"
+                    : $"✅ '{peer.DeviceName}' kodu doğrulandı. Karşı cihazda da sizin kodunuzun ({PairingPin}) girilmesi bekleniyor.";
+                Log($"[PIN Doğrulama] {msg}");
+                return (true, peer.IsMutuallyPaired, msg);
+            }
+            else
+            {
+                string msg = $"❌ '{peer.DeviceName}' girdiğiniz 6 haneli kodu ({cleanPin}) reddetti.";
+                Log($"[PIN Red] {msg}");
+                return (false, false, msg);
+            }
+        }
+        catch (Exception ex)
+        {
+            string msg = $"❌ '{peer.DeviceName}' ({peer.IpAddress}:{peer.TcpControlPort}) bağlantı hatası: {ex.Message}";
+            Log($"[PIN Hata] {msg}");
+            return (false, false, msg);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that a simulated peer entered our local 6-digit PIN (for testing both sides of mutual pairing).
+    /// </summary>
+    public (bool Accepted, bool IsNowMutuallyPaired, string Message) VerifyInboundPinFromSimulatedPeer(
+        PeerDeviceNode peer,
+        string pinEnteredOnPeerForUs)
+    {
+        string cleanPin = pinEnteredOnPeerForUs.Trim().Replace("-", "").Replace(" ", "");
+        if (cleanPin != PairingPin)
+        {
+            string err = $"❌ Karşı cihazda girilen kod ({cleanPin}) sizin yerel kodunuzla ({PairingPin}) eşleşmedi!";
+            Log($"[PIN Hata] {err}");
+            return (false, false, err);
+        }
+
+        peer.RemoteEnteredMyPinVerified = true;
+        PeerPairingStatusChanged?.Invoke(peer);
+        PeerDiscoveredOrUpdated?.Invoke(peer);
+
+        string okMsg = peer.IsMutuallyPaired
+            ? $"✅ '{peer.DeviceName}' ile ÇİFT TARAFLI 6 haneli PIN onayı tamamlandı! Cihaz 2D Ekran Kanvasına eklendi."
+            : $"✅ '{peer.DeviceName}' sizin kodunuzu ({PairingPin}) doğruladı. Şimdi siz de onun kodunu ({peer.SimulatedLocalPin}) girin.";
+        Log($"[PIN Doğrulama] {okMsg}");
+        return (true, peer.IsMutuallyPaired, okMsg);
     }
 
     public async Task BroadcastDiscoveryBeaconAsync()
@@ -264,7 +413,6 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         var beacon = CreateLocalBeacon();
         byte[] data = JsonSerializer.SerializeToUtf8Bytes(beacon);
 
-        // Broadcast to 255.255.255.255 and subnet broadcast addresses
         var targets = new HashSet<IPEndPoint>
         {
             new(IPAddress.Broadcast, DiscoveryPort)
@@ -316,7 +464,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     public void SendMouseMove(PeerDeviceNode peer, short deltaX, short deltaY)
     {
-        if (_inputUdp == null || (deltaX == 0 && deltaY == 0))
+        if (_inputUdp == null || !peer.IsMutuallyPaired || (deltaX == 0 && deltaY == 0))
             return;
 
         ushort seq = ++_mouseSeq;
@@ -326,7 +474,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     public void SendMouseButton(PeerDeviceNode peer, MouseButtonCode button, bool isPressed)
     {
-        if (_inputUdp == null)
+        if (_inputUdp == null || !peer.IsMutuallyPaired)
             return;
 
         byte[] packet = WirePacketCodec.EncodeMouseButton(new MouseButtonPacket(button, isPressed));
@@ -335,7 +483,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     public void SendMouseScroll(PeerDeviceNode peer, short scrollX, short scrollY)
     {
-        if (_inputUdp == null)
+        if (_inputUdp == null || !peer.IsMutuallyPaired)
             return;
 
         byte[] packet = WirePacketCodec.EncodeMouseScroll(new MouseScrollPacket(scrollX, scrollY));
@@ -350,7 +498,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         KeyModifiers modifiers,
         char unicodeChar)
     {
-        if (_inputUdp == null)
+        if (_inputUdp == null || !peer.IsMutuallyPaired)
             return;
 
         byte[] packet = WirePacketCodec.EncodeKeyEvent(
@@ -364,12 +512,11 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         float normalizedPosition,
         bool isDraggingShelfItem = false)
     {
-        if (_inputUdp == null)
+        if (_inputUdp == null || !peer.IsMutuallyPaired)
             return;
 
         byte[] packet = WirePacketCodec.EncodeEdgeHandOff(
             new EdgeHandOffPacket(targetEntranceEdge, isDraggingShelfItem, normalizedPosition));
-        // Send twice for UDP reliability on critical state transition
         SendUdpFireAndForget(peer, packet);
         SendUdpFireAndForget(peer, packet);
     }
@@ -390,7 +537,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     }
 
     // =========================================================================
-    // Universal Clipboard & Drop Shelf TCP Senders
+    // Universal Clipboard & Drop Shelf TCP Senders (Mutually Paired Mesh)
     // =========================================================================
 
     public async Task BroadcastClipboardTextAsync(string text)
@@ -413,7 +560,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             ContentHash = hash
         };
 
-        foreach (var peer in _peers.Values)
+        foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired))
         {
             await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
         }
@@ -439,7 +586,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             ContentHash = hash
         };
 
-        foreach (var peer in _peers.Values)
+        foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired))
         {
             using var ms = new MemoryStream(pngBytes, writable: false);
             await SendTcpFrameToPeerAsync(peer, header, ms, pngBytes.Length).ConfigureAwait(false);
@@ -448,6 +595,12 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     public async Task<ShelfItemEntry?> SendFileToPeerShelfAsync(PeerDeviceNode peer, string filePath)
     {
+        if (!peer.IsMutuallyPaired)
+        {
+            Log($"[Drop Shelf Uyarı] '{peer.DeviceName}' ile henüz çift taraflı 6 haneli PIN onayı tamamlanmadı!");
+            return null;
+        }
+
         var fi = new FileInfo(filePath);
         if (!fi.Exists)
             return null;
@@ -558,8 +711,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
                 if (isNew)
                 {
-                    Log($"[Keşif] Yeni cihaz bulundu: {peer.DeviceName} ({peer.Platform}) @ {peer.IpAddress}");
-                    // Immediately reply with our unicast beacon so the peer discovers us right away
+                    Log($"[Keşif] Cihaz bulundu: {peer.DeviceName} ({peer.Platform}) @ {peer.IpAddress} — Bağlanmak için çift taraflı 6 haneli PIN girin.");
                     await SendDiscoveryBeaconToAsync(new IPEndPoint(res.RemoteEndPoint.Address, DiscoveryPort))
                         .ConfigureAwait(false);
                 }
@@ -629,7 +781,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                             long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                             double rtt = Math.Max(0.2, nowMs - pongRecv.TimestampMs);
                             string senderIp = res.RemoteEndPoint.Address.ToString();
-                            foreach (var p in _peers.Values.Where(p => p.IpAddress == senderIp))
+                            foreach (var p in _peers.Values.Where(p => p.IpAddress == senderIp && p.UdpInputPort == res.RemoteEndPoint.Port))
                             {
                                 p.LatencyMs = rtt;
                                 p.LastSeen = DateTimeOffset.UtcNow;
@@ -656,7 +808,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             byte[] ping = WirePacketCodec.EncodeHeartbeat(PacketType.HeartbeatPing, now);
-            foreach (var peer in _peers.Values)
+            foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired))
             {
                 SendUdpFireAndForget(peer, ping);
             }
@@ -693,8 +845,88 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             if (header == null)
                 return;
 
+            string remoteIp = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "127.0.0.1";
+
             switch (header.Type)
             {
+                case "PAIR_REQUEST":
+                {
+                    string peerId = !string.IsNullOrEmpty(header.SenderId)
+                        ? header.SenderId
+                        : $"{header.SenderPlatform ?? "peer"}-{remoteIp}:{header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort}";
+
+                    var peer = _peers.AddOrUpdate(
+                        peerId,
+                        _ => new PeerDeviceNode
+                        {
+                            DeviceId = peerId,
+                            DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
+                            Platform = header.SenderPlatform ?? "android",
+                            IpAddress = remoteIp,
+                            UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
+                            TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
+                            ScreenWidth = header.SenderScreenWidth ?? 1080,
+                            ScreenHeight = header.SenderScreenHeight ?? 2400,
+                            LastSeen = DateTimeOffset.UtcNow
+                        },
+                        (_, existing) =>
+                        {
+                            if (!string.IsNullOrEmpty(header.SenderName))
+                                existing.DeviceName = header.SenderName;
+                            if (!string.IsNullOrEmpty(header.SenderPlatform))
+                                existing.Platform = header.SenderPlatform;
+                            existing.IpAddress = remoteIp;
+                            if (header.SenderUdpPort.HasValue)
+                                existing.UdpInputPort = header.SenderUdpPort.Value;
+                            if (header.SenderTcpPort.HasValue)
+                                existing.TcpControlPort = header.SenderTcpPort.Value;
+                            if (header.SenderScreenWidth.HasValue)
+                                existing.ScreenWidth = header.SenderScreenWidth.Value;
+                            if (header.SenderScreenHeight.HasValue)
+                                existing.ScreenHeight = header.SenderScreenHeight.Value;
+                            existing.LastSeen = DateTimeOffset.UtcNow;
+                            return existing;
+                        });
+
+                    string submittedPin = (header.TargetPin ?? string.Empty).Trim();
+                    if (submittedPin == PairingPin)
+                    {
+                        peer.RemoteEnteredMyPinVerified = true;
+                        var ack = new TcpControlHeader
+                        {
+                            Type = "PAIR_VERIFY_ACK",
+                            SenderId = LocalDeviceId,
+                            SenderName = LocalDeviceName,
+                            IsMutualComplete = peer.IsMutuallyPaired
+                        };
+                        await TcpFrameCodec.WriteFrameAsync(stream, ack, null, 0, ct).ConfigureAwait(false);
+
+                        if (peer.IsMutuallyPaired)
+                        {
+                            Log($"[Çift Taraflı Eşleşme] ✅ '{peer.DeviceName}' ({remoteIp}) ile karşılıklı 6 haneli PIN onayı tamamlandı!");
+                        }
+                        else
+                        {
+                            Log($"[PIN İsteği] 🔔 '{peer.DeviceName}' sizin 6 haneli kodunuzu ({PairingPin}) doğru girdi! Bağlantıyı tamamlamak için onun 6 haneli kodunu girip onaylayın.");
+                        }
+
+                        PeerPairingStatusChanged?.Invoke(peer);
+                        PeerDiscoveredOrUpdated?.Invoke(peer);
+                    }
+                    else
+                    {
+                        var rej = new TcpControlHeader
+                        {
+                            Type = "PAIR_REJECT",
+                            SenderId = LocalDeviceId,
+                            SenderName = LocalDeviceName
+                        };
+                        await TcpFrameCodec.WriteFrameAsync(stream, rej, null, 0, ct).ConfigureAwait(false);
+                        Log($"[Güvenlik] ⚠️ '{peer.DeviceName}' ({remoteIp}) hatalı PIN kodu denedi ({submittedPin}).");
+                    }
+                    break;
+                }
+
                 case "CLIPBOARD_TEXT":
                     if (!string.IsNullOrEmpty(header.Text))
                     {

@@ -152,13 +152,14 @@ public sealed class Win32InputEngine : IDisposable
     /// </summary>
     public void ReturnControlToLocal(ScreenEdge localEntranceEdge, float normalizedPosition)
     {
-        if (ActiveRemotePeer == null)
+        var returningPeer = ActiveRemotePeer;
+        if (returningPeer == null)
             return;
 
         ActiveRemotePeer = null;
         if (localEntranceEdge != ScreenEdge.None)
         {
-            var (entryX, entryY) = _topology.ComputeLocalEntryPoint(localEntranceEdge, normalizedPosition);
+            var (entryX, entryY) = _topology.ComputeLocalEntryPoint(localEntranceEdge, normalizedPosition, returningPeer);
             _lastCursorX = entryX;
             _lastCursorY = entryY;
             SetCursorPos(entryX, entryY);
