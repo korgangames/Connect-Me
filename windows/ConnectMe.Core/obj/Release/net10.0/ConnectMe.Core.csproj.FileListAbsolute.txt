@@ -1,0 +1,12 @@
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\bin\Release\net10.0\ConnectMe.Core.deps.json
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\bin\Release\net10.0\ConnectMe.Core.dll
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\bin\Release\net10.0\ConnectMe.Core.pdb
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\ConnectMe.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\ConnectMe.Core.AssemblyInfoInputs.cache
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\ConnectMe.Core.AssemblyInfo.cs
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\ConnectMe.Core.csproj.CoreCompileInputs.cache
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\ConnectMe.Core.sourcelink.json
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\ConnectMe.Core.dll
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\refint\ConnectMe.Core.dll
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\ConnectMe.Core.pdb
+C:\Users\egemen.gokcul\Node\Kodlar\Connect Me\windows\ConnectMe.Core\obj\Release\net10.0\ref\ConnectMe.Core.dll

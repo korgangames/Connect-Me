@@ -1,0 +1,16 @@
+<Application x:Class="ConnectMe.Windows.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <SolidColorBrush x:Key="BgPrimaryBrush" Color="#0D1117"/>
+        <SolidColorBrush x:Key="BgCardBrush" Color="#161B22"/>
+        <SolidColorBrush x:Key="BgCardHoverBrush" Color="#1F2937"/>
+        <SolidColorBrush x:Key="BorderSubtleBrush" Color="#30363D"/>
+        <SolidColorBrush x:Key="AccentPrimaryBrush" Color="#38BDF8"/>
+        <SolidColorBrush x:Key="AccentGreenBrush" Color="#22C55E"/>
+        <SolidColorBrush x:Key="AccentAmberBrush" Color="#F59E0B"/>
+        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F0F6FC"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#8B949E"/>
+    </Application.Resources>
+</Application>

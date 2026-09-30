@@ -1,0 +1,64 @@
+name: Build Connect Me (Windows & Android APK)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: 🪟 Windows (.NET Desktop & Tests)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build Windows Solution
+        run: dotnet build ConnectMe.sln -c Release
+
+      - name: Run Protocol & Edge Topology Tests
+        run: dotnet run --project windows/ConnectMe.Tests/ConnectMe.Tests.csproj -c Release --no-build
+
+      - name: Publish Windows App
+        run: dotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained false -o publish/windows
+
+      - name: Upload Windows Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConnectMe-Windows-x64
+          path: publish/windows/
+
+  build-android:
+    name: 📱 Android APK (Kotlin 120Hz Overlay & KVM)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build Android Debug APK
+        working-directory: ./android
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConnectMe-Android-APK
+          path: android/app/build/outputs/apk/debug/*.apk
