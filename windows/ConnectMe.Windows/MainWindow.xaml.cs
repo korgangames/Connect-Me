@@ -63,7 +63,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"Yerel IP: {ipText}  |  UDP Girdi: {_network.InputUdpPort}  |  TCP Veri & PIN: {_network.ControlTcpPort}  |  Keşif: {_network.DiscoveryPort}";
+            $"IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -76,8 +76,7 @@ public partial class MainWindow : Window
         }
 
         RedrawDisplayArrangementCanvas();
-        AppendLog($"[Sistem] Connect Me Çoklu Cihaz Motoru hazır ({_topology.LocalWidth}x{_topology.LocalHeight}).");
-        AppendLog($"[Güvenlik] Bu cihazın 6 haneli eşleşme kodu: {_network.PairingPin}. Bağlantı için iki tarafın da birbirinin kodunu onaylaması gerekir.");
+        AppendLog($"[Sistem] Connect Me hazır ({_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin}");
     }
 
     private async void MainWindow_Closed(object? sender, EventArgs e)
@@ -133,22 +132,44 @@ public partial class MainWindow : Window
         if (configured.Any(p => p.DeviceId == peer.DeviceId))
             return;
 
-        // Default placement based on how many devices are already arranged
-        int count = configured.Count;
-        ScreenEdge defaultEdge = (count % 4) switch
-        {
-            0 => ScreenEdge.Right,
-            1 => ScreenEdge.Left,
-            2 => ScreenEdge.Bottom,
-            _ => ScreenEdge.Top
-        };
+        ScreenEdge targetEdge = peer.AssignedEdgeOnLocal != ScreenEdge.None
+            ? peer.AssignedEdgeOnLocal
+            : (configured.Count % 4) switch
+            {
+                0 => ScreenEdge.Right,
+                1 => ScreenEdge.Left,
+                2 => ScreenEdge.Bottom,
+                _ => ScreenEdge.Top
+            };
 
-        _topology.AssignPeerToEdgeSegment(peer, defaultEdge, 0.0f, 1.0f);
+        _topology.AssignPeerToEdgeSegment(peer, targetEdge, 0.0f, 1.0f);
+        DistributePeersOnEdge(targetEdge);
+    }
+
+    private void DistributePeersOnEdge(ScreenEdge edge)
+    {
+        var sameEdgePeers = _topology.GetConfiguredPeers()
+            .Where(p => p.IsMutuallyPaired && p.AssignedEdgeOnLocal == edge)
+            .ToList();
+
+        if (sameEdgePeers.Count == 0)
+            return;
+
+        float step = 1.0f / sameEdgePeers.Count;
+        for (int i = 0; i < sameEdgePeers.Count; i++)
+        {
+            sameEdgePeers[i].HasCustomCanvasPosition = false;
+            _topology.AssignPeerToEdgeSegment(sameEdgePeers[i], edge, i * step, (i + 1) * step);
+        }
     }
 
     private void RefreshPeersList()
     {
-        var peers = _network.DiscoveredPeers.OrderByDescending(p => p.IsMutuallyPaired).ThenByDescending(p => p.LastSeen).ToList();
+        var peers = _network.DiscoveredPeers
+            .OrderByDescending(p => p.IsMutuallyPaired)
+            .ThenByDescending(p => p.LastSeen)
+            .ToList();
+
         string? selectedId = _selectedPeer?.DeviceId;
 
         PeersListBox.SelectionChanged -= PeersListBox_SelectionChanged;
@@ -164,13 +185,21 @@ public partial class MainWindow : Window
             string icon = GetPlatformIcon(p.Platform);
             string stateBadge = p.PairingState switch
             {
-                PeerPairingState.MutuallyPaired => $"🟢 ONAYLI [{FormatEdgeTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-%{p.EdgeOffsetEnd * 100:F0}]",
+                PeerPairingState.MutuallyPaired => $"🟢 ONAYLI ({FormatEdgeShortTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-{p.EdgeOffsetEnd * 100:F0})",
                 PeerPairingState.OutboundPinVerified => "🟡 KARŞI ONAY BEKLİYOR",
-                PeerPairingState.InboundPinVerified => "🟠 SİZİN ONAYINIZ BEKLENİYOR",
-                _ => "⚪ EŞLEŞMEDİ (PIN Gerekli)"
+                PeerPairingState.InboundPinVerified => "🟠 ONAYINIZ BEKLENİYOR",
+                _ => "⚪ PIN GEREKLİ"
             };
 
-            PeersListBox.Items.Add($"{icon} {p.DeviceName} ({p.IpAddress})  —  {stateBadge}");
+            var itemBlock = new TextBlock
+            {
+                Text = $"{icon} {p.DeviceName} ({p.IpAddress})\n   {stateBadge}",
+                FontSize = 11.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(2, 3, 2, 3)
+            };
+
+            PeersListBox.Items.Add(itemBlock);
         }
 
         if (restoreIdx >= 0)
@@ -182,35 +211,35 @@ public partial class MainWindow : Window
     {
         if (_selectedPeer == null)
         {
-            SelectedPeerTitleText.Text = "🔐 Seçili Cihaz ile Çift Taraflı 6 Haneli Kod Onayı";
-            SelectedPeerStatusText.Text = "Listeden bir cihaz seçin ve o cihazın ekranındaki 6 haneli kodu aşağıya girin.";
+            SelectedPeerTitleText.Text = "🔐 Çift Taraflı 6 Haneli Kod Onayı";
+            SelectedPeerStatusText.Text = "Listeden bir cihaz seçip ekrandaki 6 haneli kodunu girin.";
             SimConfirmOurPinBtn.Visibility = Visibility.Collapsed;
             return;
         }
 
         var p = _selectedPeer;
-        SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DeviceName} ({p.IpAddress})";
+        SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DeviceName}";
 
         string simHint = !string.IsNullOrEmpty(p.SimulatedLocalPin)
-            ? $" (Simülatör Ekran Kodu: {p.SimulatedLocalPin})"
+            ? $" (Kod: {p.SimulatedLocalPin})"
             : string.Empty;
 
         SelectedPeerStatusText.Text = p.PairingState switch
         {
             PeerPairingState.MutuallyPaired =>
-                "✅ Çift taraflı 6 haneli PIN doğrulaması tamamlandı! Sağdaki 2D Ekran Kanvasında sürükleyerek kenar konumunu ayarlayabilirsiniz.",
+                "✅ Çift taraflı 6 haneli PIN onayı tamamlandı! Sağdaki 2D Haritada sürükleyerek konumlandırabilirsiniz.",
             PeerPairingState.OutboundPinVerified =>
-                $"⏳ Karşı cihazın kodunu doğruladınız! Şimdi '{p.DeviceName}' cihazında sizin 6 haneli kodunuzun ({_network.PairingPin}) girilmesi bekleniyor.",
+                $"⏳ Karşı kod doğrulandı! Şimdi '{p.DeviceName}' üzerinde sizin kodunuzu ({_network.PairingPin}) onaylayın.",
             PeerPairingState.InboundPinVerified =>
-                $"🔔 '{p.DeviceName}' sizin 6 haneli kodunuzu ({_network.PairingPin}) doğruladı! Şimdi siz de onun 6 haneli kodunu{simHint} aşağıya girip onaylayın:",
+                $"🔔 Karşı taraf sizin kodunuzu doğruladı! Şimdi onun 6 haneli kodunu{simHint} girip onaylayın:",
             _ =>
-                $"Bağlanmak için '{p.DeviceName}' ekranındaki 6 haneli kodu{simHint} girin VE karşı cihazda da sizin kodunuzu ({_network.PairingPin}) onaylayın."
+                $"'{p.DeviceName}' ekranındaki 6 haneli kodu{simHint} girin ve karşı cihazda da sizin kodunuzu ({_network.PairingPin}) onaylayın."
         };
 
         if (!string.IsNullOrEmpty(p.SimulatedLocalPin) && !p.RemoteEnteredMyPinVerified)
         {
             SimConfirmOurPinBtn.Visibility = Visibility.Visible;
-            SimConfirmOurPinBtn.Content = $"📲 [Simülatör] '{p.DeviceName}' Cihazında Benim Kodumu ({_network.PairingPin}) Onayla";
+            SimConfirmOurPinBtn.Content = $"📲 [Sim] Karşı Cihazda Kodumu ({_network.PairingPin}) Onayla";
         }
         else
         {
@@ -219,20 +248,55 @@ public partial class MainWindow : Window
     }
 
     // =========================================================================
-    // 2D Interactive Display Arrangement Canvas (Windows Display Settings Style)
+    // 2D Interactive Display Arrangement Canvas + Zoom / Auto-Fit
     // =========================================================================
 
     private void DisplayArrangementCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
     {
+        UpdateCanvasScaleTransformOrigin();
         RedrawDisplayArrangementCanvas();
+    }
+
+    private void CanvasZoomSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (CanvasScaleTransform == null || CanvasZoomPercentText == null)
+            return;
+
+        double scale = e.NewValue;
+        UpdateCanvasScaleTransformOrigin();
+        CanvasScaleTransform.ScaleX = scale;
+        CanvasScaleTransform.ScaleY = scale;
+        CanvasZoomPercentText.Text = $"{scale * 100:F0}%";
+    }
+
+    private void CanvasContainer_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        double delta = e.Delta > 0 ? 0.08 : -0.08;
+        CanvasZoomSlider.Value = Math.Clamp(CanvasZoomSlider.Value + delta, CanvasZoomSlider.Minimum, CanvasZoomSlider.Maximum);
+        e.Handled = true;
+    }
+
+    private void FitCanvasViewBtn_Click(object sender, RoutedEventArgs e)
+    {
+        int pairedCount = _topology.GetConfiguredPeers().Count(p => p.IsMutuallyPaired);
+        CanvasZoomSlider.Value = pairedCount >= 4 ? 0.80 : 0.95;
+        RedrawDisplayArrangementCanvas();
+    }
+
+    private void UpdateCanvasScaleTransformOrigin()
+    {
+        if (DisplayArrangementCanvas == null || CanvasScaleTransform == null)
+            return;
+
+        DisplayArrangementCanvas.RenderTransformOrigin = new Point(0.5, 0.5);
     }
 
     private (double Left, double Top, double Width, double Height) GetPrimaryBoxRectOnCanvas()
     {
-        double cw = Math.Max(360, DisplayArrangementCanvas.ActualWidth);
-        double ch = Math.Max(260, DisplayArrangementCanvas.ActualHeight);
-        double primW = 156;
-        double primH = 94;
+        double cw = Math.Max(420, DisplayArrangementCanvas.ActualWidth);
+        double ch = Math.Max(280, DisplayArrangementCanvas.ActualHeight);
+        double primW = 164;
+        double primH = 98;
         double primLeft = (cw - primW) / 2.0;
         double primTop = (ch - primH) / 2.0;
         return (primLeft, primTop, primW, primH);
@@ -243,13 +307,13 @@ public partial class MainWindow : Window
         bool isPortrait = peer.ScreenHeight > peer.ScreenWidth;
         if (isPortrait)
         {
-            return (56, 102); // Vertical Android Phone
+            return (62, 106); // Vertical Android Phone
         }
         if (peer.Platform.Contains("android", StringComparison.OrdinalIgnoreCase))
         {
-            return (96, 66); // Android Tablet
+            return (104, 70); // Android Tablet
         }
-        return (124, 74); // Windows / Nobara Linux Desktop or Laptop Monitor
+        return (132, 78); // Windows / Nobara Linux Desktop or Laptop Monitor
     }
 
     private void RedrawDisplayArrangementCanvas()
@@ -260,10 +324,9 @@ public partial class MainWindow : Window
         DisplayArrangementCanvas.Children.Clear();
         var (primLeft, primTop, primW, primH) = GetPrimaryBoxRectOnCanvas();
 
-        // Draw subtle grid background lines
         DrawCanvasGridLines(DisplayArrangementCanvas.ActualWidth, DisplayArrangementCanvas.ActualHeight);
 
-        // 1. Draw Primary Local Monitor Box in the Center
+        // 1. Primary Local Monitor Box in the Center
         var primaryBorder = new Border
         {
             Width = primW,
@@ -326,7 +389,6 @@ public partial class MainWindow : Window
                 ComputeCanvasPosFromEdgeAndSegment(peer, primLeft, primTop, primW, primH, boxW, boxH);
             }
 
-            // Draw glowing shared edge portal line between Primary Screen and this Peer
             DrawSharedEdgePortalLine(peer, primLeft, primTop, primW, primH);
 
             bool isSelected = _selectedPeer?.DeviceId == peer.DeviceId;
@@ -394,7 +456,6 @@ public partial class MainWindow : Window
 
             peerBorder.Child = stack;
 
-            // Attach Interactive Drag Events
             peerBorder.MouseLeftButtonDown += PeerBox_MouseLeftButtonDown;
             peerBorder.MouseMove += PeerBox_MouseMove;
             peerBorder.MouseLeftButtonUp += PeerBox_MouseLeftButtonUp;
@@ -407,7 +468,7 @@ public partial class MainWindow : Window
 
     private void DrawCanvasGridLines(double width, double height)
     {
-        var gridBrush = new SolidColorBrush(Color.FromArgb(25, 148, 163, 184));
+        var gridBrush = new SolidColorBrush(Color.FromArgb(22, 148, 163, 184));
         for (double x = 40; x < width; x += 40)
         {
             DisplayArrangementCanvas.Children.Add(new Line
@@ -435,7 +496,7 @@ public partial class MainWindow : Window
         double boxW,
         double boxH)
     {
-        const double gap = 4.0;
+        const double gap = 6.0;
         float mid = (peer.EdgeOffsetStart + peer.EdgeOffsetEnd) / 2.0f;
 
         switch (peer.AssignedEdgeOnLocal)
@@ -546,7 +607,7 @@ public partial class MainWindow : Window
             Canvas.SetTop(_draggingBorder, _draggingPeer.CanvasY);
 
             CanvasSelectionInfoText.Text =
-                $"🎯 { _draggingPeer.DeviceName }: {FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} Kenar (%{ _draggingPeer.EdgeOffsetStart * 100:F0} - %{_draggingPeer.EdgeOffsetEnd * 100:F0} kesiti)";
+                $"🎯 {_draggingPeer.DeviceName}: {FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} Kenar (%{_draggingPeer.EdgeOffsetStart * 100:F0} - %{_draggingPeer.EdgeOffsetEnd * 100:F0} kesiti)";
         }
     }
 
@@ -582,11 +643,18 @@ public partial class MainWindow : Window
             return;
         }
 
+        var oldEdge = _selectedPeer.AssignedEdgeOnLocal;
         _selectedPeer.HasCustomCanvasPosition = false;
         _topology.AssignPeerToEdgeSegment(_selectedPeer, edge, 0.0f, 1.0f);
+        if (oldEdge != edge && oldEdge != ScreenEdge.None)
+        {
+            DistributePeersOnEdge(oldEdge);
+        }
+        DistributePeersOnEdge(edge);
+
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();
-        AppendLog($"[Ekran Konfigürasyonu] '{_selectedPeer.DeviceName}' -> {FormatEdgeTr(edge)} kenara atandı.");
+        AppendLog($"[Ekran Konfigürasyonu] '{_selectedPeer.DeviceName}' -> {FormatEdgeTr(edge)} kenara taşındı.");
     }
 
     private void AutoArrangeScreensBtn_Click(object sender, RoutedEventArgs e)
@@ -595,21 +663,20 @@ public partial class MainWindow : Window
         if (paired.Count == 0)
             return;
 
-        // Group by assigned edge and distribute segments evenly if multiple devices share an edge!
-        foreach (var group in paired.GroupBy(p => p.AssignedEdgeOnLocal))
+        ScreenEdge[] edgesOrder = [ScreenEdge.Right, ScreenEdge.Left, ScreenEdge.Bottom, ScreenEdge.Top];
+        for (int i = 0; i < paired.Count; i++)
         {
-            var list = group.ToList();
-            float step = 1.0f / list.Count;
-            for (int i = 0; i < list.Count; i++)
-            {
-                list[i].HasCustomCanvasPosition = false;
-                _topology.AssignPeerToEdgeSegment(list[i], group.Key, i * step, (i + 1) * step);
-            }
+            paired[i].AssignedEdgeOnLocal = edgesOrder[i % edgesOrder.Length];
+        }
+
+        foreach (var edge in edgesOrder)
+        {
+            DistributePeersOnEdge(edge);
         }
 
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();
-        AppendLog("[Ekran Konfigürasyonu] Tüm bağlı ekranlar kenarlara eşit aralıklarla otomatik hizalandı.");
+        AppendLog("[Ekran Konfigürasyonu] Tüm bağlı ekranlar dört kenara dengeli şekilde dağıtıldı.");
     }
 
     // =========================================================================
@@ -663,8 +730,8 @@ public partial class MainWindow : Window
 
         (string name, string platform, int w, int h, ScreenEdge preferredEdge) = (_simDeviceCounter % 4) switch
         {
-            1 => ($"Android Telefon #{_simDeviceCounter} (S24)", "android", 1080, 2400, ScreenEdge.Right),
-            2 => ($"Nobara Linux PC #{_simDeviceCounter} (KDE)", "linux-nobara", 2560, 1440, ScreenEdge.Left),
+            1 => ($"Android Telefon #{_simDeviceCounter}", "android", 1080, 2400, ScreenEdge.Right),
+            2 => ($"Nobara KDE PC #{_simDeviceCounter}", "linux-nobara", 2560, 1440, ScreenEdge.Left),
             3 => ($"Windows Laptop #{_simDeviceCounter}", "windows", 1920, 1080, ScreenEdge.Right),
             _ => ($"Android Tablet #{_simDeviceCounter}", "android", 2560, 1600, ScreenEdge.Bottom)
         };
@@ -693,7 +760,7 @@ public partial class MainWindow : Window
         RefreshPeersList();
         UpdateSelectedPeerPairingPanel();
         AppendLog(
-            $"[Simülatör] '{name}' ({w}x{h}) oluşturuldu! Karşı Cihazın 6 Haneli Kodu: {simPin}. (Kodu kutuya otomatik yazıldı, '✅ Kodu Doğrula' ve '📲 Karşı Cihazda Da Onayla' butonlarına basarak çift taraflı eşleşmeyi tamamlayın!)");
+            $"[Simülatör] '{name}' ({w}x{h}) eklendi (Kod: {simPin}). Sol alttan '✅ Doğrula' ve '📲 Karşı Cihazda Onayla' ile eşleştirin.");
     }
 
     private async Task RunSimulatedDeviceNodeLoopAsync(PeerDeviceNode simPeer, UdpClient simUdp, CancellationToken ct)
@@ -828,15 +895,15 @@ public partial class MainWindow : Window
                 ActiveFocusBadge.Background = new SolidColorBrush(Color.FromRgb(30, 58, 138));
                 ActiveFocusBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
                 ActiveFocusText.Foreground = new SolidColorBrush(Color.FromRgb(125, 211, 252));
-                ActiveFocusText.Text = $"{GetPlatformIcon(activePeer.Platform)} Aktif Kontrol: {activePeer.DeviceName} ({FormatEdgeTr(edge)} Kenar)";
-                AppendLog($"[Kenar Geçişi] ➡️ İmleç ve klavye '{activePeer.DeviceName}' ekranına geçti (Hiza: %{normalizedPos * 100:F0}).");
+                ActiveFocusText.Text = $"{GetPlatformIcon(activePeer.Platform)} Kontrol: {activePeer.DeviceName}";
+                AppendLog($"[Kenar Geçişi] ➡️ İmleç ve klavye '{activePeer.DeviceName}' ekranına geçti.");
             }
             else
             {
                 ActiveFocusBadge.Background = new SolidColorBrush(Color.FromRgb(30, 58, 47));
                 ActiveFocusBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
                 ActiveFocusText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));
-                ActiveFocusText.Text = "🪟 Aktif Kontrol: Bu Bilgisayar (Yerel)";
+                ActiveFocusText.Text = "🪟 Kontrol: Bu Bilgisayar (Yerel)";
                 AppendLog("[Kenar Geçişi] ⬅️ İmleç ve klavye ana ekrana geri döndü.");
             }
             RedrawDisplayArrangementCanvas();
@@ -852,14 +919,14 @@ public partial class MainWindow : Window
                 LockStateBadge.Background = new SolidColorBrush(Color.FromRgb(120, 53, 15));
                 LockStateBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(245, 158, 11));
                 LockStateText.Foreground = new SolidColorBrush(Color.FromRgb(253, 230, 138));
-                LockStateText.Text = "🔒 Kenar Geçişi: KİLİTLİ (Oyun Modu)";
+                LockStateText.Text = "🔒 Geçiş: KİLİTLİ (Oyun Modu)";
             }
             else
             {
                 LockStateBadge.Background = new SolidColorBrush(Color.FromRgb(31, 41, 55));
                 LockStateBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(48, 54, 61));
                 LockStateText.Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
-                LockStateText.Text = "🔓 Kenar Geçişi: Açık (ScrollLock / Ctrl+Alt+L)";
+                LockStateText.Text = "🔓 Geçiş: Açık (ScrollLock / Ctrl+Alt+L)";
             }
         });
     }
@@ -918,7 +985,11 @@ public partial class MainWindow : Window
     private void PeersListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         int idx = PeersListBox.SelectedIndex;
-        var peers = _network.DiscoveredPeers.OrderByDescending(p => p.IsMutuallyPaired).ThenByDescending(p => p.LastSeen).ToList();
+        var peers = _network.DiscoveredPeers
+            .OrderByDescending(p => p.IsMutuallyPaired)
+            .ThenByDescending(p => p.LastSeen)
+            .ToList();
+
         if (idx >= 0 && idx < peers.Count)
         {
             _selectedPeer = peers[idx];
@@ -941,6 +1012,7 @@ public partial class MainWindow : Window
         {
             _shelfItems.Insert(0, item);
             RefreshShelfList();
+            DropShelfTabItem.Header = $"🧲 Ortak Cep ({_shelfItems.Count}) & Pano";
         });
     }
 
@@ -949,9 +1021,9 @@ public partial class MainWindow : Window
         ShelfItemsListBox.Items.Clear();
         foreach (var item in _shelfItems)
         {
-            string dirArrow = item.IsOutgoing ? "📤" : "📥";
+            string dirArrow = item.IsOutgoing ? "📤 Gönderildi" : "📥 Alındı";
             ShelfItemsListBox.Items.Add(
-                $"{dirArrow} {item.FileName} ({ConnectMeNetworkNode.FormatBytes(item.FileSizeBytes)}) — {item.SenderName}");
+                $"{dirArrow}: {item.FileName} ({ConnectMeNetworkNode.FormatBytes(item.FileSizeBytes)}) — {item.SenderName} [{item.ReceivedAt:HH:mm:ss}]");
         }
     }
 
@@ -1032,6 +1104,7 @@ public partial class MainWindow : Window
                     {
                         _shelfItems.Insert(0, entry);
                         RefreshShelfList();
+                        DropShelfTabItem.Header = $"🧲 Ortak Cep ({_shelfItems.Count}) & Pano";
                     }
                 }
             }
@@ -1105,6 +1178,7 @@ public partial class MainWindow : Window
     {
         Dispatcher.InvokeAsync(() =>
         {
+            LatestLogTickerText.Text = message;
             TelemetryLogListBox.Items.Insert(0, message);
             while (TelemetryLogListBox.Items.Count > 150)
             {
