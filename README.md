@@ -2,10 +2,25 @@
 
 **Connect Me**, **Windows**, **Android** ve **Linux (Nobara — KDE Plasma Wayland)** cihazlarınızı ekran yansıtma (screen mirroring) olmadan tek bir fiziksel klavye ve fare ile kontrol etmenizi, ortak pano (Universal Clipboard) kullanmanızı ve cihazlar arasında sürükle-bırak / manyetik cep (Drop Shelf) ile kolayca eşya paylaşmanızı sağlayan hibrit (**Wi-Fi + Bluetooth**) bir ekosistem uygulamasıdır.
 
-> 📄 **Mimari ve Protokol Dokümanları:**
+> 📄 **Hızlı Bağlantılar ve Belgeler:**
+> - [**📥 İndirme Sayfası ve Kurulum Kılavuzu (`DOWNLOADS.md`)**](DOWNLOADS.md)
 > - [**App Design Document (`docs/ADD.md` v1.3)**](docs/ADD.md)
 > - [**Wire Protocol v1.3 (`protocol/WIRE_PROTOCOL.md`)**](protocol/WIRE_PROTOCOL.md)
 > - [**Linux Kurulum ve Çalıştırma Kılavuzu (`linux/README.md`)**](linux/README.md)
+
+---
+
+## 📥 Hazır Paketleri İndir (Konsolsuz / Doğrudan Çalışan Sürümler)
+
+Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir geliştirici aracı veya konsol / cmd açılması gerekmez:
+
+| İşletim Sistemi | Paket | Açıklama | Doğrudan İndir |
+| :--- | :---: | :--- | :--- |
+| 🪟 **Windows** | `.zip` | Çift tıkla çalışan bağımsız WPF GUI (.NET gömülü) | [⬇️ **ConnectMe-Windows-x64.zip**](https://github.com/korgangames/Connect-Me/releases/latest/download/ConnectMe-Windows-x64.zip) |
+| 📱 **Android** | `.apk` | Doğrudan yüklenebilir APK (120Hz KVM & Pano) | [⬇️ **ConnectMe.apk**](https://github.com/korgangames/Connect-Me/releases/latest/download/ConnectMe.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | Masaüstü başlatıcılı ve menü entegrasyonlu GUI | [⬇️ **ConnectMe-Linux-x64.tar.gz**](https://github.com/korgangames/Connect-Me/releases/latest/download/ConnectMe-Linux-x64.tar.gz) |
+
+> 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
 

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Connect Me
+GenericName=Çapraz Cihaz KVM ve Pano Paylaşımı
+Comment=Windows, Android ve Linux arasında tek mouse, klavye, pano ve dosya paylaşımı
+Exec=/usr/bin/env python3 connectme_linux_gui.py
+Icon=preferences-desktop-display
+Terminal=false
+Categories=Utility;Network;HardwareSettings;
+StartupNotify=true
+Keywords=kvm;mouse;keyboard;clipboard;android;windows;nobara;kde;
