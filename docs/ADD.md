@@ -83,7 +83,9 @@ flowchart TB
 
 ---
 
-## 4. Kullanıcı Deneyimi ve 2D Ekran Haritası
+---
+
+## 4. Kullanıcı Deneyimi ve Güvenlik Mimarisi
 
 * **2 Boyutlu Yakınlaştırılabilir Ekran Haritası (Display Arrangement Canvas):**
   * Yerel bilgisayarın tüm monitörleri (`Monitör 1`, `Monitör 2`, `Monitör 3`) gerçek oranlarıyla çizilir.
@@ -91,6 +93,11 @@ flowchart TB
   * Uzak cihazlar sürüklenerek istenilen monitörün dış kenarına yapıştırılabilir.
 * **`🖥️ +Ek Monitör Testi` Butonu:**
   * Tek tıkla gerçek donanım ekranları, Çift Monitör (Dual) ve Üçlü Monitör (Triple - Dikey Sol) düzenleri arasında geçiş yaparak çoklu monitör topolojisini test etme imkanı.
+* **Bu Cihaza Güven ve Hatırla (Sıfır-PIN Otomatik Bağlantı):**
+  * İlk eşleşmede `⭐ Bu Cihaza Güven ve Hatırla (Otomatik Bağlan)` seçeneği işaretlendiğinde 24-baytlık (48 karakter hex) kriptografik `TrustToken` üretilir.
+  * Token ve ekran konfigürasyonu diske kalıcı olarak yazılır (`%APPDATA%\ConnectMe\trusted_devices.json` veya Linux'ta `~/.config/connectme/trusted_devices.json`, Android'de `SharedPreferences`).
+  * İki tarafta da program açık olduğu sürece cihazlar UDP keşfi anında birbirini tanır ve **hiçbir PIN sormadan** `TRUSTED_RECONNECT` TCP protokolü ile anında aktifleşir.
+  * Güvenilirlik kaldırılmak istendiğinde arayüzdeki `🗑️ Bu Cihazın Güvenini Kaldır (Unut)` butonuyla tek tıkla silinebilir.
 
 ---
 
@@ -98,7 +105,8 @@ flowchart TB
 * [x] **Çoklu Monitör Sanal Masaüstü Desteği (Windows & Linux Nobara KDE Plasma)**
 * [x] **İç Birleşim Çizgisi Koruması & Dış Kenar Yönlendirmesi**
 * [x] **Çift Taraflı 6 Haneli PIN Doğrulaması**
+* [x] **Bu Cihaza Güven ve Hatırla (Sıfır-PIN Otomatik Yeniden Bağlantı)**
 * [x] **2D Sekmeli Ferah Arayüz & Yakınlaştırılabilir Kanvas**
 * [x] **Evrensel Pano & Drop Shelf Dosya Aktarımı**
 * [x] **Nobara Linux Çoklu Monitör Servisi (`linux/connectme_linux_daemon.py`)**
-* [x] **20/20 Birim ve Entegrasyon Testi**
+* [x] **31/31 Birim ve Entegrasyon Testi**

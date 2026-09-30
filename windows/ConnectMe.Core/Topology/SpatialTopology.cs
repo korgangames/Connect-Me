@@ -30,6 +30,10 @@ public sealed class PeerDeviceNode
     public bool RemoteEnteredMyPinVerified { get; set; }
     public bool IsMutuallyPaired => MyEnteredPinVerifiedByRemote && RemoteEnteredMyPinVerified;
 
+    // Persistent Device Trust & Auto-Connect
+    public bool IsTrusted { get; set; }
+    public string TrustToken { get; set; } = string.Empty;
+
     public PeerPairingState PairingState => (MyEnteredPinVerifiedByRemote, RemoteEnteredMyPinVerified) switch
     {
         (true, true) => PeerPairingState.MutuallyPaired,

@@ -189,12 +189,13 @@ public partial class MainWindow : Window
             string monPrefix = !string.IsNullOrEmpty(p.AttachedLocalMonitorId) && _topology.LocalMonitors.Count > 1
                 ? $"{p.AttachedLocalMonitorId} "
                 : string.Empty;
+            string trustStar = p.IsTrusted ? "⭐ " : "";
             string stateBadge = p.PairingState switch
             {
-                PeerPairingState.MutuallyPaired => $"🟢 ONAYLI ({monPrefix}{FormatEdgeShortTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-{p.EdgeOffsetEnd * 100:F0})",
-                PeerPairingState.OutboundPinVerified => "🟡 KARŞI ONAY BEKLİYOR",
-                PeerPairingState.InboundPinVerified => "🟠 ONAYINIZ BEKLENİYOR",
-                _ => "⚪ PIN GEREKLİ"
+                PeerPairingState.MutuallyPaired => $"{trustStar}🟢 ONAYLI ({monPrefix}{FormatEdgeShortTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-{p.EdgeOffsetEnd * 100:F0})",
+                PeerPairingState.OutboundPinVerified => $"{trustStar}🟡 KARŞI ONAY BEKLİYOR",
+                PeerPairingState.InboundPinVerified => $"{trustStar}🟠 ONAYINIZ BEKLENİYOR",
+                _ => p.IsTrusted ? "⭐ ⚪ GÜVENİLİR (Bağlanıyor...)" : "⚪ PIN GEREKLİ"
             };
 
             var itemBlock = new TextBlock
@@ -220,27 +221,36 @@ public partial class MainWindow : Window
             SelectedPeerTitleText.Text = "🔐 Çift Taraflı 6 Haneli Kod Onayı";
             SelectedPeerStatusText.Text = "Listeden bir cihaz seçip ekrandaki 6 haneli kodunu girin.";
             SimConfirmOurPinBtn.Visibility = Visibility.Collapsed;
+            RevokeTrustBtn.Visibility = Visibility.Collapsed;
             return;
         }
 
         var p = _selectedPeer;
         string multiMonBadge = p.RemoteMonitorCount > 1 ? $" ({p.RemoteMonitorCount} Monitör)" : string.Empty;
-        SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DeviceName}{multiMonBadge}";
+        string trustBadge = p.IsTrusted ? " ⭐ [GÜVENİLİR]" : "";
+        SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DeviceName}{multiMonBadge}{trustBadge}";
 
         string simHint = !string.IsNullOrEmpty(p.SimulatedLocalPin)
             ? $" (Kod: {p.SimulatedLocalPin})"
             : string.Empty;
 
+        RememberDeviceCheckBox.IsChecked = p.IsTrusted || true;
+        RevokeTrustBtn.Visibility = p.IsTrusted ? Visibility.Visible : Visibility.Collapsed;
+
         SelectedPeerStatusText.Text = p.PairingState switch
         {
             PeerPairingState.MutuallyPaired =>
-                "✅ Çift taraflı 6 haneli PIN onayı tamamlandı! Sağdaki 2D Haritada istediğiniz monitörün kenarına sürükleyebilirsiniz.",
+                p.IsTrusted
+                    ? "⭐ Bu cihaz güvenilir olarak kaydedildi. İki tarafta da program açık olduğu sürece PIN sormadan otomatik bağlanır. 2D Haritada dilediğiniz gibi konumlandırabilirsiniz."
+                    : "✅ Çift taraflı 6 haneli PIN onayı tamamlandı! Sağdaki 2D Haritada istediğiniz monitörün kenarına sürükleyebilirsiniz.",
             PeerPairingState.OutboundPinVerified =>
                 $"⏳ Karşı kod doğrulandı! Şimdi '{p.DeviceName}' üzerinde sizin kodunuzu ({_network.PairingPin}) onaylayın.",
             PeerPairingState.InboundPinVerified =>
                 $"🔔 Karşı taraf sizin kodunuzu doğruladı! Şimdi onun 6 haneli kodunu{simHint} girip onaylayın:",
             _ =>
-                $"'{p.DeviceName}' ekranındaki 6 haneli kodu{simHint} girin ve karşı cihazda da sizin kodunuzu ({_network.PairingPin}) onaylayın."
+                p.IsTrusted
+                    ? $"⭐ Güvenilir cihaz aranıyor ve otomatik bağlanılıyor... Veya PIN ile manuel doğrulamak için kodu{simHint} girin."
+                    : $"'{p.DeviceName}' ekranındaki 6 haneli kodu{simHint} girin ve karşı cihazda da sizin kodunuzu ({_network.PairingPin}) onaylayın."
         };
 
         if (!string.IsNullOrEmpty(p.SimulatedLocalPin) && !p.RemoteEnteredMyPinVerified)
@@ -828,6 +838,7 @@ public partial class MainWindow : Window
         if (_draggingBorder != null && _draggingPeer != null)
         {
             _draggingBorder.ReleaseMouseCapture();
+            _network.SavePeerTopologyToTrustedStore(_draggingPeer);
             AppendLog(
                 $"[Ekran Konfigürasyonu] '{_draggingPeer.DeviceName}' -> {_draggingPeer.AttachedLocalMonitorId} ({FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} kenar, %{_draggingPeer.EdgeOffsetStart * 100:F0}-%{_draggingPeer.EdgeOffsetEnd * 100:F0}) hizalandı.");
             _draggingBorder = null;
@@ -865,6 +876,7 @@ public partial class MainWindow : Window
             DistributePeersOnEdge(oldEdge);
         }
         DistributePeersOnEdge(edge);
+        _network.SavePeerTopologyToTrustedStore(_selectedPeer);
 
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();
@@ -888,6 +900,11 @@ public partial class MainWindow : Window
         foreach (var edge in edgesOrder)
         {
             DistributePeersOnEdge(edge);
+        }
+
+        foreach (var p in paired)
+        {
+            _network.SavePeerTopologyToTrustedStore(p);
         }
 
         RefreshPeersList();
@@ -915,8 +932,29 @@ public partial class MainWindow : Window
         }
 
         string enteredPin = RemotePinInputBox.Text;
-        var (_, _, message) = await _network.SubmitRemotePinForPairingAsync(_selectedPeer, enteredPin);
+        bool remember = RememberDeviceCheckBox.IsChecked ?? true;
+        var (_, _, message) = await _network.SubmitRemotePinForPairingAsync(_selectedPeer, enteredPin, remember);
         CanvasSelectionInfoText.Text = message;
+        if (_selectedPeer.IsMutuallyPaired)
+        {
+            EnsurePeerPlacedOnTopology(_selectedPeer);
+            if (remember)
+            {
+                _network.SavePeerTopologyToTrustedStore(_selectedPeer);
+            }
+        }
+        UpdateSelectedPeerPairingPanel();
+        RefreshPeersList();
+        RedrawDisplayArrangementCanvas();
+    }
+
+    private void RevokeTrustBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedPeer == null)
+            return;
+
+        _network.RevokeTrustForPeer(_selectedPeer);
+        CanvasSelectionInfoText.Text = $"🗑️ '{_selectedPeer.DeviceName}' için cihaz güveni kaldırıldı.";
         UpdateSelectedPeerPairingPanel();
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();

@@ -235,8 +235,28 @@ class ConnectMeLinuxNode:
         self.topology = LinuxMultiMonitorTopology()
         self.shelf_dir = Path.home() / "Downloads" / "ConnectMe-Shelf"
         self.shelf_dir.mkdir(parents=True, exist_ok=True)
+        self.trust_file = Path.home() / ".config" / "connectme" / "trusted_devices.json"
+        self.trust_file.parent.mkdir(parents=True, exist_ok=True)
+        self.trusted_devices: Dict[str, dict] = self._load_trusted_devices()
         self.peers: Dict[str, dict] = {}
         self.running = True
+
+    def _load_trusted_devices(self) -> Dict[str, dict]:
+        if not self.trust_file.exists():
+            return {}
+        try:
+            with open(self.trust_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {d["deviceId"]: d for d in data if "deviceId" in d}
+        except Exception:
+            return {}
+
+    def _save_trusted_devices(self) -> None:
+        try:
+            with open(self.trust_file, "w", encoding="utf-8") as f:
+                json.dump(list(self.trusted_devices.values()), f, indent=2)
+        except Exception:
+            pass
 
     def start(self) -> None:
         mons = self.topology.monitors
@@ -246,6 +266,7 @@ class ConnectMeLinuxNode:
         print(f" Cihaz Adı : {self.device_name} ({self.device_id})")
         print(f" 6 Haneli Kodu : {self.local_pin[:3]} {self.local_pin[3:]}")
         print(f" Algılanan Monitör Sayısı : {len(mons)} (Toplam Masaüstü: {vw}x{vh})")
+        print(f" Kayıtlı Güvenilir Cihaz : {len(self.trusted_devices)}")
         for m in mons:
             prim_str = " [BİRİNCİL]" if m.isPrimary else ""
             print(f"   • {m.monitorId}: {m.width}x{m.height} @ ({m.virtualX}, {m.virtualY}) ölçek={m.scaleFactor}{prim_str}")
@@ -314,15 +335,55 @@ class ConnectMeLinuxNode:
                     peer = self.peers.setdefault(sender_id, {"name": sender_name, "ip": remote_ip, "out_ok": False})
                     peer["in_ok"] = True
                     peer["monitors"] = header.get("senderMonitors", [])
+                    
+                    req_trust = bool(header.get("requestTrust", False))
+                    trust_token = header.get("trustToken", "")
+                    if req_trust and trust_token:
+                        self.trusted_devices[sender_id] = {
+                            "deviceId": sender_id,
+                            "deviceName": sender_name,
+                            "platform": header.get("senderPlatform", "windows"),
+                            "trustToken": trust_token,
+                            "autoConnect": True
+                        }
+                        self._save_trusted_devices()
+                        peer["is_trusted"] = True
+                        print(f"[Güvenlik] ⭐ '{sender_name}' güvenilir cihaz olarak kaydedildi.")
+
                     ack = {
                         "type": "PAIR_VERIFY_ACK",
                         "senderId": self.device_id,
                         "senderName": self.device_name,
                         "senderMonitors": [asdict(m) for m in self.topology.monitors],
+                        "trustToken": trust_token if req_trust else None,
                         "isMutualComplete": bool(peer.get("out_ok", False)),
                     }
                     self._send_tcp_frame(conn, ack)
                     print(f"[PIN Doğrulama] '{sender_name}' ({remote_ip}) yerel kodumuzu doğruladı!")
+                else:
+                    self._send_tcp_frame(conn, {"type": "PAIR_REJECT", "senderId": self.device_id, "senderName": self.device_name})
+
+            elif msg_type == "TRUSTED_RECONNECT":
+                sender_id = header.get("senderId", remote_ip)
+                sender_name = header.get("senderName", remote_ip)
+                token = header.get("trustToken", "")
+                saved_rec = self.trusted_devices.get(sender_id)
+                if saved_rec and saved_rec.get("trustToken") == token and saved_rec.get("autoConnect", True):
+                    peer = self.peers.setdefault(sender_id, {"name": sender_name, "ip": remote_ip})
+                    peer["in_ok"] = True
+                    peer["out_ok"] = True
+                    peer["is_trusted"] = True
+                    peer["monitors"] = header.get("senderMonitors", [])
+                    ack = {
+                        "type": "TRUSTED_RECONNECT_ACK",
+                        "senderId": self.device_id,
+                        "senderName": self.device_name,
+                        "senderMonitors": [asdict(m) for m in self.topology.monitors],
+                        "trustToken": token,
+                        "isMutualComplete": True,
+                    }
+                    self._send_tcp_frame(conn, ack)
+                    print(f"[Otomatik Bağlantı] ⭐ Güvenilir cihaz '{sender_name}' ({remote_ip}) PIN'siz otomatik bağlandı!")
                 else:
                     self._send_tcp_frame(conn, {"type": "PAIR_REJECT", "senderId": self.device_id, "senderName": self.device_name})
 

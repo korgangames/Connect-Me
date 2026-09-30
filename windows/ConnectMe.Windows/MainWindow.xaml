@@ -193,6 +193,21 @@
                                         Content="✅ Doğrula"/>
                             </Grid>
 
+                            <CheckBox x:Name="RememberDeviceCheckBox"
+                                      Content="⭐ Bu Cihaza Güven ve Hatırla (Otomatik Bağlan)"
+                                      IsChecked="True"
+                                      Foreground="#FBBF24"
+                                      FontSize="10.5"
+                                      FontWeight="SemiBold"
+                                      Margin="0,6,0,3"
+                                      ToolTip="İşaretlendiğinde, iki cihazda da program açık olduğu sürece bir daha PIN sormadan arka planda otomatik bağlanır."/>
+
+                            <Button x:Name="RevokeTrustBtn"
+                                    Click="RevokeTrustBtn_Click"
+                                    Visibility="Collapsed"
+                                    Background="#7F1D1D" Foreground="#FCA5A5" FontSize="10.5" BorderThickness="0" Padding="6,3" Margin="0,4,0,0" Cursor="Hand"
+                                    Content="🗑️ Bu Cihazın Güvenini Kaldır (Unut)"/>
+
                             <Button x:Name="SimConfirmOurPinBtn"
                                     Click="SimConfirmOurPinBtn_Click"
                                     Visibility="Collapsed"

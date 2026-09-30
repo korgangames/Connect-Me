@@ -337,6 +337,8 @@ public sealed class TcpControlHeader
     // - "PAIR_REQUEST": Sender submits TargetPin (the receiver's 6-digit PIN) to verify sender -> receiver
     // - "PAIR_VERIFY_ACK": Receiver confirms TargetPin matched receiver's LocalPin (and includes whether mutual pairing is now complete)
     // - "PAIR_REJECT": Receiver rejects wrong 6-digit PIN
+    // - "TRUSTED_RECONNECT": Sender uses pre-shared persistent trustToken to auto-connect without 6-digit PIN
+    // - "TRUSTED_RECONNECT_ACK": Receiver confirms valid trustToken and completes auto-pairing
     // - "TOPOLOGY_SYNC": Sender broadcasts its updated multi-monitor layout (SenderMonitors)
     // - "CLIPBOARD_TEXT": Universal clipboard text sync
     // - "CLIPBOARD_IMAGE": Universal clipboard PNG sync
@@ -368,6 +370,12 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("targetPin")]
     public string? TargetPin { get; set; }
+
+    [JsonPropertyName("trustToken")]
+    public string? TrustToken { get; set; }
+
+    [JsonPropertyName("requestTrust")]
+    public bool? RequestTrust { get; set; }
 
     [JsonPropertyName("isMutualComplete")]
     public bool? IsMutualComplete { get; set; }

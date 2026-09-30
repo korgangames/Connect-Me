@@ -28,8 +28,10 @@ public static class Program
         TestLinuxKScreenDoctorJsonParser();
         TestLinuxXRandrOutputParser();
         TestMultiMonitorCanvasMagneticSnapping();
+        TestTrustedDeviceStorePersistence();
         await TestTcpFrameCodecAsync();
         await TestEndToEndMutualSixDigitPinAndLoopbackAsync();
+        await TestTrustedDeviceZeroPinAutoReconnectFlowAsync();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -471,5 +473,124 @@ public static class Program
             "Çift Taraflı PIN Onayı Sonrası Uçtan Uca UDP Kenar Geçişi ve TCP Pano Senkronizasyonu");
 
         try { Directory.Delete(tempShelf, true); } catch { }
+    }
+
+    private static void TestTrustedDeviceStorePersistence()
+    {
+        string tempFile = Path.Combine(Path.GetTempPath(), $"connectme_trust_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new TrustedDeviceStore(tempFile);
+            string token = TrustedDeviceStore.GenerateTrustToken();
+            AssertTrue(token.Length == 48, "TrustedDeviceStore: 24-baytlık (48 karakter hex) kriptografik belirteç üretildi");
+
+            store.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+            {
+                DeviceId = "android-device-1",
+                DeviceName = "Pixel 9 Pro",
+                Platform = "android",
+                TrustToken = token,
+                AssignedEdge = ScreenEdge.Left,
+                EdgeOffsetStart = 0.2f,
+                EdgeOffsetEnd = 0.8f,
+                AttachedLocalMonitorId = "DISPLAY1",
+                AutoConnect = true
+            });
+
+            AssertTrue(store.IsDeviceTrusted("android-device-1", out var rec) && rec != null && rec.DeviceName == "Pixel 9 Pro",
+                "TrustedDeviceStore: Güvenilir cihaz eklendi ve hafızada doğrulandı");
+            AssertTrue(store.VerifyTrustToken("android-device-1", token),
+                "TrustedDeviceStore: Kriptografik güven belirteci doğru eşleşti");
+            AssertTrue(!store.VerifyTrustToken("android-device-1", "wrong-token"),
+                "TrustedDeviceStore: Yanlış güven belirteci reddedildi");
+
+            // Reload from disk into a fresh store instance to verify JSON persistence
+            var storeReloaded = new TrustedDeviceStore(tempFile);
+            AssertTrue(storeReloaded.IsDeviceTrusted("android-device-1", out var reloadedRec) &&
+                       reloadedRec != null &&
+                       reloadedRec.AssignedEdge == ScreenEdge.Left &&
+                       Math.Abs(reloadedRec.EdgeOffsetStart - 0.2f) < 0.001f,
+                "TrustedDeviceStore: Diske JSON olarak kaydedildi ve yeni store örneğinde tam topolojiyle okundu");
+
+            // Test trust revocation
+            bool revoked = storeReloaded.RevokeTrust("android-device-1");
+            AssertTrue(revoked && !storeReloaded.IsDeviceTrusted("android-device-1", out _),
+                "TrustedDeviceStore: Cihaz güveni başarıyla kaldırıldı (unutuldu)");
+        }
+        finally
+        {
+            try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+        }
+    }
+
+    private static async Task TestTrustedDeviceZeroPinAutoReconnectFlowAsync()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"connectme_trust_net_{Guid.NewGuid():N}");
+        string storeFileA = Path.Combine(tempDir, "trust_a.json");
+        string storeFileB = Path.Combine(tempDir, "trust_b.json");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var storeA = new TrustedDeviceStore(storeFileA);
+            var storeB = new TrustedDeviceStore(storeFileB);
+
+            await using var nodeA = new ConnectMeNetworkNode(
+                deviceId: "node-pc",
+                deviceName: "Windows Workstation",
+                platform: "windows",
+                shelfDirectory: Path.Combine(tempDir, "shelfA"),
+                fixedPin: "111222",
+                trustStore: storeA);
+
+            await using var nodeB = new ConnectMeNetworkNode(
+                deviceId: "node-phone",
+                deviceName: "Galaxy Phone",
+                platform: "android",
+                shelfDirectory: Path.Combine(tempDir, "shelfB"),
+                fixedPin: "333444",
+                trustStore: storeB);
+
+            nodeA.Start(discoveryPort: 43049, inputUdpPort: 43050, controlTcpPort: 43051);
+            nodeB.Start(discoveryPort: 43059, inputUdpPort: 43060, controlTcpPort: 43061);
+
+            var peerBOnA = nodeA.RegisterManualPeer("127.0.0.1", "Galaxy Phone", "android", udpPort: 43060, tcpPort: 43061, customDeviceId: "node-phone");
+            var peerAOnB = nodeB.RegisterManualPeer("127.0.0.1", "Windows Workstation", "windows", udpPort: 43050, tcpPort: 43051, customDeviceId: "node-pc");
+
+            // Initial pairing with rememberDevice = true
+            var step1 = await nodeA.SubmitRemotePinForPairingAsync(peerBOnA, "333444", rememberDevice: true);
+            var step2 = await nodeB.SubmitRemotePinForPairingAsync(peerAOnB, "111222", rememberDevice: true);
+
+            AssertTrue(step1.Accepted && step2.Accepted,
+                "Sıfır-PIN Otomatik Bağlantı Hazırlığı: İlk eşleşmede iki taraf da kodu doğruladı ve güven belirteci paylaştı");
+            AssertTrue(peerBOnA.IsTrusted && peerAOnB.IsTrusted,
+                "Sıfır-PIN: İki tarafta da IsTrusted bayrağı aktifleşti ve diske kaydedildi");
+
+            // Set custom edge and canvas layout
+            peerBOnA.AssignedEdgeOnLocal = ScreenEdge.Left;
+            peerBOnA.EdgeOffsetStart = 0.25f;
+            peerBOnA.EdgeOffsetEnd = 0.75f;
+            nodeA.SavePeerTopologyToTrustedStore(peerBOnA);
+
+            // Now SIMULATE RESTART:
+            // Reset peer pairing state to simulate closing and reopening the application!
+            peerBOnA.MyEnteredPinVerifiedByRemote = false;
+            peerBOnA.RemoteEnteredMyPinVerified = false;
+            AssertTrue(!peerBOnA.IsMutuallyPaired, "Simülasyon: Uygulama kapatıldı ve bağlantı koptu");
+
+            // Zero-PIN Reconnection: Node A attempts TRUSTED_RECONNECT using saved trust token
+            bool autoConnected = await nodeA.TryAutoReconnectTrustedPeerAsync(peerBOnA, peerBOnA.TrustToken);
+
+            AssertTrue(autoConnected && peerBOnA.IsMutuallyPaired && peerAOnB.IsMutuallyPaired,
+                "Sıfır-PIN Otomatik Bağlantı: Hiçbir PIN girilmeden TRUSTED_RECONNECT ile otomatik bağlantı sağlandı!");
+
+            // Verify edge layout was preserved
+            AssertTrue(peerBOnA.AssignedEdgeOnLocal == ScreenEdge.Left && Math.Abs(peerBOnA.EdgeOffsetStart - 0.25f) < 0.001f,
+                "Sıfır-PIN: Otomatik bağlanan cihazın ekran konfigürasyonu ve kenar konumu aynen korundu");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
     }
 }

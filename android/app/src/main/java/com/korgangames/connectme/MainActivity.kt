@@ -97,11 +97,13 @@ class MainActivity : AppCompatActivity() {
             "🔍 Ağdaki bilgisayarlar ve cihazlar aranıyor..."
         } else {
             peers.joinToString("\n\n") { p ->
+                val isTrusted = svc?.getTrustTokenForDevice(p.deviceId) != null
+                val trustTag = if (isTrusted) "⭐ " else ""
                 val state = when {
-                    p.isMutuallyPaired -> "🟢 ÇİFT TARAFLI ONAYLI (Aktif)"
-                    p.myEnteredPinVerifiedByRemote -> "🟡 KARŞI ONAY BEKLİYOR (PC'de $pin kodunu girin)"
-                    p.remoteEnteredMyPinVerified -> "🟠 SİZİN ONAYINIZ BEKLENİYOR (PC'nin kodunu aşağıya girin)"
-                    else -> "⚪ EŞLEŞMEDİ (6 Haneli PIN Gerekli)"
+                    p.isMutuallyPaired -> "${trustTag}🟢 ÇİFT TARAFLI ONAYLI (Aktif)"
+                    p.myEnteredPinVerifiedByRemote -> "${trustTag}🟡 KARŞI ONAY BEKLİYOR (PC'de $pin kodunu girin)"
+                    p.remoteEnteredMyPinVerified -> "${trustTag}🟠 SİZİN ONAYINIZ BEKLENİYOR (PC'nin kodunu aşağıya girin)"
+                    else -> if (isTrusted) "⭐ ⚪ GÜVENİLİR (Otomatik Bağlanıyor...)" else "⚪ EŞLEŞMEDİ (6 Haneli PIN Gerekli)"
                 }
                 "🖥️ ${p.deviceName} (${p.ipAddress})\n   Durum: $state"
             }

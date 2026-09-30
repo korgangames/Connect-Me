@@ -119,17 +119,21 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public event Action<ShelfItemEntry>? ShelfItemReceived;
     public event Action<string>? LogMessage;
 
+    public TrustedDeviceStore TrustStore { get; }
+
     public ConnectMeNetworkNode(
         string? deviceId = null,
         string? deviceName = null,
         string platform = "windows",
         string? shelfDirectory = null,
-        string? fixedPin = null)
+        string? fixedPin = null,
+        TrustedDeviceStore? trustStore = null)
     {
         LocalDeviceId = deviceId ?? Guid.NewGuid().ToString("N")[..12];
         LocalDeviceName = deviceName ?? Environment.MachineName;
         LocalPlatform = platform;
         PairingPin = fixedPin ?? RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+        TrustStore = trustStore ?? new TrustedDeviceStore();
 
         ShelfReceiveDirectory = shelfDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -290,11 +294,14 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     /// <summary>
     /// Submits the target device's 6-digit PIN to verify local -> remote trust.
+    /// If rememberDevice is true, exchanges a persistent TrustToken so subsequent sessions
+    /// reconnect automatically without requiring manual 6-digit PIN entry!
     /// Both devices must verify each other's 6-digit PIN to achieve MutuallyPaired status!
     /// </summary>
     public async Task<(bool Accepted, bool IsNowMutuallyPaired, string Message)> SubmitRemotePinForPairingAsync(
         PeerDeviceNode peer,
-        string enteredRemotePin)
+        string enteredRemotePin,
+        bool rememberDevice = true)
     {
         string cleanPin = enteredRemotePin.Trim().Replace("-", "").Replace(" ", "");
         if (cleanPin.Length != 6 || !cleanPin.All(char.IsDigit))
@@ -302,17 +309,41 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             return (false, false, "Lütfen karşı cihazdaki 6 haneli rakam kodunu eksiksiz girin.");
         }
 
+        string? generatedTrustToken = rememberDevice ? TrustedDeviceStore.GenerateTrustToken() : null;
+
         // Handle local simulated device verification
         if (!string.IsNullOrEmpty(peer.SimulatedLocalPin))
         {
             if (cleanPin == peer.SimulatedLocalPin)
             {
                 peer.MyEnteredPinVerifiedByRemote = true;
+                if (rememberDevice && generatedTrustToken != null)
+                {
+                    peer.IsTrusted = true;
+                    peer.TrustToken = generatedTrustToken;
+                    TrustStore.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+                    {
+                        DeviceId = peer.DeviceId,
+                        DeviceName = peer.DeviceName,
+                        Platform = peer.Platform,
+                        TrustToken = generatedTrustToken,
+                        AssignedEdge = peer.AssignedEdgeOnLocal,
+                        EdgeOffsetStart = peer.EdgeOffsetStart,
+                        EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                        AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                        CanvasX = peer.CanvasX,
+                        CanvasY = peer.CanvasY,
+                        HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                        AutoConnect = true
+                    });
+                }
+
                 PeerPairingStatusChanged?.Invoke(peer);
                 PeerDiscoveredOrUpdated?.Invoke(peer);
+                string trustInfo = rememberDevice ? " [⭐ Cihaza güvenildi & hatırlandı]" : "";
                 string statusMsg = peer.IsMutuallyPaired
-                    ? $"✅ '{peer.DeviceName}' ile ÇİFT TARAFLI eşleşme tamamlandı! Ekran kanvasında konumlandırabilirsiniz."
-                    : $"✅ '{peer.DeviceName}' cihazının kodu ({cleanPin}) doğrulandı! Şimdi karşı cihazdan da sizin kodunuzun ({PairingPin}) onaylanması bekleniyor.";
+                    ? $"✅ '{peer.DeviceName}' ile ÇİFT TARAFLI eşleşme tamamlandı!{trustInfo} Ekran kanvasında konumlandırabilirsiniz."
+                    : $"✅ '{peer.DeviceName}' cihazının kodu ({cleanPin}) doğrulandı!{trustInfo} Şimdi karşı cihazdan da sizin kodunuzun ({PairingPin}) onaylanması bekleniyor.";
                 Log($"[PIN Doğrulama] {statusMsg}");
                 return (true, peer.IsMutuallyPaired, statusMsg);
             }
@@ -343,7 +374,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 SenderScreenWidth = LocalScreenWidth,
                 SenderScreenHeight = LocalScreenHeight,
                 SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
-                TargetPin = cleanPin
+                TargetPin = cleanPin,
+                RequestTrust = rememberDevice,
+                TrustToken = generatedTrustToken
             };
 
             await TcpFrameCodec.WriteFrameAsync(stream, reqHeader, null, 0, timeoutCts.Token).ConfigureAwait(false);
@@ -361,12 +394,38 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     peer.RemoteEnteredMyPinVerified = true;
                 }
 
+                if (rememberDevice)
+                {
+                    string effectiveToken = !string.IsNullOrWhiteSpace(respHeader.TrustToken)
+                        ? respHeader.TrustToken
+                        : (generatedTrustToken ?? string.Empty);
+
+                    peer.IsTrusted = true;
+                    peer.TrustToken = effectiveToken;
+                    TrustStore.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+                    {
+                        DeviceId = peer.DeviceId,
+                        DeviceName = peer.DeviceName,
+                        Platform = peer.Platform,
+                        TrustToken = effectiveToken,
+                        AssignedEdge = peer.AssignedEdgeOnLocal,
+                        EdgeOffsetStart = peer.EdgeOffsetStart,
+                        EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                        AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                        CanvasX = peer.CanvasX,
+                        CanvasY = peer.CanvasY,
+                        HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                        AutoConnect = true
+                    });
+                }
+
                 PeerPairingStatusChanged?.Invoke(peer);
                 PeerDiscoveredOrUpdated?.Invoke(peer);
 
+                string trustBadge = rememberDevice ? " [⭐ Bu Cihaz Hatırlandı - Bir Sonraki Seferde Otomatik Bağlanacak]" : "";
                 string msg = peer.IsMutuallyPaired
-                    ? $"✅ '{peer.DeviceName}' ile ÇİFT TARAFLI 6 haneli kod doğrulaması tamamlandı!"
-                    : $"✅ '{peer.DeviceName}' kodu doğrulandı. Karşı cihazda da sizin kodunuzun ({PairingPin}) girilmesi bekleniyor.";
+                    ? $"✅ '{peer.DeviceName}' ile ÇİFT TARAFLI 6 haneli kod doğrulaması tamamlandı!{trustBadge}"
+                    : $"✅ '{peer.DeviceName}' kodu doğrulandı. Karşı cihazda da sizin kodunuzun ({PairingPin}) girilmesi bekleniyor.{trustBadge}";
                 Log($"[PIN Doğrulama] {msg}");
                 return (true, peer.IsMutuallyPaired, msg);
             }
@@ -383,6 +442,104 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             Log($"[PIN Hata] {msg}");
             return (false, false, msg);
         }
+    }
+
+    public bool RevokeTrustForPeer(PeerDeviceNode peer)
+    {
+        bool revoked = TrustStore.RevokeTrust(peer.DeviceId);
+        peer.IsTrusted = false;
+        peer.TrustToken = string.Empty;
+        Log($"[Güvenlik] 🗑️ '{peer.DeviceName}' için cihaz güveni kaldırıldı. Artık tekrar 6 haneli kod gerekecektir.");
+        PeerDiscoveredOrUpdated?.Invoke(peer);
+        PeerPairingStatusChanged?.Invoke(peer);
+        return revoked;
+    }
+
+    public void SavePeerTopologyToTrustedStore(PeerDeviceNode peer)
+    {
+        if (!peer.IsTrusted)
+            return;
+
+        if (TrustStore.IsDeviceTrusted(peer.DeviceId, out var rec) && rec != null)
+        {
+            rec.AssignedEdge = peer.AssignedEdgeOnLocal;
+            rec.EdgeOffsetStart = peer.EdgeOffsetStart;
+            rec.EdgeOffsetEnd = peer.EdgeOffsetEnd;
+            rec.AttachedLocalMonitorId = peer.AttachedLocalMonitorId;
+            rec.CanvasX = peer.CanvasX;
+            rec.CanvasY = peer.CanvasY;
+            rec.HasCustomCanvasPosition = peer.HasCustomCanvasPosition;
+            TrustStore.AddOrUpdateTrustedDevice(rec);
+        }
+    }
+
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastAutoConnectAttempt = new();
+
+    public async Task<bool> TryAutoReconnectTrustedPeerAsync(PeerDeviceNode peer, string trustToken)
+    {
+        if (peer.IsMutuallyPaired)
+            return true;
+
+        if (_lastAutoConnectAttempt.TryGetValue(peer.DeviceId, out var lastAttempt) &&
+            DateTimeOffset.UtcNow - lastAttempt < TimeSpan.FromSeconds(5))
+        {
+            return false;
+        }
+        _lastAutoConnectAttempt[peer.DeviceId] = DateTimeOffset.UtcNow;
+
+        try
+        {
+            using var client = new TcpClient();
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            await client.ConnectAsync(peer.IpAddress, peer.TcpControlPort, timeoutCts.Token).ConfigureAwait(false);
+            await using var stream = client.GetStream();
+
+            var req = new TcpControlHeader
+            {
+                Type = "TRUSTED_RECONNECT",
+                SenderId = LocalDeviceId,
+                SenderName = LocalDeviceName,
+                SenderPlatform = LocalPlatform,
+                SenderUdpPort = InputUdpPort,
+                SenderTcpPort = ControlTcpPort,
+                SenderScreenWidth = LocalScreenWidth,
+                SenderScreenHeight = LocalScreenHeight,
+                SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
+                TrustToken = trustToken
+            };
+
+            await TcpFrameCodec.WriteFrameAsync(stream, req, null, 0, timeoutCts.Token).ConfigureAwait(false);
+            var (resp, _) = await TcpFrameCodec.ReadHeaderAsync(stream, timeoutCts.Token).ConfigureAwait(false);
+
+            if (resp != null && resp.Type == "TRUSTED_RECONNECT_ACK" && resp.IsMutualComplete == true)
+            {
+                peer.MyEnteredPinVerifiedByRemote = true;
+                peer.RemoteEnteredMyPinVerified = true;
+                peer.IsTrusted = true;
+                peer.TrustToken = trustToken;
+                if (resp.SenderMonitors is { Count: > 0 })
+                {
+                    peer.RemoteMonitors = resp.SenderMonitors;
+                }
+
+                if (TrustStore.IsDeviceTrusted(peer.DeviceId, out var rec) && rec != null)
+                {
+                    rec.LastConnectedAt = DateTimeOffset.UtcNow;
+                    TrustStore.AddOrUpdateTrustedDevice(rec);
+                }
+
+                Log($"[Otomatik Bağlantı] ⭐ '{peer.DeviceName}' ile güvenli otomatik bağlantı sağlandı (PIN gerekmedi).");
+                PeerPairingStatusChanged?.Invoke(peer);
+                PeerDiscoveredOrUpdated?.Invoke(peer);
+                return true;
+            }
+        }
+        catch
+        {
+            // Peer may not be reachable yet
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -720,9 +877,27 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         return existing;
                     });
 
+                if (TrustStore.IsDeviceTrusted(peer.DeviceId, out var trustedRec) && trustedRec != null)
+                {
+                    peer.IsTrusted = true;
+                    peer.TrustToken = trustedRec.TrustToken;
+                    if (!peer.IsMutuallyPaired)
+                    {
+                        peer.AssignedEdgeOnLocal = trustedRec.AssignedEdge;
+                        peer.EdgeOffsetStart = trustedRec.EdgeOffsetStart;
+                        peer.EdgeOffsetEnd = trustedRec.EdgeOffsetEnd;
+                        peer.AttachedLocalMonitorId = trustedRec.AttachedLocalMonitorId;
+                        peer.CanvasX = trustedRec.CanvasX;
+                        peer.CanvasY = trustedRec.CanvasY;
+                        peer.HasCustomCanvasPosition = trustedRec.HasCustomCanvasPosition;
+                        _ = TryAutoReconnectTrustedPeerAsync(peer, trustedRec.TrustToken);
+                    }
+                }
+
                 if (isNew)
                 {
-                    Log($"[Keşif] Cihaz bulundu: {peer.DeviceName} ({peer.Platform}) @ {peer.IpAddress} — Bağlanmak için çift taraflı 6 haneli PIN girin.");
+                    string trustInfo = peer.IsTrusted ? " [⭐ GÜVENİLİR - Otomatik Bağlanıyor...]" : " — Bağlanmak için çift taraflı 6 haneli PIN girin.";
+                    Log($"[Keşif] Cihaz bulundu: {peer.DeviceName} ({peer.Platform}) @ {peer.IpAddress}{trustInfo}");
                     await SendDiscoveryBeaconToAsync(new IPEndPoint(res.RemoteEndPoint.Address, DiscoveryPort))
                         .ConfigureAwait(false);
                 }
@@ -905,6 +1080,29 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     string submittedPin = (header.TargetPin ?? string.Empty).Trim();
                     if (submittedPin == PairingPin)
                     {
+                        bool requestedTrust = header.RequestTrust == true && !string.IsNullOrWhiteSpace(header.TrustToken);
+                        if (requestedTrust)
+                        {
+                            peer.IsTrusted = true;
+                            peer.TrustToken = header.TrustToken!;
+                            var record = new TrustedDeviceRecord
+                            {
+                                DeviceId = peer.DeviceId,
+                                DeviceName = peer.DeviceName,
+                                Platform = peer.Platform,
+                                TrustToken = header.TrustToken!,
+                                AssignedEdge = peer.AssignedEdgeOnLocal,
+                                EdgeOffsetStart = peer.EdgeOffsetStart,
+                                EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                                AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                                CanvasX = peer.CanvasX,
+                                CanvasY = peer.CanvasY,
+                                HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                                AutoConnect = true
+                            };
+                            TrustStore.AddOrUpdateTrustedDevice(record);
+                        }
+
                         peer.RemoteEnteredMyPinVerified = true;
                         var ack = new TcpControlHeader
                         {
@@ -912,17 +1110,20 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                             SenderId = LocalDeviceId,
                             SenderName = LocalDeviceName,
                             SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
+                            RequestTrust = requestedTrust,
+                            TrustToken = requestedTrust ? header.TrustToken : null,
                             IsMutualComplete = peer.IsMutuallyPaired
                         };
                         await TcpFrameCodec.WriteFrameAsync(stream, ack, null, 0, ct).ConfigureAwait(false);
 
+                        string trustNote = requestedTrust ? " (⭐ Cihaz güvenildi & hatırlandı)" : "";
                         if (peer.IsMutuallyPaired)
                         {
-                            Log($"[Çift Taraflı Eşleşme] ✅ '{peer.DeviceName}' ({remoteIp}) ile karşılıklı 6 haneli PIN onayı tamamlandı!");
+                            Log($"[Çift Taraflı Eşleşme] ✅ '{peer.DeviceName}' ({remoteIp}) ile karşılıklı 6 haneli PIN onayı tamamlandı!{trustNote}");
                         }
                         else
                         {
-                            Log($"[PIN İsteği] 🔔 '{peer.DeviceName}' sizin 6 haneli kodunuzu ({PairingPin}) doğru girdi! Bağlantıyı tamamlamak için onun 6 haneli kodunu girip onaylayın.");
+                            Log($"[PIN İsteği] 🔔 '{peer.DeviceName}' sizin 6 haneli kodunuzu ({PairingPin}) doğru girdi!{trustNote} Bağlantıyı tamamlamak için onun 6 haneli kodunu girip onaylayın.");
                         }
 
                         PeerPairingStatusChanged?.Invoke(peer);
@@ -938,6 +1139,104 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         };
                         await TcpFrameCodec.WriteFrameAsync(stream, rej, null, 0, ct).ConfigureAwait(false);
                         Log($"[Güvenlik] ⚠️ '{peer.DeviceName}' ({remoteIp}) hatalı PIN kodu denedi ({submittedPin}).");
+                    }
+                    break;
+                }
+
+                case "TRUSTED_RECONNECT":
+                {
+                    string peerId = !string.IsNullOrEmpty(header.SenderId)
+                        ? header.SenderId
+                        : $"{header.SenderPlatform ?? "peer"}-{remoteIp}:{header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort}";
+
+                    bool isTokenValid = TrustStore.VerifyTrustToken(peerId, header.TrustToken);
+                    if (isTokenValid && TrustStore.IsDeviceTrusted(peerId, out var rec) && rec != null)
+                    {
+                        var peer = _peers.AddOrUpdate(
+                            peerId,
+                            _ => new PeerDeviceNode
+                            {
+                                DeviceId = peerId,
+                                DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
+                                Platform = header.SenderPlatform ?? "android",
+                                IpAddress = remoteIp,
+                                UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
+                                TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
+                                ScreenWidth = header.SenderScreenWidth ?? 1080,
+                                ScreenHeight = header.SenderScreenHeight ?? 2400,
+                                RemoteMonitors = header.SenderMonitors ?? new List<PhysicalMonitorDescriptor>(),
+                                IsTrusted = true,
+                                TrustToken = header.TrustToken ?? string.Empty,
+                                MyEnteredPinVerifiedByRemote = true,
+                                RemoteEnteredMyPinVerified = true,
+                                AssignedEdgeOnLocal = rec.AssignedEdge,
+                                EdgeOffsetStart = rec.EdgeOffsetStart,
+                                EdgeOffsetEnd = rec.EdgeOffsetEnd,
+                                AttachedLocalMonitorId = rec.AttachedLocalMonitorId,
+                                CanvasX = rec.CanvasX,
+                                CanvasY = rec.CanvasY,
+                                HasCustomCanvasPosition = rec.HasCustomCanvasPosition,
+                                LastSeen = DateTimeOffset.UtcNow
+                            },
+                            (_, existing) =>
+                            {
+                                if (!string.IsNullOrEmpty(header.SenderName))
+                                    existing.DeviceName = header.SenderName;
+                                if (!string.IsNullOrEmpty(header.SenderPlatform))
+                                    existing.Platform = header.SenderPlatform;
+                                existing.IpAddress = remoteIp;
+                                if (header.SenderUdpPort.HasValue)
+                                    existing.UdpInputPort = header.SenderUdpPort.Value;
+                                if (header.SenderTcpPort.HasValue)
+                                    existing.TcpControlPort = header.SenderTcpPort.Value;
+                                if (header.SenderScreenWidth.HasValue)
+                                    existing.ScreenWidth = header.SenderScreenWidth.Value;
+                                if (header.SenderScreenHeight.HasValue)
+                                    existing.ScreenHeight = header.SenderScreenHeight.Value;
+                                if (header.SenderMonitors is { Count: > 0 })
+                                    existing.RemoteMonitors = header.SenderMonitors;
+                                existing.IsTrusted = true;
+                                existing.TrustToken = header.TrustToken ?? string.Empty;
+                                existing.MyEnteredPinVerifiedByRemote = true;
+                                existing.RemoteEnteredMyPinVerified = true;
+                                existing.AssignedEdgeOnLocal = rec.AssignedEdge;
+                                existing.EdgeOffsetStart = rec.EdgeOffsetStart;
+                                existing.EdgeOffsetEnd = rec.EdgeOffsetEnd;
+                                existing.AttachedLocalMonitorId = rec.AttachedLocalMonitorId;
+                                existing.CanvasX = rec.CanvasX;
+                                existing.CanvasY = rec.CanvasY;
+                                existing.HasCustomCanvasPosition = rec.HasCustomCanvasPosition;
+                                existing.LastSeen = DateTimeOffset.UtcNow;
+                                return existing;
+                            });
+
+                        rec.LastConnectedAt = DateTimeOffset.UtcNow;
+                        TrustStore.AddOrUpdateTrustedDevice(rec);
+
+                        var ack = new TcpControlHeader
+                        {
+                            Type = "TRUSTED_RECONNECT_ACK",
+                            SenderId = LocalDeviceId,
+                            SenderName = LocalDeviceName,
+                            SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
+                            TrustToken = header.TrustToken,
+                            IsMutualComplete = true
+                        };
+                        await TcpFrameCodec.WriteFrameAsync(stream, ack, null, 0, ct).ConfigureAwait(false);
+                        Log($"[Otomatik Bağlantı] ⭐ Güvenilir cihaz '{peer.DeviceName}' ({remoteIp}) PIN'siz otomatik bağlandı!");
+                        PeerPairingStatusChanged?.Invoke(peer);
+                        PeerDiscoveredOrUpdated?.Invoke(peer);
+                    }
+                    else
+                    {
+                        var rej = new TcpControlHeader
+                        {
+                            Type = "PAIR_REJECT",
+                            SenderId = LocalDeviceId,
+                            SenderName = LocalDeviceName
+                        };
+                        await TcpFrameCodec.WriteFrameAsync(stream, rej, null, 0, ct).ConfigureAwait(false);
+                        Log($"[Güvenlik] ⚠️ '{header.SenderName}' ({remoteIp}) geçersiz güven belirteci ile otomatik bağlanmaya çalıştı.");
                     }
                     break;
                 }

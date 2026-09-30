@@ -22,7 +22,11 @@
 3. **Çift Taraflı 6 Haneli PIN Kodu Doğrulaması (Mutual Dual-PIN Pairing):**
    - İki cihazda da program açıkken her cihaz kendi **6 haneli PIN kodunu** üretir.
    - Bağlantının aktifleşmesi için iki tarafın da karşı cihazın 6 haneli kodunu girerek bağlantıyı karşılıklı onaylaması gerekir (`Mutual Verified`).
-4. **Evrensel Pano (Universal Clipboard) & Manyetik Cep (Drop Shelf):**
+4. **Bu Cihaza Güven ve Hatırla (Sıfır-PIN Otomatik Bağlantı):**
+   - Eşleşme esnasında `⭐ Bu Cihaza Güven ve Hatırla` seçeneği işaretlendiğinde cihazlar birbirine kriptografik bir güven belirteci (`TrustToken`) atar ve bunu kalıcı diske kaydeder (`trusted_devices.json`).
+   - Cihazlar aynı ağdayken programlar açık olduğu sürece **artık bir daha PIN kodu girmeye gerek kalmadan** arka planda otomatik olarak bağlanır (`TRUSTED_RECONNECT`) ve 2D ekran konfigürasyonundaki yerini korur.
+   - İstenildiğinde arayüzden tek tıkla `🗑️ Bu Cihazın Güvenini Kaldır (Unut)` butonuna basılarak güven iptal edilebilir.
+5. **Evrensel Pano (Universal Clipboard) & Manyetik Cep (Drop Shelf):**
    - Çift taraflı onaylanmış tüm cihazlar arasında anlık metin/görsel pano senkronizasyonu ve sürükle-bırak dosya paylaşımı.
 
 ---
@@ -46,7 +50,7 @@ python3 linux/connectme_linux_daemon.py
 ### 3. Android Uygulamasını Kurma
 * Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-Android-APK`** dosyasını derler.
 
-### 4. Test Paketi Çalıştırma (20/20 Test)
+### 4. Test Paketi Çalıştırma (31/31 Test)
 ```powershell
 dotnet run --project "windows\ConnectMe.Tests\ConnectMe.Tests.csproj" -c Release
 ```

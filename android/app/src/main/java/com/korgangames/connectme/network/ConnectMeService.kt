@@ -362,6 +362,7 @@ class ConnectMeService : Service() {
                 val tcpPort = json.optInt("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
 
                 val existing = discoveredPeers.find { it.deviceId == deviceId || it.ipAddress == senderIp }
+                val savedToken = getTrustTokenForDevice(deviceId)
                 if (existing != null) {
                     existing.deviceName = deviceName
                     existing.platform = platform
@@ -369,11 +370,18 @@ class ConnectMeService : Service() {
                     existing.udpInputPort = udpPort
                     existing.tcpControlPort = tcpPort
                     existing.lastSeenMs = System.currentTimeMillis()
+                    if (savedToken != null && !existing.isMutuallyPaired) {
+                        triggerTrustedReconnect(existing, savedToken)
+                    }
                 } else {
                     val peer = DiscoveredPcPeer(deviceId, deviceName, platform, senderIp, udpPort, tcpPort)
                     discoveredPeers.add(0, peer)
-                    log("[Keşif] Cihaz bulundu: $deviceName ($senderIp) — Çift taraflı 6 haneli PIN ile eşleşebilirsiniz.")
+                    val trustMsg = if (savedToken != null) " [⭐ Güvenilir - Otomatik Bağlanıyor...]" else " — Çift taraflı 6 haneli PIN ile eşleşebilirsiniz."
+                    log("[Keşif] Cihaz bulundu: $deviceName ($senderIp)$trustMsg")
                     sendDiscoveryBeacon(sock, pkt.address)
+                    if (savedToken != null) {
+                        triggerTrustedReconnect(peer, savedToken)
+                    }
                 }
                 onStateUpdated?.invoke()
             } catch (_: Exception) {
@@ -543,6 +551,8 @@ class ConnectMeService : Service() {
                     val udpPort = header.optInt("senderUdpPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
                     val tcpPort = header.optInt("senderTcpPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
                     val platform = header.optString("senderPlatform", "windows")
+                    val reqTrust = header.optBoolean("requestTrust", false)
+                    val trustToken = header.optString("trustToken", "")
 
                     var peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
                     if (peer == null) {
@@ -568,18 +578,28 @@ class ConnectMeService : Service() {
                         activePcUdpPort = udpPort
                         activePcTcpPort = tcpPort
 
+                        if (reqTrust && trustToken.isNotEmpty()) {
+                            saveTrustTokenForDevice(peer.deviceId, trustToken)
+                            log("[Güvenlik] ⭐ '$senderName' güvenilir cihaz olarak hatırlandı.")
+                        }
+
                         val ack = JSONObject().apply {
                             put("type", "PAIR_VERIFY_ACK")
                             put("senderId", localDeviceId)
                             put("senderName", localDeviceName)
+                            if (reqTrust && trustToken.isNotEmpty()) {
+                                put("trustToken", trustToken)
+                                put("requestTrust", true)
+                            }
                             put("isMutualComplete", peer.isMutuallyPaired)
                         }
                         TcpFrameCodec.writeFrame(output, ack)
 
+                        val trustTag = if (reqTrust) " (⭐ Cihaz hatırlandı)" else ""
                         if (peer.isMutuallyPaired) {
-                            log("[Çift Taraflı Eşleşme] ✅ '$senderName' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!")
+                            log("[Çift Taraflı Eşleşme] ✅ '$senderName' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!$trustTag")
                         } else {
-                            log("[PIN İsteği] 🔔 '$senderName' sizin kodunuzu ($localPairingPin) doğruladı! Bağlantıyı tamamlamak için siz de onun 6 haneli kodunu girin.")
+                            log("[PIN İsteği] 🔔 '$senderName' sizin kodunuzu ($localPairingPin) doğruladı!$trustTag Bağlantıyı tamamlamak için siz de onun 6 haneli kodunu girin.")
                         }
                     } else {
                         val rej = JSONObject().apply {
@@ -589,6 +609,54 @@ class ConnectMeService : Service() {
                         }
                         TcpFrameCodec.writeFrame(output, rej)
                         log("[Güvenlik] ⚠️ '$senderName' hatalı 6 haneli kod denedi ($submittedPin).")
+                    }
+                    onStateUpdated?.invoke()
+                }
+
+                "TRUSTED_RECONNECT" -> {
+                    val udpPort = header.optInt("senderUdpPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                    val tcpPort = header.optInt("senderTcpPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
+                    val platform = header.optString("senderPlatform", "windows")
+                    val token = header.optString("trustToken", "")
+
+                    var peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
+                    if (peer == null) {
+                        peer = DiscoveredPcPeer(
+                            deviceId = if (senderId.isNotEmpty()) senderId else "peer-$remoteIp",
+                            deviceName = senderName,
+                            platform = platform,
+                            ipAddress = remoteIp,
+                            udpInputPort = udpPort,
+                            tcpControlPort = tcpPort
+                        )
+                        discoveredPeers.add(0, peer)
+                    }
+
+                    val savedToken = getTrustTokenForDevice(peer.deviceId)
+                    if (savedToken != null && savedToken == token) {
+                        peer.myEnteredPinVerifiedByRemote = true
+                        peer.remoteEnteredMyPinVerified = true
+                        activePcAddress = sock.inetAddress
+                        activePcUdpPort = udpPort
+                        activePcTcpPort = tcpPort
+
+                        val ack = JSONObject().apply {
+                            put("type", "TRUSTED_RECONNECT_ACK")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                            put("trustToken", token)
+                            put("isMutualComplete", true)
+                        }
+                        TcpFrameCodec.writeFrame(output, ack)
+                        log("[Otomatik Bağlantı] ⭐ Güvenilir cihaz '$senderName' ($remoteIp) PIN'siz otomatik bağlandı!")
+                    } else {
+                        val rej = JSONObject().apply {
+                            put("type", "PAIR_REJECT")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                        }
+                        TcpFrameCodec.writeFrame(output, rej)
+                        log("[Güvenlik] ⚠️ '$senderName' güvenilirlik belirteci doğrulanamadı.")
                     }
                     onStateUpdated?.invoke()
                 }
@@ -636,6 +704,52 @@ class ConnectMeService : Service() {
                     log("[Drop Shelf] $senderName -> '$safeName' Android ortak cebine indi!")
                 }
             }
+        }
+    }
+
+    fun getTrustTokenForDevice(deviceId: String): String? {
+        val prefs = getSharedPreferences("connect_me_trust", Context.MODE_PRIVATE)
+        return prefs.getString("token_$deviceId", null)
+    }
+
+    fun saveTrustTokenForDevice(deviceId: String, token: String) {
+        val prefs = getSharedPreferences("connect_me_trust", Context.MODE_PRIVATE)
+        prefs.edit().putString("token_$deviceId", token).apply()
+    }
+
+    fun revokeTrustForDevice(deviceId: String) {
+        val prefs = getSharedPreferences("connect_me_trust", Context.MODE_PRIVATE)
+        prefs.edit().remove("token_$deviceId").apply()
+    }
+
+    fun triggerTrustedReconnect(peer: DiscoveredPcPeer, token: String) {
+        if (peer.isMutuallyPaired) return
+        scope.launch {
+            try {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 4000)
+                    val header = JSONObject().apply {
+                        put("type", "TRUSTED_RECONNECT")
+                        put("senderId", localDeviceId)
+                        put("senderName", localDeviceName)
+                        put("senderPlatform", "android")
+                        put("senderUdpPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                        put("senderTcpPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
+                        put("trustToken", token)
+                    }
+                    TcpFrameCodec.writeFrame(socket.getOutputStream(), header)
+                    val (resp, _) = TcpFrameCodec.readHeader(socket.getInputStream()) ?: return@launch
+                    if (resp.optString("type") == "TRUSTED_RECONNECT_ACK" && resp.optBoolean("isMutualComplete", false)) {
+                        peer.myEnteredPinVerifiedByRemote = true
+                        peer.remoteEnteredMyPinVerified = true
+                        activePcAddress = InetAddress.getByName(peer.ipAddress)
+                        activePcUdpPort = peer.udpInputPort
+                        activePcTcpPort = peer.tcpControlPort
+                        log("[Otomatik Bağlantı] ⭐ '${peer.deviceName}' ile güvenli otomatik bağlantı sağlandı!")
+                        onStateUpdated?.invoke()
+                    }
+                }
+            } catch (_: Exception) {}
         }
     }
 
