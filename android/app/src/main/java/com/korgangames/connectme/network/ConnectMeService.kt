@@ -554,23 +554,20 @@ class ConnectMeService : Service() {
                     val reqTrust = header.optBoolean("requestTrust", false)
                     val trustToken = header.optString("trustToken", "")
 
-                    var peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
-                    if (peer == null) {
-                        peer = DiscoveredPcPeer(
+                    val peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
+                        ?: DiscoveredPcPeer(
                             deviceId = if (senderId.isNotEmpty()) senderId else "peer-$remoteIp",
                             deviceName = senderName,
                             platform = platform,
                             ipAddress = remoteIp,
                             udpInputPort = udpPort,
                             tcpControlPort = tcpPort
-                        )
-                        discoveredPeers.add(0, peer)
-                    } else {
-                        peer.deviceName = senderName
-                        peer.ipAddress = remoteIp
-                        peer.udpInputPort = udpPort
-                        peer.tcpControlPort = tcpPort
-                    }
+                        ).also { discoveredPeers.add(0, it) }
+
+                    peer.deviceName = senderName
+                    peer.ipAddress = remoteIp
+                    peer.udpInputPort = udpPort
+                    peer.tcpControlPort = tcpPort
 
                     if (submittedPin == localPairingPin) {
                         peer.remoteEnteredMyPinVerified = true
@@ -619,18 +616,15 @@ class ConnectMeService : Service() {
                     val platform = header.optString("senderPlatform", "windows")
                     val token = header.optString("trustToken", "")
 
-                    var peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
-                    if (peer == null) {
-                        peer = DiscoveredPcPeer(
+                    val peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
+                        ?: DiscoveredPcPeer(
                             deviceId = if (senderId.isNotEmpty()) senderId else "peer-$remoteIp",
                             deviceName = senderName,
                             platform = platform,
                             ipAddress = remoteIp,
                             udpInputPort = udpPort,
                             tcpControlPort = tcpPort
-                        )
-                        discoveredPeers.add(0, peer)
-                    }
+                        ).also { discoveredPeers.add(0, it) }
 
                     val savedToken = getTrustTokenForDevice(peer.deviceId)
                     if (savedToken != null && savedToken == token) {
@@ -670,6 +664,7 @@ class ConnectMeService : Service() {
                         }
                         log("[Evrensel Pano] $senderName cihazından metin kopyalandı (${text.length} krk).")
                     }
+                    Unit
                 }
 
                 "SHELF_FILE" -> {
@@ -703,7 +698,12 @@ class ConnectMeService : Service() {
                     )
                     log("[Drop Shelf] $senderName -> '$safeName' Android ortak cebine indi!")
                 }
+
+                else -> {
+                    // Diğer veya tanımlanmamış paketler
+                }
             }
+            Unit
         }
     }
 
