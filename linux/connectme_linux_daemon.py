@@ -38,7 +38,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -303,6 +303,18 @@ class LinuxInputInjector:
                 cmd = ["ydotool", "key", "28:1", "28:0"] if self.mode == "ydotool" else ["xdotool", "key", "Return"]
             elif vk == 0x1B:  # Escape
                 cmd = ["ydotool", "key", "1:1", "1:0"] if self.mode == "ydotool" else ["xdotool", "key", "Escape"]
+            elif vk == 0x09:  # Tab
+                cmd = ["ydotool", "key", "15:1", "15:0"] if self.mode == "ydotool" else ["xdotool", "key", "Tab"]
+            elif vk in (0x5B, 0x5C):  # Win / Super
+                cmd = ["ydotool", "key", "125:1", "125:0"] if self.mode == "ydotool" else ["xdotool", "key", "Super_L"]
+            elif vk == 0x25:  # Left Arrow
+                cmd = ["ydotool", "key", "105:1", "105:0"] if self.mode == "ydotool" else ["xdotool", "key", "Left"]
+            elif vk == 0x26:  # Up Arrow
+                cmd = ["ydotool", "key", "103:1", "103:0"] if self.mode == "ydotool" else ["xdotool", "key", "Up"]
+            elif vk == 0x27:  # Right Arrow
+                cmd = ["ydotool", "key", "106:1", "106:0"] if self.mode == "ydotool" else ["xdotool", "key", "Right"]
+            elif vk == 0x28:  # Down Arrow
+                cmd = ["ydotool", "key", "108:1", "108:0"] if self.mode == "ydotool" else ["xdotool", "key", "Down"]
             elif ch and ord(ch) >= 32:
                 cmd = ["ydotool", "type", ch] if self.mode == "ydotool" else ["xdotool", "type", ch]
             else:

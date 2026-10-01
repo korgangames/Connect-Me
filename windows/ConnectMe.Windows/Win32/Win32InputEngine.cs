@@ -144,6 +144,24 @@ public sealed class Win32InputEngine : IDisposable
         _anchorY = primary.VirtualY + primary.Height / 2;
         SetCursorPos(_anchorX, _anchorY);
 
+        // Estimate remote cursor coordinates on entry
+        peer.RemoteCursorX = targetEntranceEdge switch
+        {
+            ScreenEdge.Left => 15,
+            ScreenEdge.Right => Math.Max(0, peer.ScreenWidth - 15),
+            ScreenEdge.Top => (int)(peer.ScreenWidth * Math.Clamp(normalizedPosition, 0.05f, 0.95f)),
+            ScreenEdge.Bottom => (int)(peer.ScreenWidth * Math.Clamp(normalizedPosition, 0.05f, 0.95f)),
+            _ => peer.ScreenWidth / 2
+        };
+        peer.RemoteCursorY = targetEntranceEdge switch
+        {
+            ScreenEdge.Top => 15,
+            ScreenEdge.Bottom => Math.Max(0, peer.ScreenHeight - 15),
+            ScreenEdge.Left => (int)(peer.ScreenHeight * Math.Clamp(normalizedPosition, 0.05f, 0.95f)),
+            ScreenEdge.Right => (int)(peer.ScreenHeight * Math.Clamp(normalizedPosition, 0.05f, 0.95f)),
+            _ => peer.ScreenHeight / 2
+        };
+
         _network.SendEdgeHandOff(peer, targetEntranceEdge, normalizedPosition);
         ActiveTargetChanged?.Invoke(peer, localExitEdge, normalizedPosition);
     }
@@ -158,6 +176,10 @@ public sealed class Win32InputEngine : IDisposable
             return;
 
         ActiveRemotePeer = null;
+
+        // Release any held modifiers to ensure Windows host doesn't retain stuck keys
+        ReleaseHeldModifiers();
+
         if (localEntranceEdge != ScreenEdge.None)
         {
             var (entryX, entryY) = _topology.ComputeLocalEntryPoint(localEntranceEdge, normalizedPosition, returningPeer);
@@ -268,6 +290,9 @@ public sealed class Win32InputEngine : IDisposable
                             int dy = info.pt.Y - _anchorY;
                             if (dx != 0 || dy != 0)
                             {
+                                remote.RemoteCursorX = Math.Clamp(remote.RemoteCursorX + dx, 0, remote.ScreenWidth);
+                                remote.RemoteCursorY = Math.Clamp(remote.RemoteCursorY + dy, 0, remote.ScreenHeight);
+
                                 _network.SendMouseMove(
                                     remote,
                                     (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
@@ -379,12 +404,10 @@ public sealed class Win32InputEngine : IDisposable
                         mods,
                         ch);
 
-                    // Allow local modifier key state updates for Ctrl/Alt/Shift so Windows doesn't get stuck modifiers,
-                    // but suppress all regular keys from typing into local Windows apps.
-                    if (!IsModifierVk(vk))
-                    {
-                        return (IntPtr)1;
-                    }
+                    // When controlling a remote device, intercept and suppress ALL keystrokes and modifiers
+                    // (including Win, Alt, Ctrl) from reaching the Windows host OS so multi-finger gestures
+                    // and shortcuts route exclusively to the focused target device.
+                    return (IntPtr)1;
                 }
             }
         }
@@ -525,4 +548,34 @@ public sealed class Win32InputEngine : IDisposable
         [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pwszBuff,
         int cchBuff,
         uint wFlags);
+
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    private void ReleaseHeldModifiers()
+    {
+        if (_shiftDown)
+        {
+            keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            _shiftDown = false;
+        }
+        if (_ctrlDown)
+        {
+            keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            _ctrlDown = false;
+        }
+        if (_altDown)
+        {
+            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            _altDown = false;
+        }
+        if (_winDown)
+        {
+            keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            keybd_event(VK_RWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            _winDown = false;
+        }
+    }
 }

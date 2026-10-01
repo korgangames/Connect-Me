@@ -65,6 +65,10 @@ public sealed class PeerDeviceNode
     public double CanvasHeight { get; set; } = 130;
     public bool HasCustomCanvasPosition { get; set; }
 
+    // Real-time Estimated Remote Cursor Position
+    public int RemoteCursorX { get; set; }
+    public int RemoteCursorY { get; set; }
+
     public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
     public double LatencyMs { get; set; }
     public bool DiscoveredViaBle { get; set; }

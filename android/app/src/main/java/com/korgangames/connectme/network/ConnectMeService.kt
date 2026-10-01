@@ -185,7 +185,7 @@ class ConnectMeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_RETURN_TO_PC) {
             val cursorSvc = CursorAccessibilityService.instance
-            cursorSvc?.isCursorActiveOnAndroid = false
+            cursorSvc?.deactivateCursor()
             sendEdgeHandOffBackToPeer(ProtocolConstants.EDGE_LEFT, 0.5f)
             log("[Kenar Dönüşü] Bildirim üzerinden bilgisayar ekranına dönüş tetiklendi.")
             return START_STICKY

@@ -63,7 +63,13 @@ class CursorAccessibilityService : AccessibilityService() {
 
     @Volatile
     var isCursorActiveOnAndroid = false
-        private set
+
+    fun deactivateCursor() {
+        isCursorActiveOnAndroid = false
+        mainHandler.post {
+            cursorView?.visibility = View.GONE
+        }
+    }
 
     // Which edge of the Android screen faces the Windows PC (default: Left edge faces Right edge of Windows)
     @Volatile
@@ -389,18 +395,21 @@ class CursorAccessibilityService : AccessibilityService() {
 
     fun onRemoteMouseScroll(packet: MouseScrollPacket) {
         val sy = packet.scrollY.toInt()
-        if (sy == 0) return
+        val sx = packet.scrollX.toInt()
+        if (sy == 0 && sx == 0) return
 
         val startX = cursorX.coerceIn(40f, (screenWidth - 40).toFloat())
         val startY = cursorY.coerceIn(120f, (screenHeight - 120).toFloat())
         // Wheel up (positive) scrolls content up -> finger swipes down
+        val swipeDeltaX = (sx * 1.4f).coerceIn(-360f, 360f)
         val swipeDeltaY = (sy * 1.4f).coerceIn(-360f, 360f)
+        val endX = (startX + swipeDeltaX).coerceIn(40f, (screenWidth - 40).toFloat())
         val endY = (startY + swipeDeltaY).coerceIn(40f, (screenHeight - 40).toFloat())
 
         mainHandler.post {
             val path = Path().apply {
                 moveTo(startX, startY)
-                lineTo(startX, endY)
+                lineTo(endX, endY)
             }
             val stroke = GestureDescription.StrokeDescription(path, 0, 90)
             val gesture = GestureDescription.Builder().addStroke(stroke).build()
@@ -430,10 +439,50 @@ class CursorAccessibilityService : AccessibilityService() {
         if (!packet.isPressed) return
 
         mainHandler.post {
+            val isShift = (packet.modifiers and 0x01) != 0
             val isCtrl = (packet.modifiers and 0x02) != 0
+            val isAlt = (packet.modifiers and 0x04) != 0
+            val isMeta = (packet.modifiers and 0x08) != 0 // Win key
 
-            // Escape -> Android Back
-            if (packet.virtualKey == 0x1B) {
+            // 1. Windows Touchpad & Navigation Gestures Routed to Android:
+            
+            // 3-Finger Swipe Up OR Alt+Tab / Win+Tab -> Recent Apps (Overview / Task View)
+            if (((isAlt || isMeta) && packet.virtualKey == 0x09) || (isMeta && packet.virtualKey == 0x09)) {
+                performGlobalAction(GLOBAL_ACTION_RECENTS)
+                return@post
+            }
+
+            // 3-Finger Swipe Down OR Win+D / Win+H -> Go to Android Home Screen
+            if (isMeta && (packet.virtualKey == 0x44 || packet.virtualKey == 0x48)) { // D or H
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                return@post
+            }
+
+            // 4-Finger Swipe Left / Right (Ctrl+Win+Left / Ctrl+Win+Right) -> Virtual Desktop Switch (Home page swipe on Android)
+            if (isMeta && isCtrl && (packet.virtualKey == 0x25 || packet.virtualKey == 0x27)) {
+                val cy = screenHeight * 0.5f
+                if (packet.virtualKey == 0x25) { // Left arrow
+                    dispatchTouchOrDrag(screenWidth * 0.15f, cy, screenWidth * 0.85f, cy, 200L)
+                } else { // Right arrow
+                    dispatchTouchOrDrag(screenWidth * 0.85f, cy, screenWidth * 0.15f, cy, 200L)
+                }
+                return@post
+            }
+
+            // Win+A or Win+N -> Quick Settings / Notifications
+            if (isMeta && (packet.virtualKey == 0x41 || packet.virtualKey == 0x4E)) {
+                performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+                return@post
+            }
+
+            // Win key alone (VK_LWIN / VK_RWIN) -> Android Home Screen
+            if (packet.virtualKey == 0x5B || packet.virtualKey == 0x5C) {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                return@post
+            }
+
+            // Escape or Browser Back -> Android Back
+            if (packet.virtualKey == 0x1B || packet.virtualKey == 0xA6) {
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 return@post
             }
