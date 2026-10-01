@@ -178,7 +178,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         }
 
         // 2. Bind Fast-Path Input UDP Socket
-        _inputUdp = new UdpClient(new IPEndPoint(IPAddress.Any, InputUdpPort));
+        _inputUdp = new UdpClient();
+        _inputUdp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        _inputUdp.Client.Bind(new IPEndPoint(IPAddress.Any, InputUdpPort));
         _inputUdp.Client.ReceiveBufferSize = 256 * 1024;
         _inputUdp.Client.SendBufferSize = 256 * 1024;
         InputUdpPort = ((IPEndPoint)_inputUdp.Client.LocalEndPoint!).Port;
@@ -669,6 +671,33 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         SendUdpFireAndForget(peer, packet);
     }
 
+    private readonly ConcurrentDictionary<IPAddress, Socket> _subnetBoundUdpSockets = new();
+
+    private Socket GetOrCreateSubnetBoundUdpSocket(IPAddress targetIp)
+    {
+        var localIp = FindBestLocalIpForTarget(targetIp);
+        if (localIp == null)
+        {
+            return _inputUdp?.Client ?? throw new InvalidOperationException("Input UDP socket is not initialized.");
+        }
+
+        return _subnetBoundUdpSockets.GetOrAdd(localIp, ip =>
+        {
+            var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            s.SendBufferSize = 256 * 1024;
+            try
+            {
+                s.Bind(new IPEndPoint(ip, InputUdpPort));
+            }
+            catch
+            {
+                s.Bind(new IPEndPoint(ip, 0));
+            }
+            return s;
+        });
+    }
+
     public void SendEdgeHandOff(
         PeerDeviceNode peer,
         ScreenEdge targetEntranceEdge,
@@ -682,6 +711,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             new EdgeHandOffPacket(targetEntranceEdge, isDraggingShelfItem, normalizedPosition));
         SendUdpFireAndForget(peer, packet);
         SendUdpFireAndForget(peer, packet);
+        Log($"[Kenar Geçişi UDP] '{peer.DeviceName}' ({peer.IpAddress}:{peer.UdpInputPort}) ekranına giriş paketi iletildi ({targetEntranceEdge}, %{(int)(normalizedPosition * 100)}).");
     }
 
     private void SendUdpFireAndForget(PeerDeviceNode peer, byte[] packet)
@@ -690,12 +720,13 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         {
             if (IPAddress.TryParse(peer.IpAddress, out var ip))
             {
-                _inputUdp?.Send(packet, packet.Length, new IPEndPoint(ip, peer.UdpInputPort));
+                var socket = GetOrCreateSubnetBoundUdpSocket(ip);
+                socket.SendTo(packet, new IPEndPoint(ip, peer.UdpInputPort));
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore transient socket error
+            Log($"[UDP Uyarı] '{peer.DeviceName}' ({peer.IpAddress}:{peer.UdpInputPort}) paket iletilemedi: {ex.Message}");
         }
     }
 
@@ -1463,6 +1494,11 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         await _cts.CancelAsync().ConfigureAwait(false);
         _discoveryUdp?.Dispose();
         _inputUdp?.Dispose();
+        foreach (var s in _subnetBoundUdpSockets.Values)
+        {
+            try { s.Dispose(); } catch { }
+        }
+        _subnetBoundUdpSockets.Clear();
         _tcpListener?.Stop();
         _cts.Dispose();
     }

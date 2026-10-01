@@ -136,15 +136,14 @@ public sealed class Win32InputEngine : IDisposable
     /// </summary>
     public void SwitchControlToPeer(PeerDeviceNode peer, ScreenEdge localExitEdge, ScreenEdge targetEntranceEdge, float normalizedPosition)
     {
-        if (GetCursorPos(out POINT pt))
-        {
-            var (clampedX, clampedY) = _topology.ClampToVirtualDesktop(pt.X, pt.Y);
-            _anchorX = clampedX;
-            _anchorY = clampedY;
-            SetCursorPos(_anchorX, _anchorY);
-        }
-
         ActiveRemotePeer = peer;
+        var primary = _topology.LocalMonitors.FirstOrDefault(m => m.IsPrimary)
+                      ?? _topology.LocalMonitors.FirstOrDefault()
+                      ?? new PhysicalMonitorDescriptor("P", 0, 0, 1920, 1080, true);
+        _anchorX = primary.X + primary.Width / 2;
+        _anchorY = primary.Y + primary.Height / 2;
+        SetCursorPos(_anchorX, _anchorY);
+
         _network.SendEdgeHandOff(peer, targetEntranceEdge, normalizedPosition);
         ActiveTargetChanged?.Invoke(peer, localExitEdge, normalizedPosition);
     }
@@ -165,6 +164,12 @@ public sealed class Win32InputEngine : IDisposable
             _lastCursorX = entryX;
             _lastCursorY = entryY;
             SetCursorPos(entryX, entryY);
+        }
+        else
+        {
+            _lastCursorX = _anchorX;
+            _lastCursorY = _anchorY;
+            SetCursorPos(_anchorX, _anchorY);
         }
 
         ActiveTargetChanged?.Invoke(null, localEntranceEdge, normalizedPosition);
@@ -243,16 +248,10 @@ public sealed class Win32InputEngine : IDisposable
                         var transition = _topology.EvaluateCursorStep(clampedX, clampedY, dx, dy);
                         if (transition.ShouldTransition && transition.TargetPeer != null)
                         {
-                            _anchorX = clampedX;
-                            _anchorY = clampedY;
-                            ActiveRemotePeer = transition.TargetPeer;
-                            _network.SendEdgeHandOff(
-                                transition.TargetPeer,
-                                transition.TargetEntranceEdge,
-                                transition.NormalizedPosition);
-                            ActiveTargetChanged?.Invoke(
+                            SwitchControlToPeer(
                                 transition.TargetPeer,
                                 transition.LocalExitEdge,
+                                transition.TargetEntranceEdge,
                                 transition.NormalizedPosition);
                             return (IntPtr)1;
                         }
@@ -273,6 +272,7 @@ public sealed class Win32InputEngine : IDisposable
                                     remote,
                                     (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
                                     (short)Math.Clamp(dy, short.MinValue, short.MaxValue));
+                                SetCursorPos(_anchorX, _anchorY);
                             }
                             // Suppress local cursor movement so it remains anchored at (_anchorX, _anchorY)
                             return (IntPtr)1;

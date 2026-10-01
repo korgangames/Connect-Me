@@ -112,14 +112,23 @@ class CursorAccessibilityService : AccessibilityService() {
 
     private fun ensureOverlayCreated() {
         mainHandler.post {
-            if (isOverlayAttached || !Settings.canDrawOverlays(this)) return@post
+            if (isOverlayAttached) return@post
             val wm = windowManager ?: return@post
+
+            val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // TYPE_ACCESSIBILITY_OVERLAY is natively permitted for AccessibilityService
+                // and does NOT require SYSTEM_ALERT_WINDOW permission!
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+            }
 
             val view = CursorPointerView(this)
             val params = WindowManager.LayoutParams(
                 64,
                 64,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                overlayType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -138,7 +147,19 @@ class CursorAccessibilityService : AccessibilityService() {
                 overlayParams = params
                 isOverlayAttached = true
                 view.visibility = if (isCursorActiveOnAndroid) View.VISIBLE else View.GONE
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // Fallback to TYPE_APPLICATION_OVERLAY if OEM ROM rejects TYPE_ACCESSIBILITY_OVERLAY
+                if (Settings.canDrawOverlays(this)) {
+                    try {
+                        params.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        wm.addView(view, params)
+                        cursorView = view
+                        overlayParams = params
+                        isOverlayAttached = true
+                        view.visibility = if (isCursorActiveOnAndroid) View.VISIBLE else View.GONE
+                    } catch (_: Exception) {
+                    }
+                }
             }
         }
     }

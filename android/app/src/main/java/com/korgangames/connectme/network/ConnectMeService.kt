@@ -495,12 +495,15 @@ class ConnectMeService : Service() {
             try {
                 val targetAddr = activePcAddress ?: return@launch
                 val sock = inputUdpSocket ?: return@launch
+                val senderPeer = discoveredPeers.find { it.ipAddress == targetAddr.hostAddress }
+                val targetPort = senderPeer?.udpInputPort ?: ProtocolConstants.FAST_INPUT_UDP_PORT
                 val bytes = WirePacketCodec.encodeEdgeHandOff(windowsEntranceEdge, false, normalizedPos)
-                val dp = DatagramPacket(bytes, bytes.size, targetAddr, activePcUdpPort)
+                val dp = DatagramPacket(bytes, bytes.size, targetAddr, targetPort)
                 sock.send(dp)
                 sock.send(dp)
-                log("[Kenar Geçişi] İmleç Android'den bilgisayar ekranına geri döndü.")
-            } catch (_: Exception) {
+                log("[Kenar Geçişi] İmleç Android'den bilgisayar ekranına geri döndü ($targetPort).")
+            } catch (e: Exception) {
+                log("[Hata] Kenar dönüş paketi gönderilemedi: ${e.message}")
             }
         }
     }

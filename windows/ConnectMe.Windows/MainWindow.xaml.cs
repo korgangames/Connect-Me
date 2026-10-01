@@ -64,7 +64,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"v1.4.0 (v1-4-0) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort}";
+            $"v1.4.1 (v1-4-1) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -78,7 +78,7 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me v1.4.0 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin}");
+        AppendLog($"[Sistem] Connect Me v1.4.1 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin}");
     }
 
     private async void MainWindow_Closed(object? sender, EventArgs e)
@@ -1528,7 +1528,7 @@ public partial class MainWindow : Window
                 var sb = new System.Text.StringBuilder();
                 sb.AppendLine("=== Connect Me Windows Tanılama Günlüğü ===");
                 sb.AppendLine($"Oluşturulma Tarihi: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-                sb.AppendLine($"Sürüm: v1.4.0");
+                sb.AppendLine($"Sürüm: v1.4.1");
                 sb.AppendLine($"İşletim Sistemi: {Environment.OSVersion} ({(Environment.Is64BitOperatingSystem ? "64-bit" : "32-bit")})");
                 sb.AppendLine($"Makine Adı: {Environment.MachineName}");
                 sb.AppendLine($"Monitör Sayısı: {_network.LocalMonitors.Count}");
