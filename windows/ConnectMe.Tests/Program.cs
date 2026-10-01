@@ -20,6 +20,7 @@ public static class Program
         TestWirePacketMouseButtonAndScroll();
         TestWirePacketKeyEventWithTurkishUnicode();
         TestWirePacketEdgeHandOff();
+        TestWirePacketAudioChunk();
         TestBleProximityCodec();
         TestSpatialTopologyEdgeSwitchingAndDeadCorners();
         TestMultiDevicePartialEdgeSegmentsAndCanvasSnapping();
@@ -102,6 +103,35 @@ public static class Program
             decoded.IsDraggingShelfItem &&
             Math.Abs(decoded.NormalizedPosition - 0.725f) < 0.0001f,
             "UDP EdgeHandOff orantısal kenar koordinatı serileştirme");
+    }
+
+    private static void TestWirePacketAudioChunk()
+    {
+        byte[] samplePcm = new byte[960];
+        for (int i = 0; i < samplePcm.Length; i++)
+        {
+            samplePcm[i] = (byte)(i % 256);
+        }
+
+        var orig = new AudioChunkPacket(
+            Channels: 2,
+            SampleRate: 48000,
+            BitsPerSample: 16,
+            Sequence: 1234,
+            PcmData: samplePcm);
+
+        byte[] bytes = WirePacketCodec.EncodeAudioChunk(orig);
+        bool ok = WirePacketCodec.TryDecodeAudioChunk(bytes, out var decoded);
+
+        AssertTrue(
+            ok &&
+            bytes.Length == 14 + samplePcm.Length &&
+            decoded.Channels == 2 &&
+            decoded.SampleRate == 48000 &&
+            decoded.BitsPerSample == 16 &&
+            decoded.Sequence == 1234 &&
+            decoded.PcmData.SequenceEqual(samplePcm),
+            "UDP AudioChunk ikili serileştirme ve çözümleme (14 bayt başlık + 960 bayt PCM)");
     }
 
     private static void TestBleProximityCodec()

@@ -11,10 +11,12 @@ object ProtocolConstants {
     const val MAGIC_0: Byte = 0x43 // 'C'
     const val MAGIC_1: Byte = 0x4D // 'M'
     const val VERSION: Byte = 0x01
+    const val PROTOCOL_VERSION: Byte = 0x01
 
     const val DISCOVERY_UDP_PORT = 42849
     const val FAST_INPUT_UDP_PORT = 42850
     const val DATA_CONTROL_TCP_PORT = 42851
+    const val AUDIO_STREAM_UDP_PORT = 42852
 
     const val PACKET_MOUSE_MOVE: Byte = 0x01
     const val PACKET_MOUSE_BUTTON: Byte = 0x02
@@ -23,6 +25,7 @@ object ProtocolConstants {
     const val PACKET_EDGE_HANDOFF: Byte = 0x05
     const val PACKET_HEARTBEAT_PING: Byte = 0x06
     const val PACKET_HEARTBEAT_PONG: Byte = 0x07
+    const val PACKET_AUDIO_CHUNK: Byte = 0x08
 
     const val EDGE_NONE: Byte = 0
     const val EDGE_LEFT: Byte = 1

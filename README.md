@@ -16,11 +16,11 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
 
 | İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64v1-4-3.zip` | [⬇️ **ConnectMe-Windows-x64v1-4-3.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.4.3/ConnectMe-Windows-x64v1-4-3.zip) |
-| 📱 **Android** | `.apk` | `ConnectMeV1-4-3.apk` | [⬇️ **ConnectMeV1-4-3.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.4.3/ConnectMeV1-4-3.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64v1-4-3.tar.gz` | [⬇️ **ConnectMe-Linux-x64v1-4-3.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.4.3/ConnectMe-Linux-x64v1-4-3.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64v1-5-0.zip` | [⬇️ **ConnectMe-Windows-x64v1-5-0.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.5.0/ConnectMe-Windows-x64v1-5-0.zip) |
+| 📱 **Android** | `.apk` | `ConnectMeV1-5-0.apk` | [⬇️ **ConnectMeV1-5-0.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.5.0/ConnectMeV1-5-0.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64v1-5-0.tar.gz` | [⬇️ **ConnectMe-Linux-x64v1-5-0.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.5.0/ConnectMe-Linux-x64v1-5-0.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.4.3 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.4.3)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.5.0 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.5.0)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
@@ -44,6 +44,8 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
    - İstenildiğinde arayüzden tek tıkla `🗑️ Bu Cihazın Güvenini Kaldır (Unut)` butonuna basılarak güven iptal edilebilir.
 5. **Evrensel Pano (Universal Clipboard) & Manyetik Cep (Drop Shelf):**
    - Çift taraflı onaylanmış tüm cihazlar arasında anlık metin/görsel pano senkronizasyonu ve sürükle-bırak dosya paylaşımı.
+6. **🎧 Merkezi Ses Yönlendirme (Central Audio Hub — Tüm Sesler Kulaklıkta):**
+   - Kulaklığınız merkez bilgisayara (Windows) takılıyken; Android telefonunuzdaki (YouTube, Spotify, oyunlar) ve Linux bilgisayarınızdaki tüm sistem/medya sesleri UDP 42852 portundan ultra-düşük gecikmeyle (<15ms) bilgisayarınıza aktarılır ve aynı kulaklıktan çalınır. Win32 native `waveOut` ile sıfır harici paket bağımlılığı!
 
 ---
 

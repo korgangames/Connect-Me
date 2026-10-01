@@ -38,11 +38,12 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.4.3"
+VERSION = "1.5.0"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
 DATA_CONTROL_TCP_PORT = 42851
+AUDIO_STREAM_UDP_PORT = 42852
 
 PACKET_MOUSE_MOVE = 0x01
 PACKET_MOUSE_BUTTON = 0x02
@@ -51,6 +52,7 @@ PACKET_KEY_EVENT = 0x04
 PACKET_EDGE_HANDOFF = 0x05
 PACKET_HEARTBEAT_PING = 0x06
 PACKET_HEARTBEAT_PONG = 0x07
+PACKET_AUDIO_CHUNK = 0x08
 
 EDGE_NONE = 0
 EDGE_LEFT = 1
@@ -348,6 +350,13 @@ class ConnectMeLinuxNode:
         self.last_copied_clipboard = ""
         self.udp_sock: Optional[socket.socket] = None
 
+        # Audio streaming (PipeWire / PulseAudio -> Windows PC Audio Hub)
+        self.audio_streaming = False
+        self.audio_target_ip: Optional[str] = None
+        self.audio_proc: Optional[subprocess.Popen] = None
+        self.audio_thread: Optional[threading.Thread] = None
+        self.audio_seq = 0
+
     def log(self, text: str) -> None:
         line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
         print(line)
@@ -424,6 +433,7 @@ class ConnectMeLinuxNode:
             "platform": self.platform,
             "udpInputPort": FAST_INPUT_UDP_PORT,
             "tcpControlPort": DATA_CONTROL_TCP_PORT,
+            "audioStreamUdpPort": AUDIO_STREAM_UDP_PORT,
             "screenWidth": vw,
             "screenHeight": vh,
             "monitors": [asdict(m) for m in self.topology.monitors],
@@ -699,6 +709,70 @@ class ConnectMeLinuxNode:
                 self.log(f"[Drop Shelf Hata] Dosya gönderilemedi ({peer.get('deviceName')}): {e}")
 
         return success
+
+    def start_audio_streaming(self, target_ip: str) -> bool:
+        """Starts real-time PipeWire / PulseAudio recording and streams 48kHz S16LE stereo PCM to target Windows PC."""
+        if self.audio_streaming:
+            self.stop_audio_streaming()
+
+        rec_cmd = None
+        if shutil.which("pw-record"):
+            rec_cmd = ["pw-record", "--format=s16", "--rate=48000", "--channels=2", "-"]
+        elif shutil.which("parec"):
+            rec_cmd = ["parec", "--format=s16le", "--rate=48000", "--channels=2"]
+
+        if not rec_cmd:
+            self.log("[Ses Hatası] ❌ pw-record veya parec bulunamadı (PipeWire/PulseAudio gereklidir).")
+            return False
+
+        try:
+            self.audio_proc = subprocess.Popen(
+                rec_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=3840,
+            )
+            self.audio_streaming = True
+            self.audio_target_ip = target_ip
+            self.audio_seq = 0
+            self.audio_thread = threading.Thread(
+                target=self._audio_streaming_worker, args=(target_ip,), daemon=True
+            )
+            self.audio_thread.start()
+            self.log(f"[Ses Akışı] 🎧 Ses yakalama başlatıldı -> {target_ip}:{AUDIO_STREAM_UDP_PORT} (48kHz Stereo S16LE)")
+            return True
+        except Exception as ex:
+            self.log(f"[Ses Hatası] ❌ Ses akışı başlatılamadı: {ex}")
+            return False
+
+    def stop_audio_streaming(self) -> None:
+        """Stops the audio recording subprocess and UDP transmission."""
+        self.audio_streaming = False
+        if self.audio_proc:
+            try:
+                self.audio_proc.terminate()
+                self.audio_proc.wait(timeout=1.0)
+            except Exception:
+                pass
+            self.audio_proc = None
+        self.log("[Ses Akışı] ⏹️ Ses akışı durduruldu.")
+
+    def _audio_streaming_worker(self, target_ip: str) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        chunk_size = 1920  # 480 samples * 2 ch * 2 bytes = 10ms @ 48kHz
+        while self.audio_streaming and self.audio_proc and self.audio_proc.stdout:
+            try:
+                raw = self.audio_proc.stdout.read(chunk_size)
+                if not raw:
+                    break
+                self.audio_seq = (self.audio_seq + 1) & 0xFFFF
+                # MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, channels(1B), sample_rate(4B), bits_per_sample(1B), seq(2B), pcm_len(2B)
+                hdr = struct.pack("<BBBBBIHBH", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, 2, 48000, 16, self.audio_seq, len(raw))
+                sock.sendto(hdr + raw, (target_ip, AUDIO_STREAM_UDP_PORT))
+            except Exception:
+                break
+        sock.close()
+        self.audio_streaming = False
 
     @staticmethod
     def _send_tcp_frame(conn: socket.socket, header: dict, payload: bytes = b"") -> None:

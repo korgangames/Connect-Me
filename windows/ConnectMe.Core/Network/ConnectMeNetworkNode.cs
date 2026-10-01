@@ -88,6 +88,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     private readonly ConcurrentDictionary<string, PeerDeviceNode> _peers = new();
     private UdpClient? _discoveryUdp;
     private UdpClient? _inputUdp;
+    private UdpClient? _audioUdp;
     private TcpListener? _tcpListener;
     private ushort _mouseSeq;
     private string _lastClipboardHash = string.Empty;
@@ -101,6 +102,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public int DiscoveryPort { get; private set; } = ProtocolConstants.DiscoveryUdpPort;
     public int InputUdpPort { get; private set; } = ProtocolConstants.FastInputUdpPort;
     public int ControlTcpPort { get; private set; } = ProtocolConstants.DataControlTcpPort;
+    public int AudioUdpPort { get; private set; } = ProtocolConstants.AudioStreamUdpPort;
 
     public int LocalScreenWidth { get; set; } = 1920;
     public int LocalScreenHeight { get; set; } = 1080;
@@ -114,6 +116,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public event Action<MouseButtonPacket>? RemoteMouseButtonReceived;
     public event Action<MouseScrollPacket>? RemoteMouseScrollReceived;
     public event Action<KeyEventPacket>? RemoteKeyEventReceived;
+    public event Action<AudioChunkPacket, IPEndPoint>? RemoteAudioChunkReceived;
     public event Action<string, string>? RemoteClipboardTextReceived;
     public event Action<byte[], string>? RemoteClipboardImageReceived;
     public event Action<ShelfItemEntry>? ShelfItemReceived;
@@ -194,6 +197,23 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         ControlTcpPort = ((IPEndPoint)_tcpListener.LocalEndpoint).Port;
         _ = Task.Run(() => TcpAcceptLoopAsync(_cts.Token));
         Log($"[Veri & PIN Kanalı] TCP Sunucusu {ControlTcpPort} portunda aktif (Yerel PIN: {PairingPin}).");
+
+        // 4. Bind Audio Stream UDP Socket (Port 42852)
+        try
+        {
+            _audioUdp = new UdpClient();
+            _audioUdp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _audioUdp.Client.Bind(new IPEndPoint(IPAddress.Any, AudioUdpPort));
+            _audioUdp.Client.ReceiveBufferSize = 512 * 1024;
+            _audioUdp.Client.SendBufferSize = 512 * 1024;
+            AudioUdpPort = ((IPEndPoint)_audioUdp.Client.LocalEndPoint!).Port;
+            _ = Task.Run(() => AudioReceiveLoopAsync(_cts.Token));
+            Log($"[Ses & Kulaklık Köprüsü] UDP Ses Alıcısı {AudioUdpPort} portunda hazır (Merkezi Kulaklık Modu).");
+        }
+        catch (Exception ex)
+        {
+            Log($"[Ses Uyarı] Ses UDP portu {AudioUdpPort} açılamadı: {ex.Message}");
+        }
     }
 
     public static List<IPAddress> GetLocalIPv4Addresses()
@@ -1006,6 +1026,11 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                             }
                         }
                         break;
+
+                    case PacketType.AudioChunk:
+                        if (WirePacketCodec.TryDecodeAudioChunk(buf, out var ac))
+                            RemoteAudioChunkReceived?.Invoke(ac, res.RemoteEndPoint);
+                        break;
                 }
             }
             catch (OperationCanceledException)
@@ -1016,6 +1041,49 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             {
                 // Continue receiving
             }
+        }
+    }
+
+    private async Task AudioReceiveLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && _audioUdp != null)
+        {
+            try
+            {
+                var res = await _audioUdp.ReceiveAsync(ct).ConfigureAwait(false);
+                byte[] buf = res.Buffer;
+                if (WirePacketCodec.TryDecodeAudioChunk(buf, out var ac))
+                {
+                    RemoteAudioChunkReceived?.Invoke(ac, res.RemoteEndPoint);
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch (ObjectDisposedException) { break; }
+            catch
+            {
+                // Audio packet drop resilience
+            }
+        }
+    }
+
+    public void SendAudioChunk(PeerDeviceNode peer, in AudioChunkPacket packet)
+    {
+        if (string.IsNullOrEmpty(peer.IpAddress)) return;
+        byte[] payload = WirePacketCodec.EncodeAudioChunk(packet);
+        try
+        {
+            if (_audioUdp != null)
+            {
+                _audioUdp.Send(payload, payload.Length, peer.IpAddress, ProtocolConstants.AudioStreamUdpPort);
+            }
+            else if (_inputUdp != null)
+            {
+                _inputUdp.Send(payload, payload.Length, peer.IpAddress, ProtocolConstants.AudioStreamUdpPort);
+            }
+        }
+        catch
+        {
+            // Drop on network error
         }
     }
 
@@ -1505,6 +1573,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         await _cts.CancelAsync().ConfigureAwait(false);
         _discoveryUdp?.Dispose();
         _inputUdp?.Dispose();
+        _audioUdp?.Dispose();
         foreach (var s in _subnetBoundUdpSockets.Values)
         {
             try { s.Dispose(); } catch { }

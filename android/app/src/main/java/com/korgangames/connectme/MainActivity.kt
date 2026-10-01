@@ -1,6 +1,7 @@
 package com.korgangames.connectme
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -9,6 +10,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -26,7 +28,9 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.korgangames.connectme.audio.AudioStreamEngine
 import com.korgangames.connectme.network.ConnectMeService
+import com.korgangames.connectme.protocol.ProtocolConstants
 import com.korgangames.connectme.service.CursorAccessibilityService
 
 class MainActivity : AppCompatActivity() {
@@ -40,6 +44,30 @@ class MainActivity : AppCompatActivity() {
     private lateinit var remotePinInput: EditText
     private lateinit var shelfListText: TextView
     private lateinit var logViewText: TextView
+    private lateinit var audioStatusText: TextView
+    private lateinit var audioToggleBtn: Button
+
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            val projection = mediaProjectionManager.getMediaProjection(result.resultCode, result.data!!)
+            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
+            if (pairedPc != null) {
+                AudioStreamEngine.instance.start(pairedPc.ipAddress, projection)
+                updateAudioUi()
+                Toast.makeText(this, "🎧 Sesler bilgisayardaki kulaklığınıza aktarılıyor!", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
+            if (pairedPc != null) {
+                AudioStreamEngine.instance.start(pairedPc.ipAddress, null)
+                updateAudioUi()
+                Toast.makeText(this, "Mikrofon ses aktarımı başlatıldı", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     private val pickFileLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
@@ -73,11 +101,16 @@ class MainActivity : AppCompatActivity() {
         ConnectMeService.onStateUpdated = {
             runOnUiThread { refreshUiState() }
         }
+        AudioStreamEngine.instance.onStatusChanged = { _, _ ->
+            runOnUiThread { updateAudioUi() }
+        }
         refreshUiState()
+        updateAudioUi()
     }
 
     override fun onPause() {
         ConnectMeService.onStateUpdated = null
+        AudioStreamEngine.instance.onStatusChanged = null
         super.onPause()
     }
 
@@ -174,7 +207,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "🌐 Connect Me v1.4.3"
+            text = "🌐 Connect Me v1.5.0"
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
@@ -293,9 +326,36 @@ class MainActivity : AppCompatActivity() {
         pcCard.addView(connectBtn)
         root.addView(pcCard)
 
+        // 🎧 Merkezi Kulaklık & Ses Yönlendirme (Audio Hub) Card
+        val audioCard = createCardLayout()
+        audioCard.addView(createSectionTitle("🎧 3. Merkezi Kulaklık & Ses Köprüsü (Audio Hub)"))
+
+        val audioInfoText = TextView(this).apply {
+            text = "Telefonunuzun tüm seslerini (YouTube, Spotify, oyunlar, bildirimler) bilgisayara ve ona bağlı kulaklığınıza aktarır."
+            textSize = 12f
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, 6, 0, 10)
+        }
+        audioCard.addView(audioInfoText)
+
+        audioStatusText = TextView(this).apply {
+            text = if (AudioStreamEngine.instance.isStreaming) "🟢 Sesi Bilgisayara Aktarılıyor (48kHz Stereo)" else "⚪ Ses aktarımı kapalı"
+            textSize = 12.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(if (AudioStreamEngine.instance.isStreaming) Color.parseColor("#4ADE80") else Color.parseColor("#9CA3AF"))
+            setPadding(0, 4, 0, 10)
+        }
+        audioCard.addView(audioStatusText)
+
+        audioToggleBtn = createStyledButton(if (AudioStreamEngine.instance.isStreaming) "⏹️ Bilgisayara Ses Aktarımını Durdur" else "🎧 Sesi Bilgisayara / Kulaklığa Aktar", if (AudioStreamEngine.instance.isStreaming) "#DC2626" else "#059669") {
+            toggleAudioStreaming()
+        }
+        audioCard.addView(audioToggleBtn)
+        root.addView(audioCard)
+
         // Universal Clipboard & Drop Shelf Card
         val shelfCard = createCardLayout()
-        shelfCard.addView(createSectionTitle("🧲 3. Ortak Cep (Drop Shelf) & Evrensel Pano"))
+        shelfCard.addView(createSectionTitle("🧲 4. Ortak Cep (Drop Shelf) & Evrensel Pano"))
 
         val sendFileBtn = createStyledButton("📤 Dosya / Fotoğraf Seç ve Gönder", "#0284C7") {
             pickFileLauncher.launch("*/*")
@@ -452,6 +512,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkAndRequestRuntimePermissions() {
         val permissions = mutableListOf<String>()
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.RECORD_AUDIO)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 permissions.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -567,5 +630,43 @@ class MainActivity : AppCompatActivity() {
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(sendIntent, "Connect Me Loglarını Dışa Aktar / Paylaş"))
+    }
+
+    private fun updateAudioUi() {
+        if (!::audioStatusText.isInitialized || !::audioToggleBtn.isInitialized) return
+        val isStreaming = AudioStreamEngine.instance.isStreaming
+        audioStatusText.text = if (isStreaming) {
+            "🟢 Sesi Bilgisayara Aktarılıyor (48kHz 16-bit Stereo, <15ms)\nBilgisayara takılı kulaklıktan dinleniyor."
+        } else {
+            "⚪ Ses aktarımı kapalı. Başlatıldığında tüm telefon sesleri bilgisayar kulaklığından gelir."
+        }
+        audioStatusText.setTextColor(if (isStreaming) Color.parseColor("#4ADE80") else Color.parseColor("#9CA3AF"))
+        audioToggleBtn.text = if (isStreaming) "⏹️ Bilgisayara Ses Aktarımını Durdur" else "🎧 Sesi Bilgisayara / Kulaklığa Aktar"
+        (audioToggleBtn.background as? GradientDrawable)?.setColor(
+            Color.parseColor(if (isStreaming) "#DC2626" else "#059669")
+        )
+    }
+
+    private fun toggleAudioStreaming() {
+        val engine = AudioStreamEngine.instance
+        if (engine.isStreaming) {
+            engine.stop()
+            updateAudioUi()
+            Toast.makeText(this, "Ses aktarımı durduruldu", Toast.LENGTH_SHORT).show()
+        } else {
+            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
+            if (pairedPc == null) {
+                Toast.makeText(this, "Önce bilgisayarla 6 haneli PIN eşleşmesini tamamlayın!", Toast.LENGTH_LONG).show()
+                return
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+            } else {
+                engine.start(pairedPc.ipAddress, null)
+                updateAudioUi()
+            }
+        }
     }
 }

@@ -30,7 +30,7 @@ except ImportError:
 class ConnectMeLinuxGui:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Connect Me v1.4.3 — Linux Kontrol Merkezi")
+        self.root.title("Connect Me v1.5.0 — Linux Kontrol Merkezi")
         self.root.geometry("980x740")
         self.root.minsize(860, 620)
         self.root.configure(bg="#0B1120")
@@ -75,14 +75,14 @@ class ConnectMeLinuxGui:
 
         title_box = ttk.Frame(header_frame)
         title_box.pack(side=tk.LEFT)
-        ttk.Label(title_box, text="⚡ Connect Me v1.4.3 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(title_box, text="⚡ Connect Me v1.5.0 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
         ttk.Label(title_box, text="KDE Plasma Wayland Çoklu Monitör & KVM Kontrol Paneli", style="SubHeader.TLabel").pack(anchor=tk.W)
 
         status_box = ttk.Frame(header_frame)
         status_box.pack(side=tk.RIGHT)
         self.injector_badge = ttk.Label(status_box, text=f" Girdi: {self.node.injector.mode.upper()} ", style="Badge.TLabel")
         self.injector_badge.pack(side=tk.RIGHT, padx=4)
-        status_badge = ttk.Label(status_box, text=" v1.4.3 | 🟢 Çevrimiçi ", style="Badge.TLabel")
+        status_badge = ttk.Label(status_box, text=" v1.5.0 | 🟢 Çevrimiçi ", style="Badge.TLabel")
         status_badge.pack(side=tk.RIGHT, padx=4)
 
         # Hızlı Bilgi & PIN Kartı
@@ -101,7 +101,7 @@ class ConnectMeLinuxGui:
         copy_pin_btn.pack(side=tk.LEFT, padx=10)
 
         ip_addr = self._get_local_ip()
-        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v1.3.0 (v1-3-0)  |  UDP: 42850  |  TCP: 42851", foreground="#94A3B8").pack(side=tk.RIGHT)
+        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v1.5.0 (v1-5-0)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
 
         # Çoklu Sekme (Notebook)
         self.notebook = ttk.Notebook(self.root)
@@ -116,10 +116,13 @@ class ConnectMeLinuxGui:
         # TAB 3: Ortak Cep (Drop Shelf)
         self._build_tab_shelf()
 
-        # TAB 4: Ayarlar & Sistem
+        # TAB 4: Ses Yönlendirme (Audio Stream)
+        self._build_tab_audio()
+
+        # TAB 5: Ayarlar & Sistem
         self._build_tab_settings()
 
-        # TAB 5: Canlı Tanılama & Etkinlik
+        # TAB 6: Canlı Tanılama & Etkinlik
         self._build_tab_logs()
 
     def _build_tab_canvas(self):
@@ -197,6 +200,57 @@ class ConnectMeLinuxGui:
         self.shelf_list = tk.Listbox(tab, bg="#1E293B", fg="#F8FAFC", selectbackground="#0284C7",
                                      font=("Segoe UI", 10), height=12, bd=0, highlightthickness=1, highlightbackground="#334155")
         self.shelf_list.pack(fill=tk.BOTH, expand=True, pady=4)
+
+    def _build_tab_audio(self):
+        tab = ttk.Frame(self.notebook, padding=16)
+        self.notebook.add(tab, text="🎧 Ses Yönlendirme")
+
+        card = ttk.Frame(tab, style="Card.TFrame", padding=14)
+        card.pack(fill=tk.X, pady=6)
+        ttk.Label(card, text="🎧 Merkez Bilgisayara (Kulaklığa) Ses Aktarımı", font=("Segoe UI", 12, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
+        ttk.Label(card, text="Bu Linux bilgisayarının tüm seslerini (müzik, video, oyun, sistem sesleri) ağ üzerinden merkez Windows bilgisayarına ve ona bağlı kulaklığa aktarır.",
+                  foreground="#94A3B8", wraplength=700).pack(anchor=tk.W, pady=4)
+
+        row = ttk.Frame(card, style="Card.TFrame")
+        row.pack(fill=tk.X, pady=8)
+        ttk.Label(row, text="Hedef Windows PC IP:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=4)
+        self.audio_ip_entry = ttk.Entry(row, width=16)
+        self.audio_ip_entry.pack(side=tk.LEFT, padx=6)
+        self.audio_stream_btn = ttk.Button(row, text="🎧 Ses Akışını Başlat", style="Success.TButton", command=self._toggle_audio_stream)
+        self.audio_stream_btn.pack(side=tk.LEFT, padx=8)
+
+        self.audio_status_lbl = ttk.Label(card, text="Durum: Boşta (Ses gönderilmiyor)", foreground="#A5B4FC")
+        self.audio_status_lbl.pack(anchor=tk.W, pady=4)
+
+        info_card = ttk.Frame(tab, style="InnerCard.TFrame", padding=12)
+        info_card.pack(fill=tk.X, pady=8)
+        ttk.Label(info_card, text="💡 Ses Motoru Bilgisi:", font=("Segoe UI", 10, "bold"), foreground="#F8FAFC").pack(anchor=tk.W)
+        pipewire_str = "Aktif (pw-record bulundu)" if shutil.which("pw-record") else ("Aktif (PulseAudio parec bulundu)" if shutil.which("parec") else "Bulunamadı")
+        ttk.Label(info_card, text=f"• Ses Yakalayıcı: {pipewire_str}\n• Format: 48,000 Hz, 16-bit Stereo PCM (S16LE)\n• Port: UDP 42852 (<15ms gecikme)\n• Tüm sesler Windows'taki kulaklık çıkışından net ve senkron olarak çalınır.", foreground="#94A3B8").pack(anchor=tk.W, pady=2)
+
+    def _toggle_audio_stream(self):
+        if self.node.audio_streaming:
+            self.node.stop_audio_streaming()
+            self.audio_stream_btn.configure(text="🎧 Ses Akışını Başlat", style="Success.TButton")
+            self.audio_status_lbl.configure(text="Durum: Boşta (Ses gönderilmiyor)", foreground="#A5B4FC")
+        else:
+            target_ip = self.audio_ip_entry.get().strip()
+            if not target_ip:
+                # Eşleşmiş bir Windows peer varsa onun IP'sini otomatik seç
+                paired = [p for p in self.node.peers.values() if p.get("isMutuallyPaired")]
+                if paired:
+                    target_ip = paired[0].get("ipAddress", "")
+            if not target_ip:
+                messagebox.showwarning("Hedef IP Gerekli", "Lütfen sesin aktarılacağı Windows bilgisayarın IP adresini girin.")
+                return
+            self.audio_ip_entry.delete(0, tk.END)
+            self.audio_ip_entry.insert(0, target_ip)
+            ok = self.node.start_audio_streaming(target_ip)
+            if ok:
+                self.audio_stream_btn.configure(text="⏹️ Ses Akışını Durdur", style="Danger.TButton")
+                self.audio_status_lbl.configure(text=f"Durum: Aktif -> {target_ip}:42852 (Ses kulaklığa akıyor)", foreground="#4ADE80")
+            else:
+                messagebox.showerror("Hata", "Ses akışı başlatılamadı. PipeWire (pw-record) veya PulseAudio (parec) yüklü olduğundan emin olun.")
 
     def _build_tab_settings(self):
         tab = ttk.Frame(self.notebook, padding=16)

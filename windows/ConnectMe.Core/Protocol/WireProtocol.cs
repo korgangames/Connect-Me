@@ -18,6 +18,7 @@ public static class ProtocolConstants
     public const int DiscoveryUdpPort = 42849;
     public const int FastInputUdpPort = 42850;
     public const int DataControlTcpPort = 42851;
+    public const int AudioStreamUdpPort = 42852;
 
     public const ushort BleManufacturerId = 0xFFFF;
 }
@@ -30,7 +31,8 @@ public enum PacketType : byte
     KeyEvent = 0x04,
     EdgeHandOff = 0x05,
     HeartbeatPing = 0x06,
-    HeartbeatPong = 0x07
+    HeartbeatPong = 0x07,
+    AudioChunk = 0x08
 }
 
 public enum ScreenEdge : byte
@@ -75,6 +77,12 @@ public readonly record struct EdgeHandOffPacket(
     bool IsDraggingShelfItem,
     float NormalizedPosition);
 public readonly record struct HeartbeatPacket(PacketType Type, long TimestampMs);
+public readonly record struct AudioChunkPacket(
+    byte Channels,
+    uint SampleRate,
+    byte BitsPerSample,
+    ushort Sequence,
+    byte[] PcmData);
 
 /// <summary>
 /// High-speed binary serializer/deserializer for ConnectMe UDP Fast-Path packets.
@@ -239,6 +247,43 @@ public static class WirePacketCodec
 
         long ts = BinaryPrimitives.ReadInt64LittleEndian(buf.Slice(4, 8));
         packet = new HeartbeatPacket(type, ts);
+        return true;
+    }
+
+    public static byte[] EncodeAudioChunk(in AudioChunkPacket packet)
+    {
+        int pcmLen = packet.PcmData?.Length ?? 0;
+        byte[] buf = new byte[14 + pcmLen];
+        WriteHeader(buf, PacketType.AudioChunk);
+        buf[4] = packet.Channels;
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(5, 4), packet.SampleRate);
+        buf[9] = packet.BitsPerSample;
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(10, 2), packet.Sequence);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(12, 2), (ushort)pcmLen);
+        if (pcmLen > 0 && packet.PcmData != null)
+        {
+            packet.PcmData.CopyTo(buf.AsSpan(14));
+        }
+        return buf;
+    }
+
+    public static bool TryDecodeAudioChunk(ReadOnlySpan<byte> buf, out AudioChunkPacket packet)
+    {
+        packet = default;
+        if (buf.Length < 14 || !TryValidateHeader(buf, out var type) || type != PacketType.AudioChunk)
+            return false;
+
+        byte channels = buf[4];
+        uint sampleRate = BinaryPrimitives.ReadUInt32LittleEndian(buf.Slice(5, 4));
+        byte bitsPerSample = buf[9];
+        ushort seq = BinaryPrimitives.ReadUInt16LittleEndian(buf.Slice(10, 2));
+        ushort pcmLen = BinaryPrimitives.ReadUInt16LittleEndian(buf.Slice(12, 2));
+
+        if (buf.Length < 14 + pcmLen)
+            return false;
+
+        byte[] pcmData = buf.Slice(14, pcmLen).ToArray();
+        packet = new AudioChunkPacket(channels, sampleRate, bitsPerSample, seq, pcmData);
         return true;
     }
 }

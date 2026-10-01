@@ -14,10 +14,12 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- 120Hz Donanım Hızlandırmalı Overlay İmleç & Ön Plan Servisi İzinleri -->
+    <!-- 120Hz Donanım Hızlandırmalı Overlay İmleç, Ses Akışı & Ön Plan Servisi İzinleri -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -50,12 +52,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Arka Plan Wi-Fi (UDP/TCP) + BLE Ağ Servisi -->
+        <!-- Arka Plan Wi-Fi (UDP/TCP) + BLE Ağ Servisi & Ses Yönlendirme -->
         <service
             android:name=".network.ConnectMeService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|mediaProjection">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="cross_device_kvm_and_clipboard_sync" />

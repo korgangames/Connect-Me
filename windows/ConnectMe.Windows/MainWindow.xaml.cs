@@ -11,6 +11,7 @@ using System.Windows.Shapes;
 using ConnectMe.Core.Network;
 using ConnectMe.Core.Protocol;
 using ConnectMe.Core.Topology;
+using ConnectMe.Windows.Audio;
 using ConnectMe.Windows.Win32;
 
 namespace ConnectMe.Windows;
@@ -21,6 +22,7 @@ public partial class MainWindow : Window
     private readonly ConnectMeNetworkNode _network = new();
     private readonly Win32InputEngine _inputEngine;
     private readonly WindowsClipboardService _clipboardService;
+    private readonly WindowsAudioPlaybackEngine _audioPlayback;
     private readonly List<ShelfItemEntry> _shelfItems = new();
     private readonly List<UdpClient> _simSockets = new();
     private readonly CancellationTokenSource _simCts = new();
@@ -40,6 +42,7 @@ public partial class MainWindow : Window
 
         _inputEngine = new Win32InputEngine(_topology, _network);
         _clipboardService = new WindowsClipboardService(_network);
+        _audioPlayback = new WindowsAudioPlaybackEngine(_network);
 
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
@@ -51,6 +54,7 @@ public partial class MainWindow : Window
         _network.PeerDiscoveredOrUpdated += OnPeerDiscoveredOrUpdated;
         _network.PeerPairingStatusChanged += OnPeerPairingStatusChanged;
         _network.ShelfItemReceived += OnShelfItemReceived;
+        _audioPlayback.AudioStatusChanged += OnAudioStatusChanged;
 
         _inputEngine.ActiveTargetChanged += OnActiveTargetChanged;
         _inputEngine.ScreenLockToggled += OnScreenLockToggled;
@@ -64,7 +68,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"v1.4.3 (v1-4-3) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort}";
+            $"v1.5.0 (v1-5-0) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -78,7 +82,7 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me v1.4.3 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin}");
+        AppendLog($"[Sistem] Connect Me v1.5.0 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
     }
 
     private async void MainWindow_Closed(object? sender, EventArgs e)
@@ -90,6 +94,7 @@ public partial class MainWindow : Window
             try { s.Dispose(); } catch { }
         }
         _clipboardService.Dispose();
+        _audioPlayback.Dispose();
         _inputEngine.Dispose();
         await _network.DisposeAsync();
     }
@@ -1721,4 +1726,52 @@ public partial class MainWindow : Window
         ScreenEdge.Bottom => "ALT",
         _ => "-"
     };
+
+    private void OnAudioStatusChanged(string status)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (_audioPlayback.IsReceivingAudio)
+            {
+                AudioHubBadge.Background = new SolidColorBrush(Color.FromRgb(30, 58, 47)); // Dark green
+                AudioHubBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94)); // Green
+                AudioHubText.Text = $"🎧 Aktif: {_audioPlayback.ActiveSourceDescription}";
+                AudioHubText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));
+            }
+            else
+            {
+                AudioHubBadge.Background = new SolidColorBrush(Color.FromRgb(30, 41, 59));
+                AudioHubBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(129, 140, 248));
+                AudioHubText.Text = "🎧 Ses Merkezi: Dinliyor (42852)";
+                AudioHubText.Foreground = new SolidColorBrush(Color.FromRgb(165, 180, 252));
+            }
+
+            if (AudioHubStatusDetailText != null)
+            {
+                string mbReceived = (_audioPlayback.TotalAudioBytesReceived / 1024.0 / 1024.0).ToString("0.00");
+                AudioHubStatusDetailText.Text = $"Durum: {status} ({mbReceived} MB alındı)";
+            }
+        });
+    }
+
+    private void AudioMuteBtn_Click(object sender, RoutedEventArgs e)
+    {
+        _audioPlayback.IsMuted = !_audioPlayback.IsMuted;
+        string icon = _audioPlayback.IsMuted ? "🔇" : "🔊";
+        AudioMuteHeaderBtn.Content = icon;
+        AudioHubMuteTabBtn.Content = _audioPlayback.IsMuted ? "🔇 Sesi Aç" : "🔊 Sesi Kapat";
+        AppendLog(_audioPlayback.IsMuted ? "🔇 [Ses Merkezi] Ses kapatıldı (Mute)." : "🔊 [Ses Merkezi] Ses açıldı.");
+    }
+
+    private void AudioVolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_audioPlayback != null)
+        {
+            _audioPlayback.Volume = (float)e.NewValue;
+            if (AudioVolumeLabel != null)
+            {
+                AudioVolumeLabel.Text = $"{(int)(e.NewValue * 100)}%";
+            }
+        }
+    }
 }
