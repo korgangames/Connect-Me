@@ -38,7 +38,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -530,6 +530,12 @@ class ConnectMeLinuxNode:
                     self.log(f"[Otomatik Bağlantı] ⭐ Güvenilir cihaz '{sender_name}' ({remote_ip}) PIN'siz otomatik bağlandı!")
                 else:
                     self._send_tcp_frame(conn, {"type": "PAIR_REJECT", "senderId": self.device_id, "senderName": self.device_name})
+
+            elif msg_type == "EDGE_RETURN":
+                edge = header.get("returnEdge", 0)
+                norm_pos = float(header.get("normalizedPosition", 0.5))
+                self.log(f"[Kenar Dönüşü] '{header.get('senderName')}' ({remote_ip}) TCP sinyaliyle yerel masaüstüne dönüş yaptı.")
+                self.return_control_to_local(edge, norm_pos)
 
             elif msg_type == "CLIPBOARD_TEXT":
                 text = header.get("text", "")

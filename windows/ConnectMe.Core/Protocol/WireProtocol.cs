@@ -391,6 +391,12 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("contentHash")]
     public string? ContentHash { get; set; }
+
+    [JsonPropertyName("returnEdge")]
+    public int? ReturnEdge { get; set; }
+
+    [JsonPropertyName("normalizedPosition")]
+    public double? NormalizedPosition { get; set; }
 }
 
 public static class TcpFrameCodec

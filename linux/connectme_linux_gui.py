@@ -30,7 +30,7 @@ except ImportError:
 class ConnectMeLinuxGui:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Connect Me v1.4.1 — Linux Kontrol Merkezi")
+        self.root.title("Connect Me v1.4.2 — Linux Kontrol Merkezi")
         self.root.geometry("980x740")
         self.root.minsize(860, 620)
         self.root.configure(bg="#0B1120")
@@ -75,14 +75,14 @@ class ConnectMeLinuxGui:
 
         title_box = ttk.Frame(header_frame)
         title_box.pack(side=tk.LEFT)
-        ttk.Label(title_box, text="⚡ Connect Me v1.4.1 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(title_box, text="⚡ Connect Me v1.4.2 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
         ttk.Label(title_box, text="KDE Plasma Wayland Çoklu Monitör & KVM Kontrol Paneli", style="SubHeader.TLabel").pack(anchor=tk.W)
 
         status_box = ttk.Frame(header_frame)
         status_box.pack(side=tk.RIGHT)
         self.injector_badge = ttk.Label(status_box, text=f" Girdi: {self.node.injector.mode.upper()} ", style="Badge.TLabel")
         self.injector_badge.pack(side=tk.RIGHT, padx=4)
-        status_badge = ttk.Label(status_box, text=" v1.4.1 | 🟢 Çevrimiçi ", style="Badge.TLabel")
+        status_badge = ttk.Label(status_box, text=" v1.4.2 | 🟢 Çevrimiçi ", style="Badge.TLabel")
         status_badge.pack(side=tk.RIGHT, padx=4)
 
         # Hızlı Bilgi & PIN Kartı
@@ -522,7 +522,7 @@ X-GNOME-Autostart-enabled=true
             report = (
                 f"=== Connect Me Linux Tanılama Günlüğü ===\n"
                 f"Oluşturulma Tarihi: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"Sürüm: v1.4.1\n"
+                f"Sürüm: v1.4.2\n"
                 f"Cihaz: {self.node.device_name} ({self.node.device_id})\n"
                 f"Platform: {self.node.platform}\n"
                 f"Aktif Girdi Enjektörü: {self.node.injector.mode.upper()}\n"

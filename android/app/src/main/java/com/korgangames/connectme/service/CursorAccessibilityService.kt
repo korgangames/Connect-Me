@@ -2,7 +2,9 @@ package com.korgangames.connectme.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ClipboardManager
 import android.content.Context
+import java.security.MessageDigest
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -73,12 +75,28 @@ class CursorAccessibilityService : AccessibilityService() {
     private var downTimestamp = 0L
     private var returnEdgePushAccum = 0f
 
+    private var clipboardManager: ClipboardManager? = null
+    private var clipboardListener: ClipboardManager.OnPrimaryClipChangedListener? = null
+
+    @Volatile
+    private var lastReceivedClipboardHash: String? = null
+
+    @Volatile
+    private var lastSentClipboardHash: String? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         refreshScreenMetrics()
         ensureOverlayCreated()
+
+        // Seamless universal clipboard listener
+        clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+            handleLocalClipboardChanged()
+        }
+        clipboardManager?.addPrimaryClipChangedListener(clipboardListener)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -88,11 +106,46 @@ class CursorAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        clipboardListener?.let { clipboardManager?.removePrimaryClipChangedListener(it) }
         removeOverlay()
         if (instance === this) {
             instance = null
         }
         super.onDestroy()
+    }
+
+    fun notifyRemoteClipboardReceived(hash: String) {
+        lastReceivedClipboardHash = hash
+    }
+
+    private fun handleLocalClipboardChanged() {
+        try {
+            val cm = clipboardManager ?: return
+            val clip = cm.primaryClip ?: return
+            if (clip.itemCount == 0) return
+            val text = clip.getItemAt(0)?.coerceToText(this)?.toString() ?: return
+            if (text.isBlank()) return
+
+            val hash = hashText(text)
+            if (hash == lastReceivedClipboardHash || hash == lastSentClipboardHash) {
+                return
+            }
+
+            lastSentClipboardHash = hash
+            ConnectMeService.instance?.sendClipboardTextToPc(text)
+            ConnectMeService.instance?.log("[Evrensel Pano] Android'den kopyalanan metin (${text.length} krk) bilgisayara otomatik aktarıldı.")
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun hashText(str: String): String {
+        return try {
+            val md = MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(str.toByteArray(Charsets.UTF_8))
+            digest.joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            str.hashCode().toString()
+        }
     }
 
     fun refreshScreenMetrics() {
@@ -230,38 +283,40 @@ class CursorAccessibilityService : AccessibilityService() {
         val nextX = cursorX + packet.deltaX
         val nextY = cursorY + packet.deltaY
 
-        // Check if pushing back across the entrance edge to return to Windows
-        var pushedOutward = 0f
+        // Detect if cursor is hitting any outer boundary and pushing outward towards PC
+        var pushingBorder: Byte = ProtocolConstants.EDGE_NONE
+        var outwardDelta = 0f
         var returnNormPos = 0.5f
         var oppositeWindowsEdge: Byte = ProtocolConstants.EDGE_NONE
 
-        when (activeEntranceEdge) {
-            ProtocolConstants.EDGE_LEFT -> if (nextX < 0 && packet.deltaX < 0) {
-                pushedOutward = -packet.deltaX.toFloat()
-                returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
-                oppositeWindowsEdge = ProtocolConstants.EDGE_RIGHT
-            }
-            ProtocolConstants.EDGE_RIGHT -> if (nextX > screenWidth && packet.deltaX > 0) {
-                pushedOutward = packet.deltaX.toFloat()
-                returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
-                oppositeWindowsEdge = ProtocolConstants.EDGE_LEFT
-            }
-            ProtocolConstants.EDGE_TOP -> if (nextY < 0 && packet.deltaY < 0) {
-                pushedOutward = -packet.deltaY.toFloat()
-                returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
-                oppositeWindowsEdge = ProtocolConstants.EDGE_BOTTOM
-            }
-            ProtocolConstants.EDGE_BOTTOM -> if (nextY > screenHeight && packet.deltaY > 0) {
-                pushedOutward = packet.deltaY.toFloat()
-                returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
-                oppositeWindowsEdge = ProtocolConstants.EDGE_TOP
-            }
+        if (packet.deltaX < 0 && (cursorX <= 6f || nextX < 0f)) {
+            pushingBorder = ProtocolConstants.EDGE_LEFT
+            outwardDelta = -packet.deltaX.toFloat()
+            returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
+            oppositeWindowsEdge = ProtocolConstants.EDGE_RIGHT
+        } else if (packet.deltaX > 0 && (cursorX >= (screenWidth - 6f) || nextX > screenWidth)) {
+            pushingBorder = ProtocolConstants.EDGE_RIGHT
+            outwardDelta = packet.deltaX.toFloat()
+            returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
+            oppositeWindowsEdge = ProtocolConstants.EDGE_LEFT
+        } else if (packet.deltaY < 0 && (cursorY <= 6f || nextY < 0f)) {
+            pushingBorder = ProtocolConstants.EDGE_TOP
+            outwardDelta = -packet.deltaY.toFloat()
+            returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
+            oppositeWindowsEdge = ProtocolConstants.EDGE_BOTTOM
+        } else if (packet.deltaY > 0 && (cursorY >= (screenHeight - 6f) || nextY > screenHeight)) {
+            pushingBorder = ProtocolConstants.EDGE_BOTTOM
+            outwardDelta = packet.deltaY.toFloat()
+            returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
+            oppositeWindowsEdge = ProtocolConstants.EDGE_TOP
         }
 
-        if (pushedOutward > 0f && !isLeftButtonDown) {
-            returnEdgePushAccum += pushedOutward
-            if (returnEdgePushAccum >= 22f) {
-                // Return control back to Windows!
+        if (pushingBorder != ProtocolConstants.EDGE_NONE && outwardDelta > 0f && !isLeftButtonDown) {
+            // Buttery-smooth return: only 3px needed when pushing against the edge facing the PC!
+            // If pushing against an unexpected edge, allow return with 14px so cursor is NEVER trapped.
+            val requiredResistance = if (pushingBorder == activeEntranceEdge) 3f else 14f
+            returnEdgePushAccum += outwardDelta
+            if (returnEdgePushAccum >= requiredResistance) {
                 returnEdgePushAccum = 0f
                 isCursorActiveOnAndroid = false
                 mainHandler.post {
@@ -270,7 +325,8 @@ class CursorAccessibilityService : AccessibilityService() {
                 ConnectMeService.instance?.sendEdgeHandOffBackToPeer(oppositeWindowsEdge, returnNormPos)
                 return
             }
-        } else {
+        } else if (cursorX > 25f && cursorX < (screenWidth - 25f) && cursorY > 25f && cursorY < (screenHeight - 25f)) {
+            // Only reset resistance when user visibly moves away from the edge back towards screen center
             returnEdgePushAccum = 0f
         }
 

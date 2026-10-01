@@ -70,6 +70,7 @@ data class AndroidShelfItem(
 class ConnectMeService : Service() {
 
     companion object {
+        const val ACTION_RETURN_TO_PC = "com.korgangames.connectme.RETURN_TO_PC"
         private const val CHANNEL_ID = "connect_me_service_channel"
         private const val NOTIFICATION_ID = 4285
 
@@ -153,21 +154,51 @@ class ConnectMeService : Service() {
     @Volatile
     var activePcTcpPort: Int = ProtocolConstants.DATA_CONTROL_TCP_PORT
 
+    private var serviceClipboardManager: ClipboardManager? = null
+    private var serviceClipboardListener: ClipboardManager.OnPrimaryClipChangedListener? = null
+
+    @Volatile
+    var lastReceivedClipboardHash: String? = null
+
+    @Volatile
+    var lastSentClipboardHash: String? = null
+
     override fun onCreate() {
         super.onCreate()
         instance = this
         startForegroundWithNotification()
         startNetworkLoops()
+
+        mainHandler.post {
+            try {
+                serviceClipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                serviceClipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+                    handleServiceClipboardChanged()
+                }
+                serviceClipboardManager?.addPrimaryClipChangedListener(serviceClipboardListener)
+            } catch (_: Exception) {}
+        }
+
         log("[Servis] Connect Me Android başlatıldı (Yerel 6 Haneli PIN: $localPairingPin).")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_RETURN_TO_PC) {
+            val cursorSvc = CursorAccessibilityService.instance
+            cursorSvc?.isCursorActiveOnAndroid = false
+            sendEdgeHandOffBackToPeer(ProtocolConstants.EDGE_LEFT, 0.5f)
+            log("[Kenar Dönüşü] Bildirim üzerinden bilgisayar ekranına dönüş tetiklendi.")
+            return START_STICKY
+        }
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        serviceClipboardListener?.let {
+            try { serviceClipboardManager?.removePrimaryClipChangedListener(it) } catch (_: Exception) {}
+        }
         scope.cancel()
         try { discoverySocket?.close() } catch (_: Exception) {}
         try { inputUdpSocket?.close() } catch (_: Exception) {}
@@ -207,11 +238,22 @@ class ConnectMeService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val returnIntent = Intent(this, ConnectMeService::class.java).apply {
+            action = ACTION_RETURN_TO_PC
+        }
+        val returnPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            returnIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Connect Me Aktif (PIN: $localPairingPin)")
             .setContentText("Çoklu cihaz kenar geçişi, çift taraflı PIN ve Drop Shelf hazır")
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentIntent(pendingIntent)
+            .addAction(android.R.drawable.ic_menu_revert, "⬅️ PC'ye Dön", returnPendingIntent)
             .setOngoing(true)
             .build()
 
@@ -491,20 +533,85 @@ class ConnectMeService : Service() {
     }
 
     fun sendEdgeHandOffBackToPeer(windowsEntranceEdge: Byte, normalizedPos: Float) {
-        scope.launch {
-            try {
-                val targetAddr = activePcAddress ?: return@launch
-                val sock = inputUdpSocket ?: return@launch
-                val senderPeer = discoveredPeers.find { it.ipAddress == targetAddr.hostAddress }
-                val targetPort = senderPeer?.udpInputPort ?: ProtocolConstants.FAST_INPUT_UDP_PORT
-                val bytes = WirePacketCodec.encodeEdgeHandOff(windowsEntranceEdge, false, normalizedPos)
-                val dp = DatagramPacket(bytes, bytes.size, targetAddr, targetPort)
-                sock.send(dp)
-                sock.send(dp)
-                log("[Kenar Geçişi] İmleç Android'den bilgisayar ekranına geri döndü ($targetPort).")
-            } catch (e: Exception) {
-                log("[Hata] Kenar dönüş paketi gönderilemedi: ${e.message}")
+        scope.launch(Dispatchers.IO) {
+            val pairedPeer = discoveredPeers.firstOrNull { it.isMutuallyPaired }
+            val targetAddr = activePcAddress
+                ?: (if (pairedPeer != null) {
+                    try { InetAddress.getByName(pairedPeer.ipAddress) } catch (_: Exception) { null }
+                } else null)
+
+            val senderPeer = (if (targetAddr != null) discoveredPeers.find { it.ipAddress == targetAddr.hostAddress } else null)
+                ?: pairedPeer
+
+            val targetUdpPort = senderPeer?.udpInputPort ?: ProtocolConstants.FAST_INPUT_UDP_PORT
+            val targetTcpPort = senderPeer?.tcpControlPort ?: ProtocolConstants.DATA_CONTROL_TCP_PORT
+
+            // 1. Fast UDP Datagram (3x burst for redundancy)
+            if (targetAddr != null) {
+                try {
+                    val sock = inputUdpSocket
+                    if (sock != null && !sock.isClosed) {
+                        val bytes = WirePacketCodec.encodeEdgeHandOff(windowsEntranceEdge, false, normalizedPos)
+                        val dp = DatagramPacket(bytes, bytes.size, targetAddr, targetUdpPort)
+                        sock.send(dp)
+                        sock.send(dp)
+                        sock.send(dp)
+                    }
+                } catch (e: Exception) {
+                    log("[UDP Uyarı] Kenar dönüş UDP: ${e.message}")
+                }
             }
+
+            // 2. Guaranteed TCP Fallback Handoff (ensures Wi-Fi drops never trap cursor on phone)
+            val tcpTargetIp = senderPeer?.ipAddress ?: targetAddr?.hostAddress
+            if (tcpTargetIp != null) {
+                try {
+                    Socket().use { socket ->
+                        socket.connect(InetSocketAddress(tcpTargetIp, targetTcpPort), 2500)
+                        val header = JSONObject().apply {
+                            put("type", "EDGE_RETURN")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                            put("returnEdge", windowsEntranceEdge.toInt())
+                            put("normalizedPosition", normalizedPos.toDouble())
+                        }
+                        TcpFrameCodec.writeFrame(socket.getOutputStream(), header)
+                    }
+                } catch (e: Exception) {
+                    log("[TCP Uyarı] Kenar dönüş TCP: ${e.message}")
+                }
+            }
+
+            log("[Kenar Geçişi] ⬅️ İmleç Android'den bilgisayara döndü (Kenar: $windowsEntranceEdge, %${(normalizedPos * 100).toInt()}).")
+        }
+    }
+
+    private fun handleServiceClipboardChanged() {
+        try {
+            val cm = serviceClipboardManager ?: return
+            val clip = cm.primaryClip ?: return
+            if (clip.itemCount == 0) return
+            val text = clip.getItemAt(0)?.coerceToText(this)?.toString() ?: return
+            if (text.isBlank()) return
+
+            val hash = hashText(text)
+            if (hash == lastReceivedClipboardHash || hash == lastSentClipboardHash) {
+                return
+            }
+
+            lastSentClipboardHash = hash
+            sendClipboardTextToPc(text)
+        } catch (_: Exception) {
+        }
+    }
+
+    fun hashText(str: String): String {
+        return try {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(str.toByteArray(StandardCharsets.UTF_8))
+            digest.joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            str.hashCode().toString()
         }
     }
 
@@ -698,9 +805,14 @@ class ConnectMeService : Service() {
                 "CLIPBOARD_TEXT" -> {
                     val text = header.optString("text", "")
                     if (text.isNotEmpty()) {
+                        val hash = hashText(text)
+                        lastReceivedClipboardHash = hash
+                        CursorAccessibilityService.instance?.notifyRemoteClipboardReceived(hash)
                         mainHandler.post {
-                            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            cm.setPrimaryClip(ClipData.newPlainText("ConnectMe", text))
+                            try {
+                                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("ConnectMe", text))
+                            } catch (_: Exception) {}
                         }
                         log("[Evrensel Pano] $senderName cihazından metin kopyalandı (${text.length} krk).")
                     }

@@ -1288,6 +1288,17 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     break;
                 }
 
+                case "EDGE_RETURN":
+                {
+                    var returnEdge = (ScreenEdge)(header.ReturnEdge ?? 0);
+                    float returnPos = (float)(header.NormalizedPosition ?? 0.5);
+                    Log($"[Kenar Dönüşü] '{header.SenderName}' ({remoteIp}) TCP sinyaliyle yerel masaüstüne dönüş yaptı ({returnEdge}, %{(int)(returnPos * 100)}).");
+                    RemoteEdgeHandOffReceived?.Invoke(
+                        new EdgeHandOffPacket(returnEdge, false, returnPos),
+                        new IPEndPoint(IPAddress.Parse(remoteIp), header.SenderUdpPort ?? InputUdpPort));
+                    break;
+                }
+
                 case "CLIPBOARD_TEXT":
                     if (!string.IsNullOrEmpty(header.Text))
                     {

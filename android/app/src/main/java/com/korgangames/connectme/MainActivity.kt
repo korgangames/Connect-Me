@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "Connect Me v1.4.1"
+        title = "Connect Me v1.4.2"
 
         val svcIntent = Intent(this, ConnectMeService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -85,7 +85,7 @@ class MainActivity : AppCompatActivity() {
         val svc = ConnectMeService.instance
         val localIp = svc?.getLocalIpv4Address() ?: "Bağlanıyor..."
         val pin = svc?.localPairingPin ?: "------"
-        statusIpText.text = "📱 Android IP: $localIp  |  v1.4.1 (v1-4-1)  |  UDP: 42850  |  TCP: 42851"
+        statusIpText.text = "📱 Android IP: $localIp  |  v1.4.2 (v1-4-2)  |  UDP: 42850  |  TCP: 42851"
         localPinBadgeText.text = "🔐 BU CİHAZIN 6 HANELİ KODU: $pin"
 
         val hasOverlay = Settings.canDrawOverlays(this)
@@ -174,7 +174,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "🌐 Connect Me v1.4.1"
+            text = "🌐 Connect Me v1.4.2"
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
@@ -302,7 +302,15 @@ class MainActivity : AppCompatActivity() {
         }
         shelfCard.addView(sendFileBtn)
 
-        val sendClipBtn = createStyledButton("📋 Panoyu Tüm Onaylı Cihazlara Gönder", "#059669") {
+        val autoClipBanner = TextView(this).apply {
+            text = "⚡ Evrensel Pano: Kesintisiz & Otomatik Aktif\nHer iki cihazda kopyalanan metinler hiçbir butona basmadan anında karşı tarafa aktarılır."
+            textSize = 12f
+            setTextColor(Color.parseColor("#34D399"))
+            setPadding(0, 10, 0, 10)
+        }
+        shelfCard.addView(autoClipBanner)
+
+        val sendClipBtn = createStyledButton("📋 Panoyu Manuel Tekrar Gönder (İsteğe Bağlı)", "#065F46") {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val txt = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString() ?: ""
             if (txt.isNotEmpty()) {
@@ -313,6 +321,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         shelfCard.addView(sendClipBtn)
+
+        val returnPcBtn = createStyledButton("⬅️ Fare / Klavye Kontrolünü Bilgisayara Geri Ver", "#374151") {
+            CursorAccessibilityService.instance?.let { it.isCursorActiveOnAndroid = false }
+            ConnectMeService.instance?.sendEdgeHandOffBackToPeer(ProtocolConstants.EDGE_LEFT, 0.5f)
+            Toast.makeText(this, "İmleç kontrolü bilgisayara devredildi", Toast.LENGTH_SHORT).show()
+        }
+        shelfCard.addView(returnPcBtn)
 
         shelfListText = TextView(this).apply {
             textSize = 12.5f
@@ -529,7 +544,7 @@ class MainActivity : AppCompatActivity() {
         val report = buildString {
             appendLine("=== Connect Me Android Tanılama Günlüğü ===")
             appendLine("Tarih: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
-            appendLine("Uygulama Sürümü: v1.4.1")
+            appendLine("Uygulama Sürümü: v1.4.2")
             appendLine("Cihaz Modeli: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
             appendLine("Android Sürümü: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("Erişilebilirlik Hizmeti: ${if (CursorAccessibilityService.instance != null) "AÇIK ✅" else "KAPALI ❌"}")
@@ -548,7 +563,7 @@ class MainActivity : AppCompatActivity() {
 
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.4.1.txt")
+            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.4.2.txt")
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(sendIntent, "Connect Me Loglarını Dışa Aktar / Paylaş"))
