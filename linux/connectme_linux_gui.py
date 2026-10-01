@@ -30,7 +30,7 @@ except ImportError:
 class ConnectMeLinuxGui:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Connect Me v1.5.0 — Linux Kontrol Merkezi")
+        self.root.title("Connect Me v1.6.0 — Linux Kontrol Merkezi")
         self.root.geometry("980x740")
         self.root.minsize(860, 620)
         self.root.configure(bg="#0B1120")
@@ -42,6 +42,7 @@ class ConnectMeLinuxGui:
         self._apply_dark_theme()
         self._build_ui()
         self._start_refresh_timer()
+        threading.Thread(target=self._check_for_updates, daemon=True).start()
 
     def _apply_dark_theme(self):
         style = ttk.Style()
@@ -75,14 +76,16 @@ class ConnectMeLinuxGui:
 
         title_box = ttk.Frame(header_frame)
         title_box.pack(side=tk.LEFT)
-        ttk.Label(title_box, text="⚡ Connect Me v1.5.0 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(title_box, text="⚡ Connect Me v1.6.0 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
         ttk.Label(title_box, text="KDE Plasma Wayland Çoklu Monitör & KVM Kontrol Paneli", style="SubHeader.TLabel").pack(anchor=tk.W)
 
         status_box = ttk.Frame(header_frame)
         status_box.pack(side=tk.RIGHT)
+        self.update_badge_btn = ttk.Button(status_box, text="🔄 Güncelleme Denetle", command=lambda: threading.Thread(target=self._check_for_updates, args=(True,), daemon=True).start())
+        self.update_badge_btn.pack(side=tk.RIGHT, padx=4)
         self.injector_badge = ttk.Label(status_box, text=f" Girdi: {self.node.injector.mode.upper()} ", style="Badge.TLabel")
         self.injector_badge.pack(side=tk.RIGHT, padx=4)
-        status_badge = ttk.Label(status_box, text=" v1.5.0 | 🟢 Çevrimiçi ", style="Badge.TLabel")
+        status_badge = ttk.Label(status_box, text=" v1.6.0 | 🟢 Çevrimiçi ", style="Badge.TLabel")
         status_badge.pack(side=tk.RIGHT, padx=4)
 
         # Hızlı Bilgi & PIN Kartı
@@ -101,7 +104,7 @@ class ConnectMeLinuxGui:
         copy_pin_btn.pack(side=tk.LEFT, padx=10)
 
         ip_addr = self._get_local_ip()
-        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v1.5.0 (v1-5-0)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
+        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v1.6.0 (v1-6-0)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
 
         # Çoklu Sekme (Notebook)
         self.notebook = ttk.Notebook(self.root)
@@ -625,6 +628,61 @@ X-GNOME-Autostart-enabled=true
             self._log("🧹 [Temizle] Canlı telemetri ve log dosyası temizlendi.")
         except Exception as ex:
             self._log(f"[Hata] Log temizlenemedi: {ex}")
+
+    def _check_for_updates(self, is_manual: bool = False):
+        try:
+            import urllib.request
+            import json
+            req = urllib.request.Request(
+                "https://api.github.com/repos/korgangames/Connect-Me/releases/latest",
+                headers={"User-Agent": "ConnectMe-Linux", "Accept": "application/vnd.github.v3+json"}
+            )
+            with urllib.request.urlopen(req, timeout=6) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode("utf-8"))
+                    remote_tag = data.get("tag_name", "").strip()
+                    if remote_tag:
+                        # Version comparison
+                        r_parts = [int(p) for p in remote_tag.lstrip("v").split(".") if p.isdigit()]
+                        c_parts = [int(p) for p in "1.6.0".split(".") if p.isdigit()]
+                        is_newer = False
+                        for i in range(max(len(r_parts), len(c_parts))):
+                            r = r_parts[i] if i < len(r_parts) else 0
+                            c = c_parts[i] if i < len(c_parts) else 0
+                            if r > c:
+                                is_newer = True
+                                break
+                            elif r < c:
+                                break
+
+                        if is_newer:
+                            tar_url = data.get("html_url", "https://github.com/korgangames/Connect-Me/releases")
+                            for a in data.get("assets", []):
+                                if a.get("name", "").endswith(".tar.gz"):
+                                    tar_url = a.get("browser_download_url", tar_url)
+                                    break
+                            self.root.after(0, lambda: self._on_new_update_found(remote_tag, tar_url, data.get("name", remote_tag)))
+                            return
+
+            if is_manual:
+                self.root.after(0, lambda: messagebox.showinfo("Connect Me Güncel", "Tebrikler! Connect Me zaten en son sürümde (v1.6.0)."))
+        except Exception as ex:
+            if is_manual:
+                self.root.after(0, lambda: messagebox.showwarning("Güncelleme Hatası", f"Güncelleme kontrolü başarısız oldu:\n{ex}"))
+
+    def _on_new_update_found(self, version_tag: str, download_url: str, title: str):
+        self.update_badge_btn.configure(
+            text=f"🎉 {version_tag} Mevcut!",
+            command=lambda: self._prompt_linux_update(version_tag, download_url, title)
+        )
+        self._log(f"[Güncelleme] ⭐ Yeni sürüm mevcut: {version_tag} ({title})")
+
+    def _prompt_linux_update(self, version_tag: str, download_url: str, title: str):
+        if messagebox.askyesno("Yeni Sürüm", f"Connect Me {version_tag} sürümü yayınlandı!\n\n{title}\n\nİndirme sayfasını açmak ister misiniz?"):
+            try:
+                subprocess.Popen(["xdg-open", download_url])
+            except Exception:
+                pass
 
 
 def main():

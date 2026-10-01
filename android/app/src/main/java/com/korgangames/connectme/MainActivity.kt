@@ -18,10 +18,12 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -32,6 +34,7 @@ import com.korgangames.connectme.audio.AudioStreamEngine
 import com.korgangames.connectme.network.ConnectMeService
 import com.korgangames.connectme.protocol.ProtocolConstants
 import com.korgangames.connectme.service.CursorAccessibilityService
+import com.korgangames.connectme.updater.AppUpdateManager
 
 class MainActivity : AppCompatActivity() {
 
@@ -46,6 +49,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logViewText: TextView
     private lateinit var audioStatusText: TextView
     private lateinit var audioToggleBtn: Button
+
+    // In-App Auto Updater UI elements
+    private lateinit var updateCard: LinearLayout
+    private lateinit var updateTitleText: TextView
+    private lateinit var updateDetailText: TextView
+    private lateinit var updateProgressBar: ProgressBar
+    private lateinit var updateActionBtn: Button
+    private lateinit var checkUpdateBtn: Button
 
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -83,7 +94,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "Connect Me v1.4.3"
+        title = "Connect Me v1.6.0"
 
         val svcIntent = Intent(this, ConnectMeService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -94,10 +105,20 @@ class MainActivity : AppCompatActivity() {
 
         checkAndRequestRuntimePermissions()
         buildProgrammaticDarkUi()
+        checkAppUpdate(isManual = false)
     }
 
     override fun onResume() {
         super.onResume()
+
+        // Kullanıcı "Bilinmeyen kaynaklardan yükleme" iznini açıp geri döndüyse bekleyen APK kurulumunu tamamla
+        val pending = AppUpdateManager.pendingApkToInstall
+        if (pending != null && pending.exists()) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+                AppUpdateManager.installApk(this, pending)
+            }
+        }
+
         ConnectMeService.onStateUpdated = {
             runOnUiThread { refreshUiState() }
         }
@@ -118,7 +139,7 @@ class MainActivity : AppCompatActivity() {
         val svc = ConnectMeService.instance
         val localIp = svc?.getLocalIpv4Address() ?: "Bağlanıyor..."
         val pin = svc?.localPairingPin ?: "------"
-        statusIpText.text = "📱 Android IP: $localIp  |  v1.4.3 (v1-4-3)  |  UDP: 42850  |  TCP: 42851"
+        statusIpText.text = "📱 Android IP: $localIp  |  v1.6.0 (v1-6-0)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
         localPinBadgeText.text = "🔐 BU CİHAZIN 6 HANELİ KODU: $pin"
 
         val hasOverlay = Settings.canDrawOverlays(this)
@@ -207,7 +228,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "🌐 Connect Me v1.5.0"
+            text = "🌐 Connect Me v1.6.0"
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
@@ -217,9 +238,76 @@ class MainActivity : AppCompatActivity() {
             text = "📱 Android IP: Yükleniyor..."
             textSize = 12.5f
             setTextColor(Color.parseColor("#9CA3AF"))
-            setPadding(0, 8, 0, 14)
+            setPadding(0, 8, 0, 8)
         }
         root.addView(statusIpText)
+
+        val updateRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, 14)
+        }
+        checkUpdateBtn = Button(this).apply {
+            text = "🔄 Güncellemeleri Denetle"
+            textSize = 11f
+            setTextColor(Color.parseColor("#38BDF8"))
+            val bg = GradientDrawable().apply {
+                setColor(Color.parseColor("#1E293B"))
+                cornerRadius = 14f
+                setStroke(1, Color.parseColor("#38BDF8"))
+            }
+            background = bg
+            setPadding(24, 8, 24, 8)
+            setOnClickListener { checkAppUpdate(isManual = true) }
+        }
+        updateRow.addView(checkUpdateBtn)
+        root.addView(updateRow)
+
+        // In-App Auto Updater Card (Varsayılan olarak gizli, güncelleme bulununca belirir)
+        updateCard = createCardLayout().apply {
+            visibility = View.GONE
+            val strokeBg = GradientDrawable().apply {
+                setColor(Color.parseColor("#0F172A"))
+                cornerRadius = 24f
+                setStroke(3, Color.parseColor("#22C55E"))
+            }
+            background = strokeBg
+        }
+
+        updateTitleText = TextView(this).apply {
+            text = "🎉 Yeni Sürüm Mevcut!"
+            textSize = 16.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.parseColor("#4ADE80"))
+        }
+        updateCard.addView(updateTitleText)
+
+        updateDetailText = TextView(this).apply {
+            text = "Yenilikler yükleniyor..."
+            textSize = 12f
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setPadding(0, 6, 0, 8)
+        }
+        updateCard.addView(updateDetailText)
+
+        updateProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = false
+            max = 100
+            progress = 0
+            visibility = View.GONE
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            lp.setMargins(0, 4, 0, 8)
+            layoutParams = lp
+        }
+        updateCard.addView(updateProgressBar)
+
+        updateActionBtn = createStyledButton("⬇️ Tek Tıkla İndir ve Kur", "#16A34A") {
+            // dinamik atanır
+        }
+        updateCard.addView(updateActionBtn)
+        root.addView(updateCard)
 
         // Local 6-Digit PIN Card
         val pinCard = createCardLayout()
@@ -607,7 +695,7 @@ class MainActivity : AppCompatActivity() {
         val report = buildString {
             appendLine("=== Connect Me Android Tanılama Günlüğü ===")
             appendLine("Tarih: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
-            appendLine("Uygulama Sürümü: v1.4.3")
+            appendLine("Uygulama Sürümü: v1.6.0")
             appendLine("Cihaz Modeli: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
             appendLine("Android Sürümü: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("Erişilebilirlik Hizmeti: ${if (CursorAccessibilityService.instance != null) "AÇIK ✅" else "KAPALI ❌"}")
@@ -626,10 +714,67 @@ class MainActivity : AppCompatActivity() {
 
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.4.3.txt")
+            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.6.0.txt")
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(sendIntent, "Connect Me Loglarını Dışa Aktar / Paylaş"))
+    }
+
+    private fun checkAppUpdate(isManual: Boolean) {
+        if (isManual) {
+            Toast.makeText(this, "Güncellemeler denetleniyor...", Toast.LENGTH_SHORT).show()
+        }
+        AppUpdateManager.checkForUpdates(this, "1.6.0") { updateInfo ->
+            if (updateInfo != null) {
+                updateCard.visibility = View.VISIBLE
+                updateTitleText.text = "🎉 Yeni Sürüm Mevcut: ${updateInfo.versionName}"
+                updateDetailText.text = "${updateInfo.releaseTitle}\n\n${updateInfo.releaseNotes.take(350)}..."
+                val sizeMb = if (updateInfo.fileSize > 0) " (${updateInfo.fileSize / 1024 / 1024} MB)" else ""
+                updateActionBtn.text = "⬇️ Tek Tıkla İndir ve Kur$sizeMb"
+                updateActionBtn.isEnabled = true
+                updateActionBtn.setOnClickListener {
+                    startDownloadAndInstall(updateInfo)
+                }
+                if (isManual) {
+                    Toast.makeText(this, "Yeni sürüm bulundu: ${updateInfo.versionName}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                updateCard.visibility = View.GONE
+                if (isManual) {
+                    Toast.makeText(this, "Connect Me güncel (v1.6.0)!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun startDownloadAndInstall(updateInfo: AppUpdateManager.UpdateInfo) {
+        updateActionBtn.isEnabled = false
+        updateProgressBar.visibility = View.VISIBLE
+        updateProgressBar.progress = 0
+        updateActionBtn.text = "İndiriliyor..."
+
+        AppUpdateManager.downloadApk(
+            context = this,
+            updateInfo = updateInfo,
+            onProgress = { percent, downloadedBytes, totalBytes ->
+                updateProgressBar.progress = percent
+                val downMb = downloadedBytes / 1024 / 1024
+                val totMb = totalBytes / 1024 / 1024
+                updateActionBtn.text = "%$percent İndiriliyor ($downMb MB / $totMb MB)..."
+            },
+            onComplete = { apkFile ->
+                updateActionBtn.text = "✅ Kurulum Başlatılıyor..."
+                updateProgressBar.progress = 100
+                Toast.makeText(this, "İndirme tamamlandı! Kurulum penceresi açılıyor...", Toast.LENGTH_SHORT).show()
+                AppUpdateManager.installApk(this, apkFile)
+            },
+            onError = { error ->
+                updateActionBtn.isEnabled = true
+                updateActionBtn.text = "Tekrar Dene"
+                updateProgressBar.visibility = View.GONE
+                Toast.makeText(this, "İndirme Hatası: $error", Toast.LENGTH_LONG).show()
+            }
+        )
     }
 
     private fun updateAudioUi() {

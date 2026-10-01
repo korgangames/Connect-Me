@@ -12,6 +12,7 @@ using ConnectMe.Core.Network;
 using ConnectMe.Core.Protocol;
 using ConnectMe.Core.Topology;
 using ConnectMe.Windows.Audio;
+using ConnectMe.Windows.Updater;
 using ConnectMe.Windows.Win32;
 
 namespace ConnectMe.Windows;
@@ -27,6 +28,7 @@ public partial class MainWindow : Window
     private readonly List<UdpClient> _simSockets = new();
     private readonly CancellationTokenSource _simCts = new();
 
+    private UpdateReleaseInfo? _latestAvailableUpdate;
     private PeerDeviceNode? _selectedPeer;
     private int _simDeviceCounter;
     private int _simLocalMonitorStep;
@@ -68,7 +70,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"v1.5.0 (v1-5-0) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
+            $"v1.6.0 (v1-6-0) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -82,7 +84,10 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me v1.5.0 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
+        AppendLog($"[Sistem] Connect Me v1.6.0 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
+
+        // Otomatik GitHub güncelleme denetimi (Arka planda)
+        _ = CheckForUpdatesAsync(isManual: false);
     }
 
     private async void MainWindow_Closed(object? sender, EventArgs e)
@@ -1772,6 +1777,124 @@ public partial class MainWindow : Window
             {
                 AudioVolumeLabel.Text = $"{(int)(e.NewValue * 100)}%";
             }
+        }
+    }
+
+    private async Task CheckForUpdatesAsync(bool isManual)
+    {
+        if (isManual)
+        {
+            AppendLog("🔍 [Güncelleme] GitHub Releases üzerinden yeni sürüm denetleniyor...");
+        }
+
+        try
+        {
+            var update = await WindowsUpdateService.CheckForUpdatesAsync("1.6.0");
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (update != null)
+                {
+                    _latestAvailableUpdate = update;
+                    UpdateBadge.Visibility = Visibility.Visible;
+                    UpdateBadgeText.Text = $"🎉 Yeni Sürüm: {update.VersionTag}";
+                    AppendLog($"⭐ [Güncelleme] Yeni Connect Me sürümü bulundu: {update.VersionTag} ({update.ReleaseTitle})");
+
+                    if (isManual)
+                    {
+                        var res = MessageBox.Show(
+                            this,
+                            $"Yeni bir Connect Me sürümü mevcut!\n\n" +
+                            $"Mevcut Sürüm: v1.6.0\n" +
+                            $"Yeni Sürüm: {update.VersionTag}\n\n" +
+                            $"{update.ReleaseTitle}\n\n" +
+                            $"Şimdi otomatik olarak indirilip kurulsun mu?",
+                            "Connect Me Güncelleme",
+                            MessageBoxButton.YesNo,
+                            MessageBoxImage.Information);
+
+                        if (res == MessageBoxResult.Yes)
+                        {
+                            _ = StartWindowsUpdateAsync(update);
+                        }
+                    }
+                }
+                else
+                {
+                    UpdateBadge.Visibility = Visibility.Collapsed;
+                    if (isManual)
+                    {
+                        MessageBox.Show(
+                            this,
+                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.0).",
+                            "Connect Me Güncel",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Information);
+                    }
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            if (isManual)
+            {
+                AppendLog($"[Güncelleme Hatası] Sürüm denetlenemedi: {ex.Message}");
+            }
+        }
+    }
+
+    private async void CheckUpdateStatusBtn_Click(object sender, RoutedEventArgs e)
+    {
+        await CheckForUpdatesAsync(isManual: true);
+    }
+
+    private async void UpdateBadgeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_latestAvailableUpdate == null) return;
+        var res = MessageBox.Show(
+            this,
+            $"Connect Me {_latestAvailableUpdate.VersionTag} sürümüne güncellenecek.\n\n" +
+            $"{_latestAvailableUpdate.ReleaseTitle}\n\n" +
+            $"Uygulama arka planda indirilip otomatik olarak yeniden başlatılacak. Devam edilsin mi?",
+            "Connect Me Otomatik Güncelleyici",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (res == MessageBoxResult.Yes)
+        {
+            await StartWindowsUpdateAsync(_latestAvailableUpdate);
+        }
+    }
+
+    private async Task StartWindowsUpdateAsync(UpdateReleaseInfo update)
+    {
+        UpdateBadgeBtn.IsEnabled = false;
+        UpdateBadgeText.Text = "İndiriliyor...";
+        AppendLog($"⬇️ [Güncelleme] {update.ZipFileName} indiriliyor...");
+
+        var progress = new Progress<(int percent, long downloaded, long total)>(p =>
+        {
+            Dispatcher.InvokeAsync(() =>
+            {
+                string downMb = (p.downloaded / 1024.0 / 1024.0).ToString("0.0");
+                string totMb = (p.total / 1024.0 / 1024.0).ToString("0.0");
+                UpdateBadgeText.Text = $"%{p.percent} İndiriliyor ({downMb} MB / {totMb} MB)...";
+            });
+        });
+
+        try
+        {
+            await WindowsUpdateService.DownloadAndApplyUpdateAsync(update, progress);
+        }
+        catch (Exception ex)
+        {
+            UpdateBadgeBtn.IsEnabled = true;
+            UpdateBadgeText.Text = "Tekrar Dene";
+            MessageBox.Show(
+                this,
+                $"Otomatik güncelleme tamamlanamadı:\n{ex.Message}\n\nLütfen GitHub release sayfasından manuel indirin.",
+                "Güncelleme Hatası",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 }

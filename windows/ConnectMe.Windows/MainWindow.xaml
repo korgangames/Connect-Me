@@ -73,7 +73,7 @@
                 <WrapPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock Text="🌐 Connect Me" FontSize="18" FontWeight="Bold" Foreground="#38BDF8" VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <Border Background="#1E293B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="6,2" VerticalAlignment="Center" Margin="0,0,10,0">
-                        <TextBlock Text="v1.5.0" FontSize="11" FontWeight="Bold" Foreground="#38BDF8"/>
+                        <TextBlock Text="v1.6.0" FontSize="11" FontWeight="Bold" Foreground="#38BDF8"/>
                     </Border>
                     <Border x:Name="ActiveFocusBadge" Background="#1E3A2F" BorderBrush="#22C55E" BorderThickness="1" CornerRadius="6" Padding="8,2" Margin="0,2,8,2">
                         <TextBlock x:Name="ActiveFocusText" Text="🪟 Kontrol: Bu Bilgisayar (Yerel)" FontWeight="SemiBold" Foreground="#4ADE80" FontSize="12"/>
@@ -85,6 +85,13 @@
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock x:Name="AudioHubText" Text="🎧 Ses Merkezi: Dinliyor (42852)" Foreground="#A5B4FC" FontSize="11.5"/>
                             <Button x:Name="AudioMuteHeaderBtn" Click="AudioMuteBtn_Click" Background="Transparent" BorderThickness="0" Padding="4,0,0,0" Foreground="#C7D2FE" Content="🔊" Cursor="Hand" ToolTip="Sesi Kapat / Aç"/>
+                        </StackPanel>
+                    </Border>
+                    <!-- YENİ SÜRÜM OTOMATİK GÜNCELLEME ROZETİ -->
+                    <Border x:Name="UpdateBadge" Background="#064E3B" BorderBrush="#10B981" BorderThickness="1.5" CornerRadius="6" Padding="8,2" Margin="0,2,8,2" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="UpdateBadgeText" Text="🎉 Yeni Sürüm!" Foreground="#6EE7B7" FontWeight="SemiBold" FontSize="11.5" Margin="0,0,6,0"/>
+                            <Button x:Name="UpdateBadgeBtn" Click="UpdateBadgeBtn_Click" Background="#059669" Foreground="White" BorderThickness="0" Padding="8,2" Cursor="Hand" Content="⬇️ Şimdi Güncelle"/>
                         </StackPanel>
                     </Border>
                 </WrapPanel>
@@ -594,13 +601,18 @@
                            Foreground="#A7F3D0"
                            TextTrimming="CharacterEllipsis"
                            VerticalAlignment="Center"/>
-                <TextBlock x:Name="LocalNetworkInfoText"
-                           Grid.Column="1"
-                           Text="IP: Yükleniyor..."
-                           FontSize="11"
-                           Foreground="#8B949E"
-                           Margin="12,0,0,0"
-                           VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <Button x:Name="CheckUpdateStatusBtn"
+                            Click="CheckUpdateStatusBtn_Click"
+                            Background="#1E293B" Foreground="#38BDF8" BorderBrush="#30363D" Padding="6,1" Margin="0,0,8,0" Cursor="Hand"
+                            Content="🔄 Güncelleme Denetle"
+                            ToolTip="GitHub Releases üzerinden en son Connect Me sürümünü kontrol eder"/>
+                    <TextBlock x:Name="LocalNetworkInfoText"
+                               Text="IP: Yükleniyor..."
+                               FontSize="11"
+                               Foreground="#8B949E"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
             </Grid>
         </Border>
     </Grid>

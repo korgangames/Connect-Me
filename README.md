@@ -16,11 +16,11 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
 
 | İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64v1-5-0.zip` | [⬇️ **ConnectMe-Windows-x64v1-5-0.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.5.0/ConnectMe-Windows-x64v1-5-0.zip) |
-| 📱 **Android** | `.apk` | `ConnectMeV1-5-0.apk` | [⬇️ **ConnectMeV1-5-0.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.5.0/ConnectMeV1-5-0.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64v1-5-0.tar.gz` | [⬇️ **ConnectMe-Linux-x64v1-5-0.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.5.0/ConnectMe-Linux-x64v1-5-0.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64v1-6-0.zip` | [⬇️ **ConnectMe-Windows-x64v1-6-0.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.0/ConnectMe-Windows-x64v1-6-0.zip) |
+| 📱 **Android** | `.apk` | `ConnectMeV1-6-0.apk` | [⬇️ **ConnectMeV1-6-0.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.0/ConnectMeV1-6-0.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64v1-6-0.tar.gz` | [⬇️ **ConnectMe-Linux-x64v1-6-0.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.0/ConnectMe-Linux-x64v1-6-0.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.5.0 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.5.0)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.6.0 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.6.0)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
@@ -46,6 +46,10 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
    - Çift taraflı onaylanmış tüm cihazlar arasında anlık metin/görsel pano senkronizasyonu ve sürükle-bırak dosya paylaşımı.
 6. **🎧 Merkezi Ses Yönlendirme (Central Audio Hub — Tüm Sesler Kulaklıkta):**
    - Kulaklığınız merkez bilgisayara (Windows) takılıyken; Android telefonunuzdaki (YouTube, Spotify, oyunlar) ve Linux bilgisayarınızdaki tüm sistem/medya sesleri UDP 42852 portundan ultra-düşük gecikmeyle (<15ms) bilgisayarınıza aktarılır ve aynı kulaklıktan çalınır. Win32 native `waveOut` ile sıfır harici paket bağımlılığı!
+7. **🔄 Dahili Uygulama İçi Otomatik Güncelleyici (In-Program Auto Updater):**
+   - **Android:** GitHub Releases API üzerinden yeni sürüm denetimi, uygulama içerisinden canlı indirme yüzdesi gösterimi, `FileProvider` (`content://`) ve `REQUEST_INSTALL_PACKAGES` izniyle tek tıkla APK yükleme ekranına yönlendirme.
+   - **Windows:** Başlık çubuğunda ve durum çubuğunda sürüm denetimi, ZIP indirme ve arka planda `apply_update.cmd` ile kesintisiz kendini güncelleme ve yeniden başlatma.
+   - **Linux:** Daemon ve GUI'de sürüm kontrolü ve doğrudan indirme yönlendirmesi.
 
 ---
 

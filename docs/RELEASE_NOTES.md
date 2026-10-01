@@ -1,37 +1,31 @@
-# Connect Me v1.5.0 (v1-5-0) — Merkezi Ses Yönlendirme (Audio Hub) & Kulaklık Köprüsü
+# Connect Me v1.6.0 (v1-6-0) — Dahili Uygulama İçi Otomatik Güncelleyici (In-Program Auto Updater)
 
-Connect Me'nin tüm bağlı cihazların (Android telefon/tablet ve Linux bilgisayarlar) sistem, müzik ve medya seslerini merkez Windows bilgisayara ve ona bağlı kulaklığa sıfır-ekstra bağımlılıkla aktaran **Merkezi Ses Yönlendirme (Central Audio Hub)** özelliğini içeren yeni kararlı sürümü yayınlandı!
+Connect Me'nin manuel güncelleme zorluklarını tamamen ortadan kaldıran, GitHub Releases üzerinden yeni sürümleri doğrudan uygulama içinden denetleyip Android (APK) ve Windows ortamında **tek dokunuşla otomatik indirip kuran** yeni kararlı sürümü yayınlandı!
 
 ---
 
-### 🌟 v1.5.0 Yenilikleri ve Geliştirmeleri:
+### 🌟 v1.6.0 Yenilikleri ve Geliştirmeleri:
 
-* **🎧 Merkezi Ses Yönlendirme (Central Audio Hub):**
-  - **Kulaklık Odaklı Mimari:** Kullanıcının kulaklığı merkez bilgisayara (Windows) bağlıyken; Android telefondan video izlerken, müzik dinlerken veya Linux cihazında çalışırken tüm sesler aynı kulaklıktan pürüzsüz ve senkronize olarak duyulur.
-  - **UDP Port 42852 Yüksek Hızlı Akış:** Ses iletimi için özel tahsis edilen 42852 UDP portu üzerinden ultra-düşük gecikmeli (<15ms) 48.000 Hz 16-bit Stereo PCM (S16LE) akışı sağlanır.
+* **📱 Android Dahili Tek Tıkla Otomatik Güncelleyici (In-App Auto Updater & FileProvider):**
+  - **Sıfır Manuel İndirme Zahmeti:** Tarayıcıya gitme, GitHub arama veya indirilen APK dosyasını Dosyalar uygulamasında arayıp açma derdi sona erdi!
+  - **Arka Planda Akıllı Denetim:** Connect Me açıldığında GitHub Releases API'sini sessizce denetler. Yeni bir sürüm çıktığında ana ekranda göz alıcı koyu yeşil bir güncelleme kartı belirir.
+  - **Uygulama İçi İndirme & İlerleme Çubuğu:** "⬇️ Tek Tıkla İndir ve Kur" butonuna basıldığında APK doğrudan uygulamanın güvenli önbelleğine indirilir, yüzdelik ilerleme çubuğu ve MB sayacı canlı gösterilir.
+  - **Doğrudan Android Paket Yükleyicisi (Package Installer) Tetikleme:** İndirme tamamlandığında Android `FileProvider` ve `Intent.ACTION_VIEW` (`FLAG_GRANT_READ_URI_PERMISSION`) ile sistemin yerel güncelleme ekranı anında açılır. Kullanıcının tek yapması gereken "Güncelle" düğmesine dokunmaktır.
+  - **Bilinmeyen Kaynak İzni Koruması:** Android 8+ için `REQUEST_INSTALL_PACKAGES` izni gerekiyorsa kullanıcı nazikçe yönlendirilir ve izni açıp döndüğünde kurulum kaldığı yerden otomatik devam eder.
+  - **Manuel "🔄 Güncellemeleri Denetle" Butonu:** İstediğiniz an tek dokunuşla yeni sürüm kontrolü yapabilirsiniz.
 
-* **🪟 Windows Native Win32 WaveOut Ses Motoru (Zero Dependency):**
-  - **Sıfır Dış Kütüphane:** Hiçbir harici ses kütüphanesine ihtiyaç duymadan doğrudan Windows `winmm.dll` WaveOut API'leri üzerinden çalışır.
-  - **Dinamik Ses Karıştırma & Örnekleme:** Gelen ses paketlerini otomatik olarak algılar; frekans ve kanal değişimlerine dinamik olarak uyum sağlar.
-  - **Yazılımsal Ses Seviyesi & Mute Kontrolü:** Arayüzdeki kaydırıcı (0% - 150%) ve sessize alma (Mute) düğmesi ile gelen sesler kulaklık çıkışına zarar vermeden ölçeklenir.
-  - **Bellek Yönetimi & Havuzlama:** Ses kesintilerini (buffer underrun) önlemek için unmanaged bellek havuzu ve dairesel tampon mimarisi kullanılmıştır.
+* **🪟 Windows Dahili Otomatik Güncelleyici (Zero-Touch Self-Update):**
+  - **Canlı Güncelleme Rozeti:** Yeni sürüm yayınlandığında üst durum çubuğunda `🎉 Yeni Sürüm (v1.6.0) [⬇️ Şimdi Güncelle]` rozeti parlar.
+  - **Otomatik İndirme & Çıkartma:** Butona tıklandığında yeni `ConnectMe-Windows-x64*.zip` arşivi arka planda indirilir ve yeni `ConnectMe.exe` çıkartılır.
+  - **Kesintisiz Yeniden Başlatma (`apply_update.cmd`):** Mevcut çalışan program dosyası kilitli olduğu için hafif ve penceresiz bir geçiş komutuyla uygulama 2 saniye içinde güncellenip otomatik olarak yeniden başlatılır.
+  - **Alt Çubuk Güncelleme Butonu:** Alt bilgi çubuğuna eklenen `🔄 Güncelleme Denetle` butonu ile dilediğiniz zaman sürüm denetimi yapabilirsiniz.
 
-* **📱 Android Sistem ve Medya Sesi Yakalama (AudioPlaybackCapture API):**
-  - **Dahili Sistem Sesi Akışı (Android 10+):** `AudioPlaybackCaptureConfiguration` ve `MediaProjection` izinleri sayesinde YouTube, Spotify, oyunlar ve sistem bildirimlerinin sesi mikrofona ihtiyaç duymadan doğrudan dijital olarak yakalanıp aktarılır.
-  - **Akıllı Mikrofon Geri Uyumluluğu:** Sistem sesi izni verilmeyen eski cihazlarda otomatik olarak düşük gecikmeli PCM mikrofon yakalamaya geçer.
-  - **Tek Dokunuşla Başlatma:** Android arayüzüne eklenen "🎧 Kulaklığa Aktarımı Başlat" kartı ile tek dokunuşla akış kontrolü sağlanır.
-
-* **🐧 Linux (Nobara / KDE Plasma) PipeWire & PulseAudio Entegrasyonu:**
-  - **Yerel PipeWire / PulseAudio Akışı:** Linux üzerinde `pw-record` (PipeWire) veya `parec` (PulseAudio) kullanılarak varsayılan ses çıkışı yakalanır ve UDP 42852 portundan Windows ses merkezine aktarılır.
-  - **Linux GUI Ses Sekmesi:** Arayüze eklenen "🎧 Ses Yönlendirme" sekmesi üzerinden tek tıkla ses akışı başlatılıp durdurulabilir.
-
-* **🖥️ Windows Arayüz Geliştirmeleri:**
-  - **Üst Çubuk Ses Rozeti:** Üst durum çubuğunda anlık ses akışı durumu, veri aktarımı ve kaynak cihaz bilgisi (`🎧 Aktif: 192.168.1.106`) yeşil canlı rozetle gösterilir.
-  - **Özel Ses Merkezi Sekmesi:** Ses seviyesi ayarı, Mute anahtarı ve tanılama sayaçlarını içeren yeni geniş çalışma alanı sekmesi eklendi.
+* **🐧 Linux (Nobara / KDE Plasma) Güncelleme Bildirimi:**
+  - Linux GUI arayüzüne eklenen otomatik kontrol sistemiyle yeni bir release çıktığında buton `🎉 v1.6.0 Mevcut!` olarak güncellenir ve tek tıkla en son sürüme yönlendirir.
 
 ---
 
 ### 📦 İndirilebilir Paketler (Yalnızca Sürümlü Dosya Adları):
-1. **Windows:** `ConnectMe-Windows-x64v1-5-0.zip` — Çıkartın ve `ConnectMe.exe`'ye çift tıklayın (.NET gerektirmez, standalone).
-2. **Android:** `ConnectMeV1-5-0.apk` — Doğrudan Android cihazınıza kurun.
-3. **Linux:** `ConnectMe-Linux-x64v1-5-0.tar.gz` — Nobara / KDE Plasma için bağımsız paket (`start-connectme.sh` veya `install-desktop.sh`).
+1. **Windows:** `ConnectMe-Windows-x64v1-6-0.zip` — Çıkartın ve `ConnectMe.exe`'ye çift tıklayın (.NET gerektirmez, standalone).
+2. **Android:** `ConnectMeV1-6-0.apk` — Doğrudan Android cihazınıza kurun (veya mevcut uygulamadan otomatik güncelleyin!).
+3. **Linux:** `ConnectMe-Linux-x64v1-6-0.tar.gz` — Nobara / KDE Plasma için bağımsız paket (`start-connectme.sh` veya `install-desktop.sh`).
