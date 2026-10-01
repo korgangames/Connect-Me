@@ -45,6 +45,11 @@ Android paketi, 120Hz donanım hızlandırmalı şeffaf imleç bindirmesi (*over
    * **2. İzin (Erişilebilirlik Servisi):** Bilgisayardan gelen fare tıklamalarını, kaydırmaları ve klavye girişlerini ekrana aktarmak için gereklidir.
 4. İki izni de açtıktan sonra Android cihazınız eşleşmeye hazırdır. Üst kısımda 6 haneli kodunuzu görebilirsiniz.
 
+> [!NOTE]
+> **Google Play Protect Uyarısı Görünürse:**  
+> Connect Me açık kaynaklı bir proje olup doğrudan GitHub üzerinden bağımsız APK olarak yüklendiği için Play Protect tarafından "Bilinmeyen uygulama" olarak karşılanabilir.  
+> Ekranda uyarı çıktığında: **"Daha fazla ayrıntı" (More details)** seçeneğine dokunun ve ardından **"Yine de yükle" (Install anyway)** butonuna basın. Uygulama telefonunuzda güvenle çalışacaktır.
+
 ---
 
 ## 🐧 Linux (Nobara / Fedora / KDE Plasma / Wayland) Kurulumu

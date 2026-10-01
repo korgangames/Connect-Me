@@ -15,9 +15,24 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        create("release") {
+            val ksFile = rootProject.file("connectme-release.jks")
+            if (ksFile.exists()) {
+                storeFile = ksFile
+                storePassword = "connectmepassword123"
+                keyAlias = "connectme"
+                keyPassword = "connectmepassword123"
+            } else {
+                initWith(getByName("debug"))
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
