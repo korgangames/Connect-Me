@@ -84,11 +84,48 @@ class ConnectMeService : Service() {
         var onStateUpdated: (() -> Unit)? = null
 
         fun log(msg: String) {
-            val line = "${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $msg"
+            val line = "${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $msg"
             telemetryLogs.add(0, line)
-            while (telemetryLogs.size > 100) {
+            while (telemetryLogs.size > 200) {
                 telemetryLogs.removeAt(telemetryLogs.size - 1)
             }
+            try {
+                instance?.let { ctx ->
+                    val logFile = java.io.File(ctx.filesDir, "connectme_android.log")
+                    if (logFile.length() > 3 * 1024 * 1024) {
+                        val oldFile = java.io.File(ctx.filesDir, "connectme_android.old.log")
+                        logFile.renameTo(oldFile)
+                    }
+                    logFile.appendText("$line\n")
+                }
+            } catch (_: Exception) {}
+            android.util.Log.i("ConnectMe", msg)
+            onStateUpdated?.invoke()
+        }
+
+        fun getFullLogText(context: Context): String {
+            val sb = StringBuilder()
+            try {
+                val logFile = java.io.File(context.filesDir, "connectme_android.log")
+                if (logFile.exists()) {
+                    sb.append(logFile.readText())
+                }
+            } catch (_: Exception) {}
+            if (sb.isEmpty()) {
+                val reversed = telemetryLogs.toList().reversed()
+                sb.append(reversed.joinToString("\n"))
+            }
+            return sb.toString()
+        }
+
+        fun clearLogs(context: Context) {
+            telemetryLogs.clear()
+            try {
+                val logFile = java.io.File(context.filesDir, "connectme_android.log")
+                if (logFile.exists()) {
+                    logFile.writeText("[Connect Me Android Günlüğü Sıfırlandı]\n")
+                }
+            } catch (_: Exception) {}
             onStateUpdated?.invoke()
         }
     }
@@ -605,7 +642,7 @@ class ConnectMeService : Service() {
                             put("senderName", localDeviceName)
                         }
                         TcpFrameCodec.writeFrame(output, rej)
-                        log("[Güvenlik] ⚠️ '$senderName' hatalı 6 haneli kod denedi ($submittedPin).")
+                        log("[Güvenlik] ⚠️ '$senderName' hatalı 6 haneli kod denedi (Girilen: $submittedPin, Beklenen: $localPairingPin).")
                     }
                     onStateUpdated?.invoke()
                 }

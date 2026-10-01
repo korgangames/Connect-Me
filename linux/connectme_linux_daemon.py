@@ -337,7 +337,20 @@ class ConnectMeLinuxNode:
         self.udp_sock: Optional[socket.socket] = None
 
     def log(self, text: str) -> None:
-        print(text)
+        line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
+        print(line)
+        try:
+            log_dir = Path.home() / ".config" / "connectme"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / "connectme.log"
+            if log_file.exists() and log_file.stat().st_size > 3 * 1024 * 1024:
+                old_file = log_dir / "connectme.old.log"
+                log_file.rename(old_file)
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"{line}\n")
+        except Exception:
+            pass
+
         if self.on_log:
             try:
                 self.on_log(text)

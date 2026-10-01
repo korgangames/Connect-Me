@@ -24,6 +24,10 @@ local.properties
 *.keystore
 *.jks
 
+# Python
+__pycache__/
+*.py[cod]
+
 # IDE & OS
 .idea/
 .vscode/

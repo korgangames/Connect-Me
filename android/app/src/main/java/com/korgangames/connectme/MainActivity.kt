@@ -1,6 +1,7 @@
 package com.korgangames.connectme
 
 import android.Manifest
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -324,11 +325,59 @@ class MainActivity : AppCompatActivity() {
         // Live Telemetry Card
         val logCard = createCardLayout()
         logCard.addView(createSectionTitle("📡 Canlı Protokol Günlüğü"))
+
+        val exportBtn = createStyledButton("📤 Logları Dışa Aktar / Paylaş", "#2563EB") {
+            exportAndShareLogs()
+        }
+        logCard.addView(exportBtn)
+
+        val logBtnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val rlp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            rlp.setMargins(0, 12, 0, 0)
+            layoutParams = rlp
+        }
+        val copyLogsBtn = Button(this).apply {
+            text = "📋 Panoya Kopyala"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1F2937"))
+                cornerRadius = 18f
+                setStroke(1, Color.parseColor("#374151"))
+            }
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            lp.setMargins(0, 0, 8, 0)
+            layoutParams = lp
+            setOnClickListener { copyLogsToClipboard() }
+        }
+        val clearLogsBtn = Button(this).apply {
+            text = "🧹 Temizle"
+            isAllCaps = false
+            setTextColor(Color.parseColor("#F87171"))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1F2937"))
+                cornerRadius = 18f
+                setStroke(1, Color.parseColor("#374151"))
+            }
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            lp.setMargins(8, 0, 0, 0)
+            layoutParams = lp
+            setOnClickListener {
+                ConnectMeService.clearLogs(this@MainActivity)
+                refreshUiState()
+                Toast.makeText(this@MainActivity, "🧹 Log geçmişi temizlendi", Toast.LENGTH_SHORT).show()
+            }
+        }
+        logBtnRow.addView(copyLogsBtn)
+        logBtnRow.addView(clearLogsBtn)
+        logCard.addView(logBtnRow)
+
         logViewText = TextView(this).apply {
             textSize = 11.5f
             typeface = Typeface.MONOSPACE
             setTextColor(Color.parseColor("#A7F3D0"))
-            setPadding(0, 10, 0, 6)
+            setPadding(0, 14, 0, 6)
         }
         logCard.addView(logViewText)
         root.addView(logCard)
@@ -461,5 +510,47 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Kapat", null)
             .show()
+    }
+
+    private fun copyLogsToClipboard() {
+        val logContent = ConnectMeService.getFullLogText(this)
+        if (logContent.isBlank()) {
+            Toast.makeText(this, "Kopyalanacak log kaydı bulunamadı", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("ConnectMe Android Logs", logContent)
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(this, "📋 Tüm loglar panoya kopyalandı!", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun exportAndShareLogs() {
+        val logContent = ConnectMeService.getFullLogText(this)
+        val report = buildString {
+            appendLine("=== Connect Me Android Tanılama Günlüğü ===")
+            appendLine("Tarih: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
+            appendLine("Uygulama Sürümü: v1.3.0")
+            appendLine("Cihaz Modeli: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
+            appendLine("Android Sürümü: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            appendLine("Erişilebilirlik Hizmeti: ${if (CursorAccessibilityService.instance != null) "AÇIK ✅" else "KAPALI ❌"}")
+            appendLine("Overlay (Üste Çizme) İzni: ${if (Settings.canDrawOverlays(this@MainActivity)) "AÇIK ✅" else "KAPALI ❌"}")
+            appendLine("Ekran Çözünürlüğü: ${resources.displayMetrics.widthPixels}x${resources.displayMetrics.heightPixels}")
+            appendLine("Yerel PIN: ${ConnectMeService.instance?.localPairingPin ?: "Yok"}")
+            appendLine("Keşfedilen Cihaz Sayısı: ${ConnectMeService.discoveredPeers.size}")
+            appendLine("===========================================")
+            appendLine()
+            if (logContent.isBlank()) {
+                appendLine("[Henüz log kaydı yok]")
+            } else {
+                appendLine(logContent)
+            }
+        }
+
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.3.0.txt")
+            putExtra(Intent.EXTRA_TEXT, report)
+        }
+        startActivity(Intent.createChooser(sendIntent, "Connect Me Loglarını Dışa Aktar / Paylaş"))
     }
 }

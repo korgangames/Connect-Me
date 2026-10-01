@@ -1446,8 +1446,38 @@ public partial class MainWindow : Window
         }
     }
 
+    private static readonly object _logLock = new();
+    private static readonly string _logFilePath = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "ConnectMe",
+        "connectme.log");
+
     private void AppendLog(string message)
     {
+        string timestamped = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
+
+        try
+        {
+            string dir = System.IO.Path.GetDirectoryName(_logFilePath)!;
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+            lock (_logLock)
+            {
+                if (File.Exists(_logFilePath) && new FileInfo(_logFilePath).Length > 5 * 1024 * 1024)
+                {
+                    string oldPath = System.IO.Path.Combine(dir, "connectme.old.log");
+                    File.Move(_logFilePath, oldPath, true);
+                }
+                File.AppendAllText(_logFilePath, timestamped + Environment.NewLine);
+            }
+        }
+        catch
+        {
+            // Logging failure should never crash the UI
+        }
+
         Dispatcher.InvokeAsync(() =>
         {
             LatestLogTickerText.Text = message;
@@ -1457,6 +1487,142 @@ public partial class MainWindow : Window
                 TelemetryLogListBox.Items.RemoveAt(TelemetryLogListBox.Items.Count - 1);
             }
         });
+    }
+
+    private void CopyLogsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string content = File.Exists(_logFilePath)
+                ? File.ReadAllText(_logFilePath)
+                : string.Join(Environment.NewLine, TelemetryLogListBox.Items.Cast<object>().Select(x => x.ToString()));
+
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                AppendLog("[Uygulama] Panoya kopyalanacak log kaydı bulunamadı.");
+                return;
+            }
+
+            Clipboard.SetText(content);
+            AppendLog("📋 [Log] Tüm tanılama logları panoya kopyalandı!");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Hata] Loglar panoya kopyalanamadı: {ex.Message}");
+        }
+    }
+
+    private void ExportLogsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Connect Me Tanılama Günlüğünü Dışa Aktar",
+                Filter = "Metin Dosyaları (*.txt;*.log)|*.txt;*.log|Tüm Dosyalar (*.*)|*.*",
+                FileName = $"ConnectMe-Windows-Logs-{DateTime.Now:yyyyMMdd-HHmmss}.txt"
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("=== Connect Me Windows Tanılama Günlüğü ===");
+                sb.AppendLine($"Oluşturulma Tarihi: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                sb.AppendLine($"Sürüm: v1.3.0");
+                sb.AppendLine($"İşletim Sistemi: {Environment.OSVersion} ({(Environment.Is64BitOperatingSystem ? "64-bit" : "32-bit")})");
+                sb.AppendLine($"Makine Adı: {Environment.MachineName}");
+                sb.AppendLine($"Monitör Sayısı: {_network.LocalMonitors.Count}");
+                sb.AppendLine($"Aktif Cihaz PIN: {_network.PairingPin}");
+                sb.AppendLine($"Kayıtlı Güvenilir Cihaz Sayısı: {_network.TrustStore.GetAllTrustedDevices().Count}");
+                sb.AppendLine("===========================================");
+                sb.AppendLine();
+
+                if (File.Exists(_logFilePath))
+                {
+                    sb.Append(File.ReadAllText(_logFilePath));
+                }
+                else
+                {
+                    foreach (var item in TelemetryLogListBox.Items)
+                    {
+                        sb.AppendLine(item?.ToString());
+                    }
+                }
+
+                File.WriteAllText(dlg.FileName, sb.ToString());
+                AppendLog($"💾 [Dışa Aktar] Log dosyası başarıyla kaydedildi: '{dlg.FileName}'");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Hata] Log dışa aktarılamadı: {ex.Message}");
+        }
+    }
+
+    private void OpenLogFileBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string dir = System.IO.Path.GetDirectoryName(_logFilePath)!;
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+            if (!File.Exists(_logFilePath))
+            {
+                File.WriteAllText(_logFilePath, $"[Connect Me Log Başlangıcı] {DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}");
+            }
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = _logFilePath,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Hata] Log dosyası açılamadı: {ex.Message}");
+        }
+    }
+
+    private void OpenLogFolderBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string dir = System.IO.Path.GetDirectoryName(_logFilePath)!;
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = dir,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Hata] Log klasörü açılamadı: {ex.Message}");
+        }
+    }
+
+    private void ClearLogsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            TelemetryLogListBox.Items.Clear();
+            lock (_logLock)
+            {
+                if (File.Exists(_logFilePath))
+                {
+                    File.WriteAllText(_logFilePath, $"[Connect Me Günlüğü Sıfırlandı] {DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}");
+                }
+            }
+            AppendLog("🧹 [Temizle] Canlı telemetri ve log dosyası temizlendi.");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Hata] Log temizlenemedi: {ex.Message}");
+        }
     }
 
     private static string GetPlatformIcon(string platform)

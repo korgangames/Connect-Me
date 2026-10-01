@@ -12,6 +12,8 @@ Korgan Games (v1.3 Tam Linux Entegrasyonu)
 
 import os
 import sys
+import shutil
+import datetime
 import threading
 import subprocess
 from pathlib import Path
@@ -229,6 +231,16 @@ class ConnectMeLinuxGui:
     def _build_tab_logs(self):
         tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(tab, text="📊 Canlı Tanılama & Ağ")
+
+        # Üst Araç Çubuğu
+        btn_bar = ttk.Frame(tab)
+        btn_bar.pack(fill=tk.X, pady=(0, 6))
+
+        ttk.Button(btn_bar, text="📋 Panoya Kopyala", command=self._copy_logs_to_clipboard).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_bar, text="💾 Farklı Kaydet (Dışa Aktar)...", style="Success.TButton", command=self._export_logs).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_bar, text="📄 Log Dosyasını Aç", command=self._open_log_file).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_bar, text="📂 Klasörü Aç", command=self._open_log_folder).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_bar, text="🧹 Temizle", command=self._clear_logs).pack(side=tk.RIGHT, padx=3)
 
         self.log_box = tk.Text(tab, bg="#020617", fg="#38BDF8", font=("Consolas", 9),
                                bd=0, state=tk.DISABLED, highlightthickness=1, highlightbackground="#1E293B")
@@ -473,6 +485,92 @@ X-GNOME-Autostart-enabled=true
             self.log_box.see(tk.END)
             self.log_box.config(state=tk.DISABLED)
         self.root.after(0, _append)
+
+    def _get_full_logs(self) -> str:
+        log_file = Path.home() / ".config" / "connectme" / "connectme.log"
+        if log_file.exists():
+            try:
+                with open(log_file, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+        if hasattr(self, "log_box"):
+            return self.log_box.get("1.0", tk.END).strip()
+        return ""
+
+    def _copy_logs_to_clipboard(self):
+        content = self._get_full_logs()
+        if not content:
+            messagebox.showinfo("Connect Me", "Kopyalanacak log kaydı bulunamadı.")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(content)
+        self._log("📋 [Log] Tüm tanılama logları panoya kopyalandı!")
+
+    def _export_logs(self):
+        content = self._get_full_logs()
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = filedialog.asksaveasfilename(
+            title="Connect Me Linux Tanılama Günlüğünü Dışa Aktar",
+            initialfile=f"ConnectMe-Linux-Logs-{timestamp}.txt",
+            defaultextension=".txt",
+            filetypes=[("Metin Dosyaları", "*.txt;*.log"), ("Tüm Dosyalar", "*.*")]
+        )
+        if not target:
+            return
+        try:
+            report = (
+                f"=== Connect Me Linux Tanılama Günlüğü ===\n"
+                f"Oluşturulma Tarihi: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Sürüm: v1.3.0\n"
+                f"Cihaz: {self.node.device_name} ({self.node.device_id})\n"
+                f"Platform: {self.node.platform}\n"
+                f"Aktif Girdi Enjektörü: {self.node.injector.mode.upper()}\n"
+                f"Monitör Sayısı: {len(self.node.topology.monitors)}\n"
+                f"Yerel PIN: {self.node.local_pin}\n"
+                f"Kayıtlı Güvenilir Cihaz Sayısı: {len(self.node.trusted_devices)}\n"
+                f"===========================================\n\n"
+                f"{content}\n"
+            )
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(report)
+            self._log(f"💾 [Dışa Aktar] Log dosyası başarıyla kaydedildi: '{target}'")
+            messagebox.showinfo("Connect Me", f"Loglar başarıyla kaydedildi:\n{target}")
+        except Exception as ex:
+            messagebox.showerror("Hata", f"Log kaydedilemedi: {ex}")
+
+    def _open_log_file(self):
+        log_file = Path.home() / ".config" / "connectme" / "connectme.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        if not log_file.exists():
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write(f"[Connect Me Linux Günlüğü Başlangıcı] v1.3.0\n")
+        try:
+            subprocess.Popen(["xdg-open", str(log_file)])
+        except Exception as ex:
+            self._log(f"[Hata] Log dosyası açılamadı: {ex}")
+
+    def _open_log_folder(self):
+        log_dir = Path.home() / ".config" / "connectme"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.Popen(["xdg-open", str(log_dir)])
+        except Exception as ex:
+            self._log(f"[Hata] Klasör açılamadı: {ex}")
+
+    def _clear_logs(self):
+        if hasattr(self, "log_box"):
+            self.log_box.config(state=tk.NORMAL)
+            self.log_box.delete("1.0", tk.END)
+            self.log_box.config(state=tk.DISABLED)
+        log_file = Path.home() / ".config" / "connectme" / "connectme.log"
+        try:
+            if log_file.exists():
+                with open(log_file, "w", encoding="utf-8") as f:
+                    f.write(f"[Connect Me Linux Günlüğü Sıfırlandı]\n")
+            self._log("🧹 [Temizle] Canlı telemetri ve log dosyası temizlendi.")
+        except Exception as ex:
+            self._log(f"[Hata] Log temizlenemedi: {ex}")
 
 
 def main():

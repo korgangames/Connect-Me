@@ -1138,7 +1138,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                             SenderName = LocalDeviceName
                         };
                         await TcpFrameCodec.WriteFrameAsync(stream, rej, null, 0, ct).ConfigureAwait(false);
-                        Log($"[Güvenlik] ⚠️ '{peer.DeviceName}' ({remoteIp}) hatalı PIN kodu denedi ({submittedPin}).");
+                        Log($"[Güvenlik] ⚠️ '{peer.DeviceName}' ({remoteIp}) hatalı PIN kodu denedi (Girilen: '{submittedPin}', Beklenen: '{PairingPin}').");
                     }
                     break;
                 }

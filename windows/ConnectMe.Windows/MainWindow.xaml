@@ -409,7 +409,58 @@
                 <!-- SEKME 3: CANLI TELEMETRİ & AĞ GÜNLÜĞÜ -->
                 <TabItem Header="📡 Canlı Günlük (Log)">
                     <Grid Margin="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <WrapPanel Grid.Row="0" HorizontalAlignment="Right" Margin="0,0,0,6">
+                            <Button x:Name="CopyLogsBtn"
+                                    Content="📋 Panoya Kopyala"
+                                    Padding="10,4"
+                                    Margin="0,0,6,0"
+                                    Background="#21262D"
+                                    Foreground="#F0F6FC"
+                                    BorderBrush="#30363D"
+                                    Cursor="Hand"
+                                    Click="CopyLogsBtn_Click"/>
+                            <Button x:Name="ExportLogsBtn"
+                                    Content="💾 Farklı Kaydet (Dışa Aktar)..."
+                                    Padding="10,4"
+                                    Margin="0,0,6,0"
+                                    Background="#238636"
+                                    Foreground="#FFFFFF"
+                                    BorderBrush="#2EA043"
+                                    Cursor="Hand"
+                                    Click="ExportLogsBtn_Click"/>
+                            <Button x:Name="OpenLogFileBtn"
+                                    Content="📄 Log Dosyasını Aç (Notepad)"
+                                    Padding="10,4"
+                                    Margin="0,0,6,0"
+                                    Background="#21262D"
+                                    Foreground="#F0F6FC"
+                                    BorderBrush="#30363D"
+                                    Cursor="Hand"
+                                    Click="OpenLogFileBtn_Click"/>
+                            <Button x:Name="OpenLogFolderBtn"
+                                    Content="📂 Klasörü Aç"
+                                    Padding="10,4"
+                                    Margin="0,0,6,0"
+                                    Background="#21262D"
+                                    Foreground="#F0F6FC"
+                                    BorderBrush="#30363D"
+                                    Cursor="Hand"
+                                    Click="OpenLogFolderBtn_Click"/>
+                            <Button x:Name="ClearLogsBtn"
+                                    Content="🧹 Temizle"
+                                    Padding="10,4"
+                                    Background="#21262D"
+                                    Foreground="#F85149"
+                                    BorderBrush="#30363D"
+                                    Cursor="Hand"
+                                    Click="ClearLogsBtn_Click"/>
+                        </WrapPanel>
                         <ListBox x:Name="TelemetryLogListBox"
+                                 Grid.Row="1"
                                  Background="#0D1117"
                                  BorderBrush="#21262D"
                                  Foreground="#A7F3D0"
