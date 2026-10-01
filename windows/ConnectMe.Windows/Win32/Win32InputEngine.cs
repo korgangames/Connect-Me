@@ -139,9 +139,9 @@ public sealed class Win32InputEngine : IDisposable
         ActiveRemotePeer = peer;
         var primary = _topology.LocalMonitors.FirstOrDefault(m => m.IsPrimary)
                       ?? _topology.LocalMonitors.FirstOrDefault()
-                      ?? new PhysicalMonitorDescriptor("P", 0, 0, 1920, 1080, true);
-        _anchorX = primary.X + primary.Width / 2;
-        _anchorY = primary.Y + primary.Height / 2;
+                      ?? new PhysicalMonitorDescriptor { MonitorId = "P", Name = "Monitör P", VirtualX = 0, VirtualY = 0, Width = 1920, Height = 1080, IsPrimary = true };
+        _anchorX = primary.VirtualX + primary.Width / 2;
+        _anchorY = primary.VirtualY + primary.Height / 2;
         SetCursorPos(_anchorX, _anchorY);
 
         _network.SendEdgeHandOff(peer, targetEntranceEdge, normalizedPosition);
