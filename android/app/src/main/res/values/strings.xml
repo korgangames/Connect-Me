@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Connect Me v1.6.1</string>
+    <string name="app_name">Connect Me v1.6.2</string>
     <string name="accessibility_service_label">Connect Me — Fare &amp; Klavye Köprüsü</string>
     <string name="accessibility_service_description">Windows ve Linux (Nobara) bilgisayarınızdan ekran kenarına geçtiğinizde Android cihazınızı tek klavye ve fare ile kontrol etmenizi sağlar.</string>
 </resources>

@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
 Connect Me — Nobara Linux (KDE Plasma Wayland / wlroots / X11) Tam Entegre Sistem Servisi & KVM Motoru
-Korgan Games (v1.3 Tam Linux Entegrasyonu)
+Korgan Games (v1.6.2 Çoklu Monitör, Yüksek Performanslı Kernel Sanal Girdi & Çift Taraflı PIN)
 
 Özellikler:
-1. Çoklu Monitör Otomatik Algılama:
+1. Çoklu Monitör Otomatik Algılama & 2D Topoloji:
    - KDE Plasma Wayland (`kscreen-doctor -j`)
    - wlroots / Sway / Hyprland (`wlr-randr --json`)
    - X11 / XWayland (`xrandr --query`)
-2. Akıllı Kenar Topolojisi & İç Birleşim (Internal Seam) Koruması:
-   - Linux'un kendi fiziksel ekranları arasında serbest geçiş, dış kenarlarda Windows/Android'e geçiş.
-3. Çift Yönlü Girdi Enjeksiyonu (Linux Virtual Input):
-   - /dev/uinput (Yerel Linux sanal fare/klavye sürücüsü)
-   - ydotool (Nobara / Wayland komut tabanlı enjektör)
-   - xdotool (X11 / XWayland geri uyumluluk)
-4. Çift Yönlü Evrensel Pano (Universal Clipboard):
-   - wl-copy / wl-paste & xclip ile anlık arka plan senkronizasyonu
-5. Ortak Cep (Drop Shelf) TCP Dosya Akışı:
-   - Windows ve Android ile doğrudan TCP dosya gönderme ve alma
-6. Çift Taraflı 6 Haneli PIN & "Bu Cihaza Güven (Sıfır-PIN Otomatik Bağlantı)"
+2. Çift Yönlü UDP Keşif (Discovery Dinleyici + Yayıncı):
+   - UDP 42849 portunda tüm Windows, Android ve Linux cihazlarını canlı algılama
+3. 4 Kademeli Yüksek Performanslı Linux Girdi Enjeksiyonu (Linux Virtual Input):
+   - Tier 1: evdev.UInput (Kernel seviyesinde sanal USB fare/klavye, <0.2ms gecikme, KDE Wayland doğrudan tanır)
+   - Tier 2: /dev/uinput raw fcntl ioctl (Harici kütüphane gerektirmeyen çekirdek sürücüsü)
+   - Tier 3: ydotoold otomatik başlatma ve soket üzerinden kontrol
+   - Tier 4: xdotool (X11 / XWayland geri uyumluluk)
+4. Kesintisiz Çift Yönlü Kenar Geçişi (Windows <-> Nobara Linux):
+   - İmleç Linux ekranına geçtiğinde sanal koordinat takibi
+   - İmleç Linux'un sol/dış kenarına çarptığında TCP/UDP EDGE_RETURN ile Windows'a anında dönüş
+5. Güvenli Çift Taraflı 6 Haneli PIN & Gerçek Karşılıklı Eşleşme:
+   - İki taraf da birbirinin kodunu girmeden bağlantı kurulmaz, güvenilirlik erken kaydedilmez
+6. Çift Yönlü Evrensel Pano & Ortak Cep (Drop Shelf)
 """
 
 import json
@@ -38,7 +40,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -258,27 +260,147 @@ class LinuxMultiMonitorTopology:
 
 
 class LinuxInputInjector:
-    """Hardware input injector supporting ydotool (Wayland/Nobara), uinput, and xdotool (X11)."""
+    """
+    High-performance Linux input injector with 4 fallback tiers:
+    1. evdev.UInput (Linux kernel virtual device - <0.2ms latency, recognized by KDE Wayland as real mouse)
+    2. Pure-Python /dev/uinput ioctl device (zero external dependencies)
+    3. ydotoold daemon + ydotool (Wayland compatible with auto-starting daemon)
+    4. xdotool (X11 / XWayland compatibility)
+    """
 
-    def __init__(self) -> None:
+    def __init__(self, on_log: Optional[Callable[[str], None]] = None) -> None:
         self.mode = "none"
+        self.on_log = on_log
+        self.evdev_device = None
+        self.uinput_fd = None
+        self._init_injector()
+
+    def _init_injector(self) -> None:
+        # Tier 1: Try evdev module
+        try:
+            import evdev
+            from evdev import UInput, ecodes
+            cap = {
+                ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL, ecodes.REL_HWHEEL],
+                ecodes.EV_KEY: [
+                    ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE,
+                    ecodes.BTN_SIDE, ecodes.BTN_EXTRA,
+                    ecodes.KEY_ESC, ecodes.KEY_ENTER, ecodes.KEY_BACKSPACE, ecodes.KEY_TAB,
+                    ecodes.KEY_SPACE, ecodes.KEY_LEFTSHIFT, ecodes.KEY_LEFTCTRL, ecodes.KEY_LEFTALT,
+                    ecodes.KEY_LEFTMETA, ecodes.KEY_UP, ecodes.KEY_DOWN, ecodes.KEY_LEFT, ecodes.KEY_RIGHT,
+                    ecodes.KEY_DELETE, ecodes.KEY_HOME, ecodes.KEY_END, ecodes.KEY_PAGEUP, ecodes.KEY_PAGEDOWN
+                ]
+            }
+            self.evdev_device = UInput(cap, name="Connect-Me-Virtual-Mouse", version=0x1)
+            self.mode = "evdev"
+            return
+        except Exception:
+            self.evdev_device = None
+
+        # Tier 2: Try native /dev/uinput via fcntl
+        try:
+            if os.path.exists("/dev/uinput") and os.access("/dev/uinput", os.W_OK):
+                self._init_raw_uinput()
+                if self.uinput_fd is not None:
+                    self.mode = "uinput_raw"
+                    return
+        except Exception:
+            pass
+
+        # Tier 3: Try ydotool with ydotoold auto-start
         if shutil.which("ydotool"):
+            self._ensure_ydotoold()
             self.mode = "ydotool"
-        elif shutil.which("xdotool"):
+            return
+
+        # Tier 4: Fallback to xdotool
+        if shutil.which("xdotool"):
             self.mode = "xdotool"
-        elif os.path.exists("/dev/uinput") and os.access("/dev/uinput", os.W_OK):
-            self.mode = "uinput"
+            return
+
+    def _init_raw_uinput(self) -> None:
+        try:
+            import fcntl
+            UI_SET_EVBIT = 0x40045564
+            UI_SET_KEYBIT = 0x40045565
+            UI_SET_RELBIT = 0x40045566
+            UI_DEV_CREATE = 0x5501
+
+            fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+            fcntl.ioctl(fd, UI_SET_EVBIT, 0x01)  # EV_KEY
+            fcntl.ioctl(fd, UI_SET_EVBIT, 0x02)  # EV_REL
+            fcntl.ioctl(fd, UI_SET_RELBIT, 0x00)  # REL_X
+            fcntl.ioctl(fd, UI_SET_RELBIT, 0x01)  # REL_Y
+            fcntl.ioctl(fd, UI_SET_RELBIT, 0x08)  # REL_WHEEL
+            fcntl.ioctl(fd, UI_SET_KEYBIT, 0x110)  # BTN_LEFT
+            fcntl.ioctl(fd, UI_SET_KEYBIT, 0x111)  # BTN_RIGHT
+            fcntl.ioctl(fd, UI_SET_KEYBIT, 0x112)  # BTN_MIDDLE
+
+            name = b"Connect-Me-Mouse\x00".ljust(80, b"\x00")
+            input_id = struct.pack("<HHHH", 0x03, 0x1234, 0x5678, 1)  # BUS_USB
+            uinput_user_dev = name + input_id + b"\x00" * (4 + 64 * 4 * 4)
+            os.write(fd, uinput_user_dev)
+            fcntl.ioctl(fd, UI_DEV_CREATE)
+            self.uinput_fd = fd
+        except Exception:
+            self.uinput_fd = None
+
+    def _write_raw_event(self, ev_type: int, code: int, value: int) -> None:
+        if self.uinput_fd is None:
+            return
+        try:
+            # struct input_event: timeval (sec: 8B, usec: 8B), type: 2B, code: 2B, value: 4B
+            pkt = struct.pack("@qqHHi", 0, 0, ev_type, code, value)
+            os.write(self.uinput_fd, pkt)
+        except Exception:
+            pass
+
+    def _ensure_ydotoold(self) -> None:
+        res = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, text=True)
+        if res.returncode != 0:
+            try:
+                subprocess.run(["systemctl", "--user", "start", "ydotoold"], capture_output=True, timeout=1.5)
+            except Exception:
+                pass
+            res2 = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, text=True)
+            if res2.returncode != 0 and shutil.which("ydotoold"):
+                try:
+                    sock_path = "/tmp/.ydotoold_socket"
+                    subprocess.Popen(["ydotoold", f"--socket-path={sock_path}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    os.environ["YDOTOOL_SOCKET"] = sock_path
+                    time.sleep(0.2)
+                except Exception:
+                    pass
 
     def move_relative(self, dx: int, dy: int) -> None:
-        if self.mode == "ydotool":
+        if self.mode == "evdev" and self.evdev_device:
+            import evdev
+            from evdev import ecodes
+            self.evdev_device.write(ecodes.EV_REL, ecodes.REL_X, dx)
+            self.evdev_device.write(ecodes.EV_REL, ecodes.REL_Y, dy)
+            self.evdev_device.syn()
+        elif self.mode == "uinput_raw" and self.uinput_fd:
+            self._write_raw_event(0x02, 0x00, dx)  # EV_REL, REL_X
+            self._write_raw_event(0x02, 0x01, dy)  # EV_REL, REL_Y
+            self._write_raw_event(0x00, 0x00, 0)   # EV_SYN, SYN_REPORT
+        elif self.mode == "ydotool":
             subprocess.run(["ydotool", "mousemove", "-x", str(dx), "-y", str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "xdotool":
             subprocess.run(["xdotool", "mousemove_relative", "--", str(dx), str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def mouse_button(self, btn: int, is_pressed: bool) -> None:
         # btn: 1=Left, 2=Right, 3=Middle
-        act = "down" if is_pressed else "up"
-        if self.mode == "ydotool":
+        if self.mode == "evdev" and self.evdev_device:
+            import evdev
+            from evdev import ecodes
+            code = ecodes.BTN_LEFT if btn == BUTTON_LEFT else (ecodes.BTN_RIGHT if btn == BUTTON_RIGHT else ecodes.BTN_MIDDLE)
+            self.evdev_device.write(ecodes.EV_KEY, code, 1 if is_pressed else 0)
+            self.evdev_device.syn()
+        elif self.mode == "uinput_raw" and self.uinput_fd:
+            code = 0x110 if btn == BUTTON_LEFT else (0x111 if btn == BUTTON_RIGHT else 0x112)
+            self._write_raw_event(0x01, code, 1 if is_pressed else 0)
+            self._write_raw_event(0x00, 0x00, 0)
+        elif self.mode == "ydotool":
             ydo_code = "0xC0" if btn == BUTTON_LEFT else ("0xC1" if btn == BUTTON_RIGHT else "0xC2")
             subprocess.run(["ydotool", "click", f"{ydo_code}{'d' if is_pressed else 'u'}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "xdotool":
@@ -286,12 +408,23 @@ class LinuxInputInjector:
             subprocess.run(["xdotool", subcmd, str(btn)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def mouse_scroll(self, sx: int, sy: int) -> None:
-        if self.mode == "xdotool":
+        if self.mode == "evdev" and self.evdev_device:
+            import evdev
+            from evdev import ecodes
+            val = 1 if sy > 0 else (-1 if sy < 0 else 0)
+            if val != 0:
+                self.evdev_device.write(ecodes.EV_REL, ecodes.REL_WHEEL, val)
+                self.evdev_device.syn()
+        elif self.mode == "uinput_raw" and self.uinput_fd:
+            val = 1 if sy > 0 else (-1 if sy < 0 else 0)
+            if val != 0:
+                self._write_raw_event(0x02, 0x08, val)  # REL_WHEEL
+                self._write_raw_event(0x00, 0x00, 0)
+        elif self.mode == "xdotool":
             btn = "4" if sy > 0 else "5"
             clicks = max(1, abs(sy) // 40)
             subprocess.run(["xdotool", "click", "--repeat", str(clicks), btn], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "ydotool":
-            # Wheel click
             wheel_arg = f"-w{sy}"
             subprocess.run(["ydotool", "mousemove", wheel_arg], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -342,15 +475,22 @@ class ConnectMeLinuxNode:
         self.trusted_devices: Dict[str, dict] = self._load_trusted_devices()
 
         self.peers: Dict[str, dict] = {}
-        self.active_peer_addr: Optional[Tuple[str, int]] = None
-        self.running = True
-        self.on_log = on_log
+        self.active_remote_peer: Optional[dict] = None
+        self.entry_edge: int = EDGE_NONE
+        self.cursor_x: float = 0.0
+        self.cursor_y: float = 0.0
 
-        # Clipboard tracking
+        # UI & Telemetry Callbacks
+        self.on_log = on_log
+        self.on_cursor_update: Optional[Callable[[bool, int, int], None]] = None
+        self.on_pin_request_received: Optional[Callable[[str, str], None]] = None
+        self.on_peer_discovered: Optional[Callable[[dict], None]] = None
+
+        self.running = True
         self.last_copied_clipboard = ""
         self.udp_sock: Optional[socket.socket] = None
 
-        # Audio streaming (PipeWire / PulseAudio -> Windows PC Audio Hub)
+        # Audio streaming
         self.audio_streaming = False
         self.audio_target_ip: Optional[str] = None
         self.audio_proc: Optional[subprocess.Popen] = None
@@ -403,6 +543,7 @@ class ConnectMeLinuxNode:
                 self.peers[device_id]["is_trusted"] = False
                 self.peers[device_id]["in_ok"] = False
                 self.peers[device_id]["out_ok"] = False
+                self.peers[device_id]["isMutuallyPaired"] = False
             self.log(f"[Güvenlik] 🗑️ '{device_id}' için güvenilirlik kaydı silindi.")
 
     def start(self) -> None:
@@ -419,7 +560,9 @@ class ConnectMeLinuxNode:
             self.log(f"   • {m.monitorId}: {m.width}x{m.height} @ ({m.virtualX}, {m.virtualY}) ölçek={m.scaleFactor}{prim_str}")
         self.log("=" * 72)
 
-        threading.Thread(target=self._discovery_loop, daemon=True).start()
+        # Start Discovery Receiver & Broadcaster
+        threading.Thread(target=self._discovery_receiver_loop, daemon=True).start()
+        threading.Thread(target=self._discovery_broadcast_loop, daemon=True).start()
         threading.Thread(target=self._tcp_server_loop, daemon=True).start()
         threading.Thread(target=self._udp_input_loop, daemon=True).start()
         threading.Thread(target=self._clipboard_monitor_loop, daemon=True).start()
@@ -441,21 +584,103 @@ class ConnectMeLinuxNode:
         }
         return json.dumps(payload).encode("utf-8")
 
-    def _discovery_loop(self) -> None:
+    def _get_broadcast_addresses(self) -> List[str]:
+        addrs = ["255.255.255.255"]
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            parts = local_ip.split(".")
+            if len(parts) == 4:
+                subnet_bc = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+                if subnet_bc not in addrs:
+                    addrs.append(subnet_bc)
+        except Exception:
+            pass
+        return addrs
+
+    def _discovery_receiver_loop(self) -> None:
+        """Continuously receives UDP discovery beacons on port 42849 from Windows, Android and Linux."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except OSError:
+                pass
         try:
             sock.bind(("0.0.0.0", DISCOVERY_UDP_PORT))
-        except OSError:
-            pass
+        except OSError as ex:
+            self.log(f"[Keşif Hata] UDP {DISCOVERY_UDP_PORT} dinlenemedi: {ex}")
+            return
 
         while self.running:
             try:
-                sock.sendto(self.build_beacon_json(), ("255.255.255.255", DISCOVERY_UDP_PORT))
-            except OSError:
+                data, addr = sock.recvfrom(4096)
+                if not data:
+                    continue
+                payload = json.loads(data.decode("utf-8"))
+                if payload.get("type") != "DISCOVER_BEACON":
+                    continue
+
+                dev_id = payload.get("deviceId", "")
+                if not dev_id or dev_id == self.device_id:
+                    continue
+
+                sender_name = payload.get("deviceName", dev_id)
+                sender_plat = payload.get("platform", "unknown")
+                sender_ip = addr[0]
+
+                is_new = dev_id not in self.peers
+                peer = self.peers.setdefault(dev_id, {
+                    "deviceId": dev_id,
+                    "deviceName": sender_name,
+                    "platform": sender_plat,
+                    "ipAddress": sender_ip,
+                    "udpInputPort": payload.get("udpInputPort", FAST_INPUT_UDP_PORT),
+                    "tcpControlPort": payload.get("tcpControlPort", DATA_CONTROL_TCP_PORT),
+                    "screenWidth": payload.get("screenWidth", 1920),
+                    "screenHeight": payload.get("screenHeight", 1080),
+                    "monitors": payload.get("monitors", []),
+                    "in_ok": False,
+                    "out_ok": False,
+                    "isMutuallyPaired": False,
+                    "is_trusted": dev_id in self.trusted_devices
+                })
+
+                peer["ipAddress"] = sender_ip
+                peer["deviceName"] = sender_name
+                peer["platform"] = sender_plat
+                peer["monitors"] = payload.get("monitors", peer.get("monitors", []))
+                peer["screenWidth"] = payload.get("screenWidth", peer.get("screenWidth", 1920))
+                peer["screenHeight"] = payload.get("screenHeight", peer.get("screenHeight", 1080))
+                peer["lastSeen"] = time.time()
+
+                if is_new:
+                    self.log(f"[Keşif] Cihaz bulundu: {sender_name} ({sender_plat}) @ {sender_ip} — Eşleşmek için 6 haneli kod girin.")
+                    if self.on_peer_discovered:
+                        try:
+                            self.on_peer_discovered(peer)
+                        except Exception:
+                            pass
+            except Exception:
                 pass
-            time.sleep(3.0)
+
+    def _discovery_broadcast_loop(self) -> None:
+        """Periodically broadcasts local discovery beacon to the network."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        while self.running:
+            beacon_data = self.build_beacon_json()
+            for bc_addr in self._get_broadcast_addresses():
+                try:
+                    sock.sendto(beacon_data, (bc_addr, DISCOVERY_UDP_PORT))
+                except OSError:
+                    pass
+            time.sleep(2.5)
 
     def _tcp_server_loop(self) -> None:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -483,31 +708,46 @@ class ConnectMeLinuxNode:
                 peer = self.peers.setdefault(sender_id, {
                     "deviceId": sender_id,
                     "deviceName": sender_name,
+                    "platform": header.get("senderPlatform", "windows"),
                     "ipAddress": remote_ip,
                     "udpInputPort": header.get("senderUdpPort", FAST_INPUT_UDP_PORT),
                     "tcpControlPort": header.get("senderTcpPort", DATA_CONTROL_TCP_PORT),
-                    "out_ok": False
+                    "in_ok": False,
+                    "out_ok": False,
+                    "isMutuallyPaired": False
                 })
-                peer["monitors"] = header.get("senderMonitors", [])
+                peer["monitors"] = header.get("senderMonitors", peer.get("monitors", []))
 
                 if target_pin == self.local_pin:
                     peer["in_ok"] = True
                     req_trust = bool(header.get("requestTrust", False))
                     trust_token = header.get("trustToken", "")
-                    if req_trust and trust_token:
-                        self.trusted_devices[sender_id] = {
-                            "deviceId": sender_id,
-                            "deviceName": sender_name,
-                            "platform": header.get("senderPlatform", "windows"),
-                            "trustToken": trust_token,
-                            "autoConnect": True
-                        }
-                        self._save_trusted_devices()
-                        peer["is_trusted"] = True
-                        self.log(f"[Güvenlik] ⭐ '{sender_name}' güvenilir cihaz olarak kaydedildi.")
 
                     is_mut = bool(peer.get("out_ok", False))
                     peer["isMutuallyPaired"] = is_mut
+
+                    if is_mut:
+                        if req_trust and trust_token:
+                            self.trusted_devices[sender_id] = {
+                                "deviceId": sender_id,
+                                "deviceName": sender_name,
+                                "platform": header.get("senderPlatform", "windows"),
+                                "trustToken": trust_token,
+                                "autoConnect": True
+                            }
+                            self._save_trusted_devices()
+                            peer["is_trusted"] = True
+                            self.log(f"[Güvenlik] ⭐ '{sender_name}' karşılıklı doğrulandı ve güvenilir cihaz olarak kaydedildi.")
+                    else:
+                        peer["pending_trust_token"] = trust_token if req_trust else ""
+                        peer["pending_req_trust"] = req_trust
+                        self.log(f"[PIN İsteği] 🔔 '{sender_name}' ({remote_ip}) sizin 6 haneli kodunuzu ({self.local_pin}) doğru girdi! Eşleşmeyi tamamlamak için siz de onun 6 haneli kodunu girip onaylayın.")
+                        if self.on_pin_request_received:
+                            try:
+                                self.on_pin_request_received(sender_id, sender_name)
+                            except Exception:
+                                pass
+
                     ack = {
                         "type": "PAIR_VERIFY_ACK",
                         "senderId": self.device_id,
@@ -517,7 +757,6 @@ class ConnectMeLinuxNode:
                         "isMutualComplete": is_mut,
                     }
                     self._send_tcp_frame(conn, ack)
-                    self.log(f"[PIN Onayı] 🔔 '{sender_name}' bizim 6 haneli kodumuzu doğruladı!")
                 else:
                     self._send_tcp_frame(conn, {"type": "PAIR_REJECT", "senderId": self.device_id, "senderName": self.device_name})
                     self.log(f"[Güvenlik] ⚠️ '{sender_name}' hatalı kod denedi ({target_pin}).")
@@ -539,7 +778,7 @@ class ConnectMeLinuxNode:
                     peer["out_ok"] = True
                     peer["is_trusted"] = True
                     peer["isMutuallyPaired"] = True
-                    peer["monitors"] = header.get("senderMonitors", [])
+                    peer["monitors"] = header.get("senderMonitors", peer.get("monitors", []))
                     ack = {
                         "type": "TRUSTED_RECONNECT_ACK",
                         "senderId": self.device_id,
@@ -587,6 +826,8 @@ class ConnectMeLinuxNode:
     def _udp_input_loop(self) -> None:
         self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_sock.bind(("0.0.0.0", FAST_INPUT_UDP_PORT))
+        min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
+
         while self.running:
             data, addr = self.udp_sock.recvfrom(2048)
             if len(data) < 4 or data[0] != MAGIC_0 or data[1] != MAGIC_1 or data[2] != PROTO_VER:
@@ -598,9 +839,91 @@ class ConnectMeLinuxNode:
                 pong[3] = PACKET_HEARTBEAT_PONG
                 self.udp_sock.sendto(bytes(pong), addr)
 
+            elif pkt_type == PACKET_EDGE_HANDOFF and len(data) >= 10:
+                edge, dragging, norm_pos = struct.unpack("<BBf", data[4:10])
+                min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
+
+                peer = None
+                for p in self.peers.values():
+                    if p.get("ipAddress") == addr[0]:
+                        peer = p
+                        break
+                if not peer:
+                    peer = {"deviceId": addr[0], "deviceName": addr[0], "ipAddress": addr[0], "udpInputPort": FAST_INPUT_UDP_PORT, "tcpControlPort": DATA_CONTROL_TCP_PORT}
+
+                self.active_remote_peer = peer
+                self.entry_edge = edge
+
+                # Calculate entrance coordinate on Linux
+                if edge == EDGE_RIGHT:
+                    self.cursor_x = min_x + 6
+                    self.cursor_y = min_y + int(vh * norm_pos)
+                elif edge == EDGE_LEFT:
+                    self.cursor_x = min_x + vw - 6
+                    self.cursor_y = min_y + int(vh * norm_pos)
+                elif edge == EDGE_BOTTOM:
+                    self.cursor_x = min_x + int(vw * norm_pos)
+                    self.cursor_y = min_y + 6
+                elif edge == EDGE_TOP:
+                    self.cursor_x = min_x + int(vw * norm_pos)
+                    self.cursor_y = min_y + vh - 6
+                else:
+                    self.cursor_x = min_x + int(vw * 0.5)
+                    self.cursor_y = min_y + int(vh * 0.5)
+
+                self.log(f"[Kenar Geçişi] ➡️ İmleç '{peer.get('deviceName')}' ekranından Linux'a geçti ({int(self.cursor_x)}, {int(self.cursor_y)}).")
+                if self.on_cursor_update:
+                    try:
+                        self.on_cursor_update(True, int(self.cursor_x), int(self.cursor_y))
+                    except Exception:
+                        pass
+
             elif pkt_type == PACKET_MOUSE_MOVE and len(data) >= 10:
                 _, _, dx, dy = struct.unpack("<Hhh", data[4:10])
                 self.injector.move_relative(dx, dy)
+                self.cursor_x += dx
+                self.cursor_y += dy
+
+                min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
+
+                if self.on_cursor_update:
+                    try:
+                        self.on_cursor_update(True, int(self.cursor_x), int(self.cursor_y))
+                    except Exception:
+                        pass
+
+                # Check if cursor hits boundary to return to Windows/remote
+                if self.active_remote_peer is not None:
+                    return_triggered = False
+                    ret_edge = EDGE_NONE
+                    ret_norm = 0.5
+
+                    if self.entry_edge == EDGE_RIGHT and self.cursor_x <= min_x:
+                        return_triggered = True
+                        ret_edge = EDGE_RIGHT
+                        ret_norm = (self.cursor_y - min_y) / float(max(1, vh))
+                    elif self.entry_edge == EDGE_LEFT and self.cursor_x >= min_x + vw:
+                        return_triggered = True
+                        ret_edge = EDGE_LEFT
+                        ret_norm = (self.cursor_y - min_y) / float(max(1, vh))
+                    elif self.entry_edge == EDGE_BOTTOM and self.cursor_y <= min_y:
+                        return_triggered = True
+                        ret_edge = EDGE_BOTTOM
+                        ret_norm = (self.cursor_x - min_x) / float(max(1, vw))
+                    elif self.entry_edge == EDGE_TOP and self.cursor_y >= min_y + vh:
+                        return_triggered = True
+                        ret_edge = EDGE_TOP
+                        ret_norm = (self.cursor_x - min_x) / float(max(1, vw))
+
+                    if return_triggered:
+                        target = self.active_remote_peer
+                        self.active_remote_peer = None
+                        if self.on_cursor_update:
+                            try:
+                                self.on_cursor_update(False, 0, 0)
+                            except Exception:
+                                pass
+                        threading.Thread(target=self.return_control_to_peer, args=(target, ret_edge, ret_norm), daemon=True).start()
 
             elif pkt_type == PACKET_MOUSE_BUTTON and len(data) >= 6:
                 btn, pressed = struct.unpack("<BB", data[4:6])
@@ -615,9 +938,51 @@ class ConnectMeLinuxNode:
                 ch = chr(char_code) if char_code > 0 else ""
                 self.injector.key_event(vk, pressed != 0, ch)
 
-            elif pkt_type == PACKET_EDGE_HANDOFF and len(data) >= 10:
-                edge, dragging, norm_pos = struct.unpack("<BBf", data[4:10])
-                self.log(f"[Kenar Geçişi] İmleç Linux ekranına giriş yaptı (Kenar: {edge}, Konum: %{int(norm_pos * 100)}).")
+    def return_control_to_peer(self, peer: dict, return_edge: int, norm_pos: float) -> None:
+        """Sends framed TCP EDGE_RETURN and UDP EDGE_HANDOFF packet back to remote device."""
+        norm_pos = max(0.0, min(1.0, norm_pos))
+        peer_ip = peer.get("ipAddress")
+        peer_name = peer.get("deviceName", peer_ip)
+        if not peer_ip:
+            return
+
+        # 1. Fast UDP packet
+        try:
+            u_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            pkt = struct.pack("<BBBBBf", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_EDGE_HANDOFF, return_edge, 0, norm_pos)
+            u_sock.sendto(pkt, (peer_ip, peer.get("udpInputPort", FAST_INPUT_UDP_PORT)))
+            u_sock.close()
+        except Exception:
+            pass
+
+        # 2. Reliable framed TCP packet
+        try:
+            t_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            t_sock.settimeout(2.0)
+            t_sock.connect((peer_ip, peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+            hdr = {
+                "type": "EDGE_RETURN",
+                "senderId": self.device_id,
+                "senderName": self.device_name,
+                "returnEdge": return_edge,
+                "normalizedPosition": norm_pos,
+            }
+            self._send_tcp_frame(t_sock, hdr)
+            t_sock.close()
+        except Exception:
+            pass
+
+        self.log(f"[Kenar Geçişi] ⬅️ İmleç ve klavye '{peer_name}' ekranına geri döndü (Kenar: {return_edge}, %{int(norm_pos * 100)}).")
+
+    def return_control_to_local(self, edge: int, norm_pos: float) -> None:
+        """Called when remote releases cursor back to Linux."""
+        self.active_remote_peer = None
+        if self.on_cursor_update:
+            try:
+                self.on_cursor_update(False, 0, 0)
+            except Exception:
+                pass
+        self.log(f"[Kenar Dönüşü] Yerel Linux masaüstüne dönüş yapıldı (Kenar: {edge}, %{int(norm_pos * 100)}).")
 
     def _clipboard_monitor_loop(self) -> None:
         """Polls local clipboard and broadcasts newly copied text to paired devices."""

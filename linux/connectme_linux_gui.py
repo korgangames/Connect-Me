@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
 Connect Me — Linux (Nobara / KDE Plasma / Wayland & X11) Gelişmiş Kontrol Paneli (GUI)
-Korgan Games (v1.3 Tam Linux Entegrasyonu)
+Korgan Games (v1.6.2 Çoklu Monitör, Yüksek Kontrastlı Arayüz & Görünür İmleç Göstergesi)
 
 - 2D Ekran Konfigürasyonu Kanvası
-- Çift Taraflı 6 Haneli PIN Eşleşmesi
+- Çift Yönlü UDP Cihaz Keşfi (Canlı Algılama)
+- Çift Taraflı 6 Haneli PIN Eşleşmesi (Yüksek Kontrastlı Görünür Metin)
+- Canlı İmleç Katmanı (KDE Wayland'de İmlecin Daima Görünür Olması)
 - Güvenilir Cihaz Yönetimi (Sıfır-PIN Otomatik Bağlantı)
 - Çift Yönlü Evrensel Pano & Ortak Cep (Drop Shelf)
 - Donanım Girdi Enjektörü & Çoklu Monitör Durumu
@@ -13,6 +15,7 @@ Korgan Games (v1.3 Tam Linux Entegrasyonu)
 import os
 import sys
 import shutil
+import socket
 import datetime
 import threading
 import subprocess
@@ -22,22 +25,57 @@ from tkinter import ttk, filedialog, messagebox
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
-    from connectme_linux_daemon import ConnectMeLinuxNode, asdict, PhysicalMonitor
+    from connectme_linux_daemon import ConnectMeLinuxNode, asdict, PhysicalMonitor, VERSION
 except ImportError:
-    from linux.connectme_linux_daemon import ConnectMeLinuxNode, asdict, PhysicalMonitor
+    from linux.connectme_linux_daemon import ConnectMeLinuxNode, asdict, PhysicalMonitor, VERSION
+
+
+class LinuxCursorOverlay:
+    """Lightweight floating cursor indicator for Nobara Linux KDE Wayland."""
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.win = tk.Toplevel(root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        self.win.config(bg="#38BDF8")
+        self.canvas = tk.Canvas(self.win, width=24, height=24, bg="#0284C7", highlightthickness=1, highlightbackground="#38BDF8")
+        self.canvas.pack()
+        self.canvas.create_oval(3, 3, 21, 21, fill="#0F172A", outline="#38BDF8", width=2)
+        self.canvas.create_oval(8, 8, 16, 16, fill="#4ADE80", outline="")
+        self.win.withdraw()
+        self.visible = False
+
+    def update(self, active: bool, x: int, y: int):
+        if active:
+            self.win.geometry(f"24x24+{max(0, x-12)}+{max(0, y-12)}")
+            if not self.visible:
+                self.win.deiconify()
+                self.win.lift()
+                self.visible = True
+        else:
+            if self.visible:
+                self.win.withdraw()
+                self.visible = False
 
 
 class ConnectMeLinuxGui:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Connect Me v1.6.1 — Linux Kontrol Merkezi")
-        self.root.geometry("980x740")
+        self.root.title(f"Connect Me v{VERSION} — Linux Kontrol Merkezi")
+        self.root.geometry("980x750")
         self.root.minsize(860, 620)
         self.root.configure(bg="#0B1120")
 
+        self.selected_peer_id: str = ""
+
         # Daemon node başlat
         self.node = ConnectMeLinuxNode(on_log=self._log)
+        self.node.on_cursor_update = self._on_cursor_update
+        self.node.on_pin_request_received = self._on_pin_request_received
         self.node.start()
+
+        # Ekran üstü imleç göstergesi
+        self.cursor_overlay = LinuxCursorOverlay(self.root)
 
         self._apply_dark_theme()
         self._build_ui()
@@ -55,7 +93,11 @@ class ConnectMeLinuxGui:
         style.configure("TFrame", background="#0B1120")
         style.configure("Card.TFrame", background="#1E293B", relief="flat")
         style.configure("InnerCard.TFrame", background="#0F172A", relief="flat")
-        
+
+        # Giriş kutuları (High-Contrast Input Fields)
+        style.configure("TEntry", fieldbackground="#1E293B", foreground="#38BDF8", insertcolor="#38BDF8")
+        style.map("TEntry", fieldbackground=[("active", "#1E293B"), ("focus", "#0F172A")], foreground=[("active", "#38BDF8"), ("focus", "#38BDF8")])
+
         # Sekmeler
         style.configure("TNotebook", background="#0B1120", tabmargins=[4, 4, 4, 0])
         style.configure("TNotebook.Tab", background="#1E293B", foreground="#94A3B8", padding=[14, 6], font=("Segoe UI", 10, "bold"))
@@ -76,7 +118,7 @@ class ConnectMeLinuxGui:
 
         title_box = ttk.Frame(header_frame)
         title_box.pack(side=tk.LEFT)
-        ttk.Label(title_box, text="⚡ Connect Me v1.6.1 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(title_box, text=f"⚡ Connect Me v{VERSION} — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
         ttk.Label(title_box, text="KDE Plasma Wayland Çoklu Monitör & KVM Kontrol Paneli", style="SubHeader.TLabel").pack(anchor=tk.W)
 
         status_box = ttk.Frame(header_frame)
@@ -85,7 +127,7 @@ class ConnectMeLinuxGui:
         self.update_badge_btn.pack(side=tk.RIGHT, padx=4)
         self.injector_badge = ttk.Label(status_box, text=f" Girdi: {self.node.injector.mode.upper()} ", style="Badge.TLabel")
         self.injector_badge.pack(side=tk.RIGHT, padx=4)
-        status_badge = ttk.Label(status_box, text=" v1.6.1 | 🟢 Çevrimiçi ", style="Badge.TLabel")
+        status_badge = ttk.Label(status_box, text=f" v{VERSION} | 🟢 Çevrimiçi ", style="Badge.TLabel")
         status_badge.pack(side=tk.RIGHT, padx=4)
 
         # Hızlı Bilgi & PIN Kartı
@@ -104,7 +146,7 @@ class ConnectMeLinuxGui:
         copy_pin_btn.pack(side=tk.LEFT, padx=10)
 
         ip_addr = self._get_local_ip()
-        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v1.6.1 (v1-6-1)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
+        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v{VERSION}  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
 
         # Çoklu Sekme (Notebook)
         self.notebook = ttk.Notebook(self.root)
@@ -122,7 +164,7 @@ class ConnectMeLinuxGui:
         # TAB 4: Ses Yönlendirme (Audio Stream)
         self._build_tab_audio()
 
-        # TAB 5: Ayarlar & Sistem
+        # TAB 5: Ayarlar & Donanım
         self._build_tab_settings()
 
         # TAB 6: Canlı Tanılama & Etkinlik
@@ -149,18 +191,43 @@ class ConnectMeLinuxGui:
         tab = ttk.Frame(self.notebook, padding=14)
         self.notebook.add(tab, text="🔗 Cihazlar & Güvenlik")
 
+        # Gelen PIN Talebi Uyarısı (Inbound PIN Request Banner)
+        self.inbound_card = ttk.Frame(tab, style="Card.TFrame", padding=10)
+        self.inbound_label = ttk.Label(self.inbound_card, text="", font=("Segoe UI", 10, "bold"), foreground="#F59E0B")
+        self.inbound_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Initially not packed, packed dynamically on request
+
         # Cihaz Listesi
         ttk.Label(tab, text="Ağdaki Keşfedilen Cihazlar (Windows, Android, Linux):", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=4)
         self.peer_list = tk.Listbox(tab, bg="#1E293B", fg="#F8FAFC", selectbackground="#0284C7",
                                     font=("Consolas", 10), height=7, bd=0, highlightthickness=1, highlightbackground="#334155")
         self.peer_list.pack(fill=tk.X, pady=4)
+        self.peer_list.bind("<<ListboxSelect>>", self._on_peer_select)
 
-        # PIN Doğrulama Giriş Çubuğu
+        # PIN Doğrulama Giriş Çubuğu (Yüksek Kontrastlı tk.Entry)
         act_box = ttk.Frame(tab, style="Card.TFrame", padding=10)
         act_box.pack(fill=tk.X, pady=8)
 
-        ttk.Label(act_box, text="Karşı Cihazın 6 Haneli Kodu:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=6)
-        self.pin_entry = ttk.Entry(act_box, width=12, font=("Segoe UI", 12, "bold"))
+        self.pair_prompt_lbl = ttk.Label(act_box, text="Karşı Cihazın 6 Haneli Kodu:", font=("Segoe UI", 10, "bold"))
+        self.pair_prompt_lbl.pack(side=tk.LEFT, padx=6)
+
+        # High-contrast Entry widget
+        self.pin_entry = tk.Entry(
+            act_box,
+            width=12,
+            font=("Consolas", 14, "bold"),
+            bg="#1E293B",
+            fg="#38BDF8",
+            insertbackground="#38BDF8",
+            selectbackground="#0284C7",
+            selectforeground="#FFFFFF",
+            justify="center",
+            relief="solid",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground="#38BDF8",
+            highlightcolor="#38BDF8"
+        )
         self.pin_entry.pack(side=tk.LEFT, padx=6)
 
         self.trust_var = tk.BooleanVar(value=True)
@@ -217,8 +284,23 @@ class ConnectMeLinuxGui:
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill=tk.X, pady=8)
         ttk.Label(row, text="Hedef Windows PC IP:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=4)
-        self.audio_ip_entry = ttk.Entry(row, width=16)
+
+        self.audio_ip_entry = tk.Entry(
+            row,
+            width=16,
+            font=("Consolas", 10),
+            bg="#1E293B",
+            fg="#38BDF8",
+            insertbackground="#38BDF8",
+            selectbackground="#0284C7",
+            selectforeground="#FFFFFF",
+            relief="solid",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground="#38BDF8"
+        )
         self.audio_ip_entry.pack(side=tk.LEFT, padx=6)
+
         self.audio_stream_btn = ttk.Button(row, text="🎧 Ses Akışını Başlat", style="Success.TButton", command=self._toggle_audio_stream)
         self.audio_stream_btn.pack(side=tk.LEFT, padx=8)
 
@@ -239,7 +321,6 @@ class ConnectMeLinuxGui:
         else:
             target_ip = self.audio_ip_entry.get().strip()
             if not target_ip:
-                # Eşleşmiş bir Windows peer varsa onun IP'sini otomatik seç
                 paired = [p for p in self.node.peers.values() if p.get("isMutuallyPaired")]
                 if paired:
                     target_ip = paired[0].get("ipAddress", "")
@@ -259,7 +340,6 @@ class ConnectMeLinuxGui:
         tab = ttk.Frame(self.notebook, padding=16)
         self.notebook.add(tab, text="⚙️ Ayarlar & Donanım")
 
-        # Sistem Başlangıcı
         card1 = ttk.Frame(tab, style="Card.TFrame", padding=14)
         card1.pack(fill=tk.X, pady=6)
         ttk.Label(card1, text="🚀 Sistem Başlangıcı (Autostart)", font=("Segoe UI", 11, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
@@ -269,15 +349,13 @@ class ConnectMeLinuxGui:
                              bg="#1E293B", fg="#F8FAFC", selectcolor="#0F172A", activebackground="#1E293B", activeforeground="#38BDF8")
         chk.pack(anchor=tk.W, pady=6)
 
-        # Girdi Enjeksiyonu
         card2 = ttk.Frame(tab, style="Card.TFrame", padding=14)
         card2.pack(fill=tk.X, pady=6)
         ttk.Label(card2, text="⌨️ Fare & Klavye Enjeksiyonu (Linux Virtual Input)", font=("Segoe UI", 11, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
         ttk.Label(card2, text=f"Mevcut Aktif Enjektör: {self.node.injector.mode.upper()}", foreground="#4ADE80").pack(anchor=tk.W, pady=2)
-        ttk.Label(card2, text="• ydotool: Nobara Linux Wayland / KDE Plasma için en hızlı yerel enjektör.\n• /dev/uinput: Çekirdek düzeyinde sanal fare ve klavye sürücüsü.\n• xdotool: X11 ve XWayland oturumları için geri uyumluluk köprüsü.",
+        ttk.Label(card2, text="• evdev: Linux çekirdek düzeyinde sanal donanım sürücüsü (<0.2ms gecikme).\n• /dev/uinput: Raw çekirdek sanal fare/klavye arayüzü.\n• ydotool: Wayland için otomatik arka plan servisi.\n• xdotool: X11 oturumları için geri uyumluluk.",
                   foreground="#94A3B8").pack(anchor=tk.W, pady=4)
 
-        # Evrensel Pano Durumu
         card3 = ttk.Frame(tab, style="Card.TFrame", padding=14)
         card3.pack(fill=tk.X, pady=6)
         ttk.Label(card3, text="📋 Evrensel Pano (Universal Clipboard)", font=("Segoe UI", 11, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
@@ -289,7 +367,6 @@ class ConnectMeLinuxGui:
         tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(tab, text="📊 Canlı Tanılama & Ağ")
 
-        # Üst Araç Çubuğu
         btn_bar = ttk.Frame(tab)
         btn_bar.pack(fill=tk.X, pady=(0, 6))
 
@@ -307,6 +384,32 @@ class ConnectMeLinuxGui:
         self._refresh_state()
         self.root.after(1500, self._start_refresh_timer)
 
+    def _on_peer_select(self, event):
+        sel = self.peer_list.curselection()
+        if not sel:
+            return
+        keys = list(self.node.peers.keys())
+        if sel[0] < len(keys):
+            self.selected_peer_id = keys[sel[0]]
+            peer = self.node.peers[self.selected_peer_id]
+            self.pair_prompt_lbl.configure(text=f"'{peer.get('deviceName')}' 6 Haneli Kodu:")
+            self.pin_entry.focus_set()
+
+    def _on_pin_request_received(self, sender_id: str, sender_name: str):
+        def _update():
+            self.selected_peer_id = sender_id
+            self.inbound_label.configure(
+                text=f"🔔 '{sender_name}' sizin 6 haneli kodunuzu girdi! Eşleşmeyi tamamlamak için siz de onun kodunu girin."
+            )
+            if not self.inbound_card.winfo_ismapped():
+                self.inbound_card.pack(fill=tk.X, pady=(0, 8), before=self.peer_list)
+            self.pair_prompt_lbl.configure(text=f"'{sender_name}' Ekranındaki Kod:")
+            self.pin_entry.focus_set()
+        self.root.after(0, _update)
+
+    def _on_cursor_update(self, active: bool, x: int, y: int):
+        self.root.after(0, lambda: self.cursor_overlay.update(active, x, y))
+
     def _refresh_state(self):
         # 1. Cihazlar Listesi
         self.peer_list.delete(0, tk.END)
@@ -319,8 +422,10 @@ class ConnectMeLinuxGui:
                 is_mut = p.get("isMutuallyPaired", False)
                 is_trust = p.get("is_trusted", False)
                 tag = "⭐ " if is_trust else ""
-                status = f"{tag}🟢 ÇİFT TARAFLI ONNAYLI (Aktif)" if is_mut else (f"{tag}🟡 Karşı Onay Bekliyor" if p.get("out_ok") else f"{tag}⚪ Eşleşme Bekleniyor")
-                self.peer_list.insert(tk.END, f"  🖥️ {name} ({ip}) — {status}")
+                mon_cnt = len(p.get("monitors", []))
+                mon_str = f" [{mon_cnt} Ekran]" if mon_cnt > 1 else ""
+                status = f"{tag}🟢 ÇİFT TARAFLI ONAYLI (Aktif)" if is_mut else (f"{tag}🟡 Karşı Onay Bekliyor" if p.get("out_ok") else f"{tag}⚪ Eşleşme Bekleniyor")
+                self.peer_list.insert(tk.END, f"  🖥️ {name} ({ip}){mon_str} — {status}")
 
         # 2. Güvenilir Cihazlar Listesi
         self.trusted_list.delete(0, tk.END)
@@ -351,7 +456,7 @@ class ConnectMeLinuxGui:
             return
 
         min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
-        scale = min((cw - 120) / total_w, (ch - 100) / total_h)
+        scale = min((cw - 120) / max(1, total_w), (ch - 100) / max(1, total_h))
         offset_x = (cw - total_w * scale) / 2
         offset_y = (ch - total_h * scale) / 2
 
@@ -368,22 +473,22 @@ class ConnectMeLinuxGui:
             x2 = x1 + m.width * scale
             y2 = y1 + m.height * scale
 
-            # Monitör kutusu
             self.canvas.create_rectangle(x1, y1, x2, y2, fill="#1E293B", outline="#38BDF8", width=2)
             prim_txt = " [BİRİNCİL]" if m.isPrimary else ""
             self.canvas.create_text(x1 + 10, y1 + 14, anchor=tk.W, text=f"{m.name}{prim_txt}", fill="#F8FAFC", font=("Segoe UI", 9, "bold"))
             self.canvas.create_text(x1 + 10, y1 + 32, anchor=tk.W, text=f"{m.width}x{m.height} @ ({m.virtualX}, {m.virtualY})", fill="#94A3B8", font=("Segoe UI", 8))
 
-        # Bağlı Cihazlar (Sağ ve Sol Kenarlara Temsili Eşleşmeler)
+        # Bağlı Cihazlar
         paired_peers = [p for p in self.node.peers.values() if p.get("isMutuallyPaired")]
         for idx, p in enumerate(paired_peers):
             px1 = offset_x + total_w * scale + 15
             py1 = offset_y + idx * 80
-            px2 = px1 + 110
+            px2 = px1 + 130
             py2 = py1 + 65
             self.canvas.create_rectangle(px1, py1, px2, py2, fill="#14532D", outline="#4ADE80", width=2)
-            self.canvas.create_text(px1 + 8, py1 + 14, anchor=tk.W, text=f"📱 {p.get('deviceName', 'Peer')[:10]}", fill="#FFFFFF", font=("Segoe UI", 8, "bold"))
-            self.canvas.create_text(px1 + 8, py1 + 30, anchor=tk.W, text="Bağlı", fill="#86EFAC", font=("Segoe UI", 8))
+            self.canvas.create_text(px1 + 8, py1 + 14, anchor=tk.W, text=f"📱 {p.get('deviceName', 'Peer')[:12]}", fill="#FFFFFF", font=("Segoe UI", 8, "bold"))
+            mon_info = f"({len(p.get('monitors', []))} Ekran)" if len(p.get("monitors", [])) > 1 else "Bağlı"
+            self.canvas.create_text(px1 + 8, py1 + 30, anchor=tk.W, text=mon_info, fill="#86EFAC", font=("Segoe UI", 8))
             self.canvas.create_line(offset_x + total_w * scale, py1 + 32, px1, py1 + 32, fill="#4ADE80", dash=(4, 2), width=2)
 
     def _refresh_monitors(self):
@@ -401,7 +506,12 @@ class ConnectMeLinuxGui:
             messagebox.showinfo("Cihaz Yok", "Ağda henüz eşleşilecek bir cihaz bulunamadı.")
             return
 
-        target_peer = list(self.node.peers.values())[0]
+        target_peer = None
+        if self.selected_peer_id and self.selected_peer_id in self.node.peers:
+            target_peer = self.node.peers[self.selected_peer_id]
+        else:
+            target_peer = list(self.node.peers.values())[0]
+
         req_trust = self.trust_var.get()
         token = f"trust-{self.node.device_id}-{os.urandom(8).hex()}" if req_trust else ""
 
@@ -410,7 +520,6 @@ class ConnectMeLinuxGui:
 
     def _send_pair_request(self, peer: dict, pin: str, req_trust: bool, token: str):
         try:
-            import socket
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(5.0)
             s.connect((peer["ipAddress"], peer.get("tcpControlPort", 42851)))
@@ -429,14 +538,23 @@ class ConnectMeLinuxGui:
             self.node._send_tcp_frame(s, hdr)
             prefix = self.node._recv_exact(s, 12)
             if len(prefix) == 12:
-                import struct, json
                 jlen, _ = struct.unpack("<iq", prefix)
                 resp = json.loads(self.node._recv_exact(s, jlen).decode("utf-8"))
                 if resp.get("type") == "PAIR_VERIFY_ACK":
                     peer["out_ok"] = True
                     if resp.get("isMutualComplete"):
                         peer["isMutuallyPaired"] = True
-                        self._log(f"✅ '{peer.get('deviceName')}' ile karşılıklı eşleşme tamamlandı!")
+                        if req_trust and token:
+                            self.node.trusted_devices[peer["deviceId"]] = {
+                                "deviceId": peer["deviceId"],
+                                "deviceName": peer.get("deviceName", peer["deviceId"]),
+                                "platform": peer.get("platform", "windows"),
+                                "trustToken": token,
+                                "autoConnect": True
+                            }
+                            self.node._save_trusted_devices()
+                            peer["is_trusted"] = True
+                        self._log(f"✅ '{peer.get('deviceName')}' ile karşılıklı eşleşme tamamlandı! [⭐ Cihaz Hatırlandı]")
                     else:
                         self._log(f"🔔 '{peer.get('deviceName')}' kodunuzu onayladı! Bağlantıyı tamamlamak için o da sizin kodunuzu ({self.node.local_pin}) girmeli.")
                 elif resp.get("type") == "PAIR_REJECT":
@@ -509,7 +627,7 @@ class ConnectMeLinuxGui:
         auto_dir = Path.home() / ".config" / "autostart"
         auto_dir.mkdir(parents=True, exist_ok=True)
         auto_file = auto_dir / "ConnectMe.desktop"
-        
+
         if self.autostart_var.get():
             curr_dir = Path(__file__).resolve().parent
             content = f"""[Desktop Entry]
@@ -579,7 +697,7 @@ X-GNOME-Autostart-enabled=true
             report = (
                 f"=== Connect Me Linux Tanılama Günlüğü ===\n"
                 f"Oluşturulma Tarihi: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"Sürüm: v1.4.3\n"
+                f"Sürüm: v{VERSION}\n"
                 f"Cihaz: {self.node.device_name} ({self.node.device_id})\n"
                 f"Platform: {self.node.platform}\n"
                 f"Aktif Girdi Enjektörü: {self.node.injector.mode.upper()}\n"
@@ -601,7 +719,7 @@ X-GNOME-Autostart-enabled=true
         log_file.parent.mkdir(parents=True, exist_ok=True)
         if not log_file.exists():
             with open(log_file, "w", encoding="utf-8") as f:
-                f.write(f"[Connect Me Linux Günlüğü Başlangıcı] v1.4.3\n")
+                f.write(f"[Connect Me Linux Günlüğü Başlangıcı] v{VERSION}\n")
         try:
             subprocess.Popen(["xdg-open", str(log_file)])
         except Exception as ex:
@@ -632,7 +750,6 @@ X-GNOME-Autostart-enabled=true
     def _check_for_updates(self, is_manual: bool = False):
         try:
             import urllib.request
-            import json
             req = urllib.request.Request(
                 "https://api.github.com/repos/korgangames/Connect-Me/releases/latest",
                 headers={"User-Agent": "ConnectMe-Linux", "Accept": "application/vnd.github.v3+json"}
@@ -642,9 +759,8 @@ X-GNOME-Autostart-enabled=true
                     data = json.loads(response.read().decode("utf-8"))
                     remote_tag = data.get("tag_name", "").strip()
                     if remote_tag:
-                        # Version comparison
                         r_parts = [int(p) for p in remote_tag.lstrip("v").split(".") if p.isdigit()]
-                        c_parts = [int(p) for p in "1.6.1".split(".") if p.isdigit()]
+                        c_parts = [int(p) for p in VERSION.split(".") if p.isdigit()]
                         is_newer = False
                         for i in range(max(len(r_parts), len(c_parts))):
                             r = r_parts[i] if i < len(r_parts) else 0
@@ -665,7 +781,7 @@ X-GNOME-Autostart-enabled=true
                             return
 
             if is_manual:
-                self.root.after(0, lambda: messagebox.showinfo("Connect Me Güncel", "Tebrikler! Connect Me zaten en son sürümde (v1.6.1)."))
+                self.root.after(0, lambda: messagebox.showinfo("Connect Me Güncel", f"Tebrikler! Connect Me zaten en son sürümde (v{VERSION})."))
         except Exception as ex:
             if is_manual:
                 self.root.after(0, lambda: messagebox.showwarning("Güncelleme Hatası", f"Güncelleme kontrolü başarısız oldu:\n{ex}"))

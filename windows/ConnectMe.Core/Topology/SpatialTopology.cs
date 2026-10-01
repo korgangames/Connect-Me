@@ -33,6 +33,7 @@ public sealed class PeerDeviceNode
     // Persistent Device Trust & Auto-Connect
     public bool IsTrusted { get; set; }
     public string TrustToken { get; set; } = string.Empty;
+    public string? PendingTrustToken { get; set; }
 
     public PeerPairingState PairingState => (MyEnteredPinVerifiedByRemote, RemoteEnteredMyPinVerified) switch
     {

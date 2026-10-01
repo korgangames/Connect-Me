@@ -1,3 +1,41 @@
+# Connect Me v1.6.2 (v1-6-2) — Nobara Linux & Çoklu Monitör İyileştirmeleri, Kernel Sanal Girdi ve Çift Taraflı PIN Güvenliği
+
+Bu sürüm; Nobara Linux (KDE Plasma Wayland), Windows ve Android arasındaki ağ keşfi, Linux sanal fare/klavye sürücüsü, çoklu monitör topolojisi ve karşılıklı PIN doğrulama güvenliğini mükemmelleştiren kapsamlı bir güncellemedir.
+
+---
+
+### 🌟 v1.6.2 Yenilikleri ve Düzeltmeleri:
+
+* **🐧 Nobara Linux Ağ Keşif Dinleyicisi (UDP Discovery Receiver):**
+  - Linux servis motoruna (`connectme_linux_daemon.py`) eklenen UDP 42849 dinleyicisi sayesinde ağdaki tüm Windows, Android ve diğer Linux cihazları anında ve otomatik olarak keşfedilir.
+  - Yayınlanan keşif paketleri hem `255.255.255.255` hem de yerel alt ağ yayın adresine (subnet broadcast, örn. `192.168.1.255`) gönderilerek Wi-Fi / LAN ayrımı olmadan cihazların anında listede görünmesi sağlandı.
+
+* **🖱️ 4 Kademeli Çekirdek (Kernel) Sanal Girdi Enjektörü & Kesintisiz Fare Geçişi:**
+  - **Tier 1 (evdev.UInput):** Linux çekirdek düzeyinde sanal donanım cihazı oluşturularak (<0.2ms gecikme) KDE Plasma Wayland masaüstünde farenin fiziksel bir USB fare gibi tanınması sağlandı.
+  - **Tier 2 (/dev/uinput Raw ioctl):** Harici kütüphane bulunmasa dahi Python standart kütüphanesiyle doğrudan `/dev/uinput` ioctl çağrıları üzerinden donanım girdisi.
+  - **Tier 3 (ydotoold Daemon Auto-Start):** `ydotoold` arka plan servisinin çalışmadığı durumlarda otomatik başlatılması ve soket üzerinden komut iletimi.
+  - **Tier 4 (xdotool):** X11 / XWayland oturumları için geri uyumluluk.
+
+* **🎯 Canlı Ekran Üstü İmleç Katmanı (Linux Wayland Cursor Overlay):**
+  - Wayland oturumunda sistem imlecinin gizlendiği veya donanım imlecinin render edilmediği durumlara karşı hafif, şeffaf ve daima en üstte duran dinamik imleç takip göstergesi eklendi. Uzaktan kontrol devralındığında fare ekran üzerinde parlayarak görünür hale gelir.
+
+* **↔️ Linux'tan Windows'a Sorunsuz İmleç Geri Dönüşü (Bi-Directional Edge Return):**
+  - Windows'tan Linux ekranına geçen imlecin Linux ekranının sol/dış kenarına çarptığında takılıp kalması sorunu giderildi; Linux motoru `EDGE_RETURN` ve `PACKET_EDGE_HANDOFF` sinyalleriyle imleci ve klavyeyi Windows ana ekranına anında geri aktarır.
+
+* **🖥️ Windows Arayüzünde Linux Çoklu Monitörlerinin Ayrı Ayrı Gösterimi:**
+  - Nobara Linux'un sahip olduğu çift veya çoklu monitörler (`DP-1`, `HDMI-A-1` vb.) Windows 2D Ekran Kanvasında artık tek bir blok yerine, bağımsız alt monitör kartları ve çözünürlük rozetleriyle yan yana gösterilir.
+  - İmleç hangi Linux monitöründeyse o monitör canlı olarak yeşil renkle vurgulanır.
+
+* **🔐 Sıkı Çift Taraflı 6 Haneli PIN & Erken Otomatik Bağlantı Koruması:**
+  - Bir cihaz diğerinin kodunu girdiğinde karşılıklı onay tamamlanmadan cihazın erkenden güvenilir olarak kaydedilip ikinci PIN aşamasını atlaması engellendi.
+  - Artık iki taraf da birbirinin ekranındaki 6 haneli kodu doğrulamadan eşleşme tamamlanmaz.
+  - Linux GUI'de karşı cihaz kodumuzu girdiğinde ekranda sarı bildirim kartı belirir ve kullanıcının karşı kodu girmesi beklenir.
+
+* **🎨 Linux GUI PIN Giriş Alanı Kontrast Düzeltmesi:**
+  - Linux koyu temasında manuel PIN giriş kutusundaki rakamların görünmez (koyu zemin üstüne koyu metin) olmasına yol açan tema hatası düzeltildi; yüksek kontrastlı, elektrik mavisi (`#38BDF8`) ve ortalanmış 14pt kalın font kullanıldı.
+
+---
+
 # Connect Me v1.6.1 (v1-6-1) — Android 14+ FGS Crash Düzeltmesi & İyileştirmeler
 
 Bu acil güncelleme, özellikle **Android 14 ve Android 15 (One UI 7 / Samsung Galaxy A serisi)** cihazlarda uygulamanın açılışta çökmesine neden olan `foregroundServiceType` istisnasını düzeltir ve arka plan servislerini izole eder.

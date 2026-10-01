@@ -466,7 +466,12 @@ public partial class MainWindow : Window
         }
         if (peer.RemoteMonitorCount > 1)
         {
-            return (148, 82); // Multi-Monitor Remote Desktop (Windows / Nobara KDE)
+            double totalVirtualW = peer.ScreenWidth > 0 ? peer.ScreenWidth : (peer.RemoteMonitors?.Sum(m => m.Width) ?? 3840);
+            double totalVirtualH = peer.ScreenHeight > 0 ? peer.ScreenHeight : (peer.RemoteMonitors?.Max(m => m.Height) ?? 1080);
+            double aspect = totalVirtualW / Math.Max(1.0, totalVirtualH);
+            double h = 88;
+            double w = Math.Clamp(h * aspect * 0.75, 195, 270);
+            return (w, h);
         }
         return (132, 78); // Single-Monitor Desktop or Laptop
     }
@@ -668,7 +673,65 @@ public partial class MainWindow : Window
                 Margin = new Thickness(0, 2, 0, 0)
             });
 
-            if (peer.RemoteMonitorCount > 1)
+            if (peer.RemoteMonitorCount > 1 && peer.RemoteMonitors is { Count: > 1 })
+            {
+                var monGrid = new Grid
+                {
+                    Margin = new Thickness(2, 3, 2, 2),
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+
+                for (int mIdx = 0; mIdx < peer.RemoteMonitors.Count; mIdx++)
+                {
+                    monGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                }
+
+                for (int mIdx = 0; mIdx < peer.RemoteMonitors.Count; mIdx++)
+                {
+                    var mon = peer.RemoteMonitors[mIdx];
+                    bool isCursorOnThisMon = isCursorHere && mon.ContainsPoint(peer.RemoteCursorX, peer.RemoteCursorY);
+
+                    var monSubBox = new Border
+                    {
+                        Background = isCursorOnThisMon
+                            ? new SolidColorBrush(Color.FromRgb(6, 78, 59))
+                            : new SolidColorBrush(Color.FromRgb(15, 23, 42)),
+                        BorderBrush = isCursorOnThisMon
+                            ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
+                            : (mon.IsPrimary ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(71, 85, 105))),
+                        BorderThickness = new Thickness(isCursorOnThisMon ? 1.6 : 1.0),
+                        CornerRadius = new CornerRadius(4),
+                        Margin = new Thickness(2, 0, 2, 0),
+                        Padding = new Thickness(4, 2, 4, 2)
+                    };
+
+                    var monStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+                    string monShortName = !string.IsNullOrWhiteSpace(mon.MonitorId) ? mon.MonitorId : $"Ekran {mIdx + 1}";
+                    string star = mon.IsPrimary ? " ★" : "";
+                    monStack.Children.Add(new TextBlock
+                    {
+                        Text = $"🖥️ {monShortName}{star}",
+                        FontSize = 8.2,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = isCursorOnThisMon ? new SolidColorBrush(Color.FromRgb(74, 222, 128)) : Brushes.White,
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    });
+                    monStack.Children.Add(new TextBlock
+                    {
+                        Text = $"{mon.Width}x{mon.Height}",
+                        FontSize = 7.2,
+                        Foreground = isCursorOnThisMon ? new SolidColorBrush(Color.FromRgb(187, 247, 208)) : new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    });
+
+                    monSubBox.Child = monStack;
+                    Grid.SetColumn(monSubBox, mIdx);
+                    monGrid.Children.Add(monSubBox);
+                }
+
+                stack.Children.Add(monGrid);
+            }
+            else if (peer.RemoteMonitorCount > 1)
             {
                 stack.Children.Add(new TextBlock
                 {
@@ -1789,7 +1852,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var update = await WindowsUpdateService.CheckForUpdatesAsync("1.6.1");
+            var update = await WindowsUpdateService.CheckForUpdatesAsync("1.6.2");
             await Dispatcher.InvokeAsync(() =>
             {
                 if (update != null)

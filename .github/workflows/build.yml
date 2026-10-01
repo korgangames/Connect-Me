@@ -33,13 +33,13 @@ jobs:
         run: |
           dotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/windows
           Move-Item publish/windows/ConnectMe.Windows.exe publish/windows/ConnectMe.exe
-          Compress-Archive -Path publish/windows/ConnectMe.exe -DestinationPath publish/ConnectMe-Windows-x64v1-6-1.zip
+          Compress-Archive -Path publish/windows/ConnectMe.exe -DestinationPath publish/ConnectMe-Windows-x64v1-6-2.zip
 
       - name: Upload Windows Build Artifact
         uses: actions/upload-artifact@v7
         with:
           name: ConnectMe-Windows-x64
-          path: publish/ConnectMe-Windows-x64v1-6-1.zip
+          path: publish/ConnectMe-Windows-x64v1-6-2.zip
 
   build-android:
     name: 📱 Android APK (Kotlin 120Hz Overlay & KVM)
@@ -65,13 +65,13 @@ jobs:
           keytool -genkeypair -v -keystore connectme-release.jks -alias connectme -keyalg RSA -keysize 2048 -validity 10000 -storepass connectmepassword123 -keypass connectmepassword123 -dname "CN=Korgan Games, OU=Connect Me, O=Korgan Games, C=TR"
           gradle assembleRelease --no-daemon
           mkdir -p ../publish
-          cp app/build/outputs/apk/release/*.apk ../publish/ConnectMeV1-6-1.apk
+          cp app/build/outputs/apk/release/*.apk ../publish/ConnectMeV1-6-2.apk
 
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v7
         with:
           name: ConnectMe-Android-APK
-          path: publish/ConnectMeV1-6-1.apk
+          path: publish/ConnectMeV1-6-2.apk
 
   package-linux:
     name: 🐧 Linux Package (Nobara / KDE Plasma GUI & Launcher)
@@ -86,13 +86,13 @@ jobs:
           cp -r linux/* package/ConnectMe-Linux/
           chmod +x package/ConnectMe-Linux/*.sh package/ConnectMe-Linux/*.py
           mkdir -p publish
-          tar -czvf publish/ConnectMe-Linux-x64v1-6-1.tar.gz -C package ConnectMe-Linux
+          tar -czvf publish/ConnectMe-Linux-x64v1-6-2.tar.gz -C package ConnectMe-Linux
 
       - name: Upload Linux Package Artifact
         uses: actions/upload-artifact@v7
         with:
           name: ConnectMe-Linux-x64
-          path: publish/ConnectMe-Linux-x64v1-6-1.tar.gz
+          path: publish/ConnectMe-Linux-x64v1-6-2.tar.gz
 
   release:
     name: 🚀 Publish GitHub Release Packages
@@ -132,8 +132,8 @@ jobs:
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v1.6.1
-          name: "Connect Me v1.6.1 (v1-6-1) — Windows, Android & Linux Standalone"
+          tag_name: v1.6.2
+          name: "Connect Me v1.6.2 (v1-6-2) — Windows, Android & Linux Standalone"
           body_path: docs/RELEASE_NOTES.md
           draft: false
           prerelease: false

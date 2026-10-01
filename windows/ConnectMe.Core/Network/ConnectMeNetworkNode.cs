@@ -422,23 +422,28 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         ? respHeader.TrustToken
                         : (generatedTrustToken ?? string.Empty);
 
-                    peer.IsTrusted = true;
-                    peer.TrustToken = effectiveToken;
-                    TrustStore.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+                    peer.PendingTrustToken = effectiveToken;
+
+                    if (peer.IsMutuallyPaired)
                     {
-                        DeviceId = peer.DeviceId,
-                        DeviceName = peer.DeviceName,
-                        Platform = peer.Platform,
-                        TrustToken = effectiveToken,
-                        AssignedEdge = peer.AssignedEdgeOnLocal,
-                        EdgeOffsetStart = peer.EdgeOffsetStart,
-                        EdgeOffsetEnd = peer.EdgeOffsetEnd,
-                        AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
-                        CanvasX = peer.CanvasX,
-                        CanvasY = peer.CanvasY,
-                        HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
-                        AutoConnect = true
-                    });
+                        peer.IsTrusted = true;
+                        peer.TrustToken = effectiveToken;
+                        TrustStore.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+                        {
+                            DeviceId = peer.DeviceId,
+                            DeviceName = peer.DeviceName,
+                            Platform = peer.Platform,
+                            TrustToken = effectiveToken,
+                            AssignedEdge = peer.AssignedEdgeOnLocal,
+                            EdgeOffsetStart = peer.EdgeOffsetStart,
+                            EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                            AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                            CanvasX = peer.CanvasX,
+                            CanvasY = peer.CanvasY,
+                            HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                            AutoConnect = true
+                        });
+                    }
                 }
 
                 PeerPairingStatusChanged?.Invoke(peer);
@@ -580,6 +585,26 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         }
 
         peer.RemoteEnteredMyPinVerified = true;
+        if (peer.IsMutuallyPaired && !string.IsNullOrWhiteSpace(peer.PendingTrustToken))
+        {
+            peer.IsTrusted = true;
+            peer.TrustToken = peer.PendingTrustToken;
+            TrustStore.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+            {
+                DeviceId = peer.DeviceId,
+                DeviceName = peer.DeviceName,
+                Platform = peer.Platform,
+                TrustToken = peer.PendingTrustToken,
+                AssignedEdge = peer.AssignedEdgeOnLocal,
+                EdgeOffsetStart = peer.EdgeOffsetStart,
+                EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                CanvasX = peer.CanvasX,
+                CanvasY = peer.CanvasY,
+                HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                AutoConnect = true
+            });
+        }
         PeerPairingStatusChanged?.Invoke(peer);
         PeerDiscoveredOrUpdated?.Invoke(peer);
 
@@ -1179,30 +1204,42 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     string submittedPin = (header.TargetPin ?? string.Empty).Trim();
                     if (submittedPin == PairingPin)
                     {
+                        peer.RemoteEnteredMyPinVerified = true;
                         bool requestedTrust = header.RequestTrust == true && !string.IsNullOrWhiteSpace(header.TrustToken);
                         if (requestedTrust)
                         {
-                            peer.IsTrusted = true;
-                            peer.TrustToken = header.TrustToken!;
-                            var record = new TrustedDeviceRecord
-                            {
-                                DeviceId = peer.DeviceId,
-                                DeviceName = peer.DeviceName,
-                                Platform = peer.Platform,
-                                TrustToken = header.TrustToken!,
-                                AssignedEdge = peer.AssignedEdgeOnLocal,
-                                EdgeOffsetStart = peer.EdgeOffsetStart,
-                                EdgeOffsetEnd = peer.EdgeOffsetEnd,
-                                AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
-                                CanvasX = peer.CanvasX,
-                                CanvasY = peer.CanvasY,
-                                HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
-                                AutoConnect = true
-                            };
-                            TrustStore.AddOrUpdateTrustedDevice(record);
+                            peer.PendingTrustToken = header.TrustToken!;
                         }
 
-                        peer.RemoteEnteredMyPinVerified = true;
+                        if (peer.IsMutuallyPaired)
+                        {
+                            string effectiveToken = !string.IsNullOrWhiteSpace(peer.PendingTrustToken)
+                                ? peer.PendingTrustToken
+                                : (header.TrustToken ?? peer.TrustToken);
+
+                            if (!string.IsNullOrWhiteSpace(effectiveToken))
+                            {
+                                peer.IsTrusted = true;
+                                peer.TrustToken = effectiveToken;
+                                var record = new TrustedDeviceRecord
+                                {
+                                    DeviceId = peer.DeviceId,
+                                    DeviceName = peer.DeviceName,
+                                    Platform = peer.Platform,
+                                    TrustToken = effectiveToken,
+                                    AssignedEdge = peer.AssignedEdgeOnLocal,
+                                    EdgeOffsetStart = peer.EdgeOffsetStart,
+                                    EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                                    AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                                    CanvasX = peer.CanvasX,
+                                    CanvasY = peer.CanvasY,
+                                    HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                                    AutoConnect = true
+                                };
+                                TrustStore.AddOrUpdateTrustedDevice(record);
+                            }
+                        }
+
                         var ack = new TcpControlHeader
                         {
                             Type = "PAIR_VERIFY_ACK",
