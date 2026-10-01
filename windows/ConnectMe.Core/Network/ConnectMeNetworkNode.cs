@@ -358,7 +358,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         // Real network peer over TCP 42851
         try
         {
-            using var client = new TcpClient();
+            using var client = CreateSubnetBoundTcpClient(peer.IpAddress);
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
             await client.ConnectAsync(peer.IpAddress, peer.TcpControlPort, timeoutCts.Token).ConfigureAwait(false);
             await using var stream = client.GetStream();
@@ -489,7 +489,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
         try
         {
-            using var client = new TcpClient();
+            using var client = CreateSubnetBoundTcpClient(peer.IpAddress);
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
             await client.ConnectAsync(peer.IpAddress, peer.TcpControlPort, timeoutCts.Token).ConfigureAwait(false);
             await using var stream = client.GetStream();
@@ -803,7 +803,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     {
         try
         {
-            using var client = new TcpClient();
+            using var client = CreateSubnetBoundTcpClient(peer.IpAddress);
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await client.ConnectAsync(peer.IpAddress, peer.TcpControlPort, timeoutCts.Token).ConfigureAwait(false);
             await using var netStream = client.GetStream();
@@ -1378,6 +1378,76 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     private static string ComputeSha256Hex(ReadOnlySpan<byte> data)
         => Convert.ToHexString(SHA256.HashData(data));
+
+    public static IPAddress? FindBestLocalIpForTarget(IPAddress targetIp)
+    {
+        if (targetIp.AddressFamily != AddressFamily.InterNetwork || IPAddress.IsLoopback(targetIp))
+            return null;
+
+        byte[] targetBytes = targetIp.GetAddressBytes();
+
+        try
+        {
+            foreach (var netInterface in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (netInterface.OperationalStatus != OperationalStatus.Up ||
+                    netInterface.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                    continue;
+
+                var ipProps = netInterface.GetIPProperties();
+                foreach (var unicast in ipProps.UnicastAddresses)
+                {
+                    if (unicast.Address.AddressFamily != AddressFamily.InterNetwork)
+                        continue;
+
+                    byte[] localBytes = unicast.Address.GetAddressBytes();
+                    byte[] maskBytes = unicast.IPv4Mask?.GetAddressBytes() ?? new byte[] { 255, 255, 255, 0 };
+
+                    bool inSameSubnet = true;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        if ((localBytes[i] & maskBytes[i]) != (targetBytes[i] & maskBytes[i]))
+                        {
+                            inSameSubnet = false;
+                            break;
+                        }
+                    }
+
+                    if (inSameSubnet)
+                    {
+                        return unicast.Address;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignore interface query failure
+        }
+
+        return null;
+    }
+
+    private static TcpClient CreateSubnetBoundTcpClient(string remoteIp)
+    {
+        var client = new TcpClient();
+        try
+        {
+            if (IPAddress.TryParse(remoteIp, out var targetIp))
+            {
+                var localIp = FindBestLocalIpForTarget(targetIp);
+                if (localIp != null)
+                {
+                    client.Client.Bind(new IPEndPoint(localIp, 0));
+                }
+            }
+        }
+        catch
+        {
+            // If explicit bind fails, client falls back to OS default
+        }
+        return client;
+    }
 
     public static string FormatBytes(long bytes) => bytes switch
     {
