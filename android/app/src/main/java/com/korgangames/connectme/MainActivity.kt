@@ -31,6 +31,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.korgangames.connectme.audio.AudioStreamEngine
+import com.korgangames.connectme.audio.AudioStreamService
 import com.korgangames.connectme.network.ConnectMeService
 import com.korgangames.connectme.protocol.ProtocolConstants
 import com.korgangames.connectme.service.CursorAccessibilityService
@@ -66,7 +67,16 @@ class MainActivity : AppCompatActivity() {
             val projection = mediaProjectionManager.getMediaProjection(result.resultCode, result.data!!)
             val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
             if (pairedPc != null) {
-                AudioStreamEngine.instance.start(pairedPc.ipAddress, projection)
+                AudioStreamService.activeProjection = projection
+                val intent = Intent(this, AudioStreamService::class.java).apply {
+                    action = AudioStreamService.ACTION_START_AUDIO
+                    putExtra("hostIp", pairedPc.ipAddress)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
                 updateAudioUi()
                 Toast.makeText(this, "🎧 Sesler bilgisayardaki kulaklığınıza aktarılıyor!", Toast.LENGTH_SHORT).show()
             }
@@ -94,18 +104,32 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "Connect Me v1.6.0"
+        title = "Connect Me v1.6.1"
 
-        val svcIntent = Intent(this, ConnectMeService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(svcIntent)
-        } else {
-            startService(svcIntent)
+        try {
+            val svcIntent = Intent(this, ConnectMeService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(svcIntent)
+            } else {
+                startService(svcIntent)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ConnectMe", "Failed to start ConnectMeService: ${e.message}", e)
         }
 
-        checkAndRequestRuntimePermissions()
+        try {
+            checkAndRequestRuntimePermissions()
+        } catch (e: Exception) {
+            android.util.Log.e("ConnectMe", "Failed to check permissions: ${e.message}", e)
+        }
+
         buildProgrammaticDarkUi()
-        checkAppUpdate(isManual = false)
+
+        try {
+            checkAppUpdate(isManual = false)
+        } catch (e: Exception) {
+            android.util.Log.e("ConnectMe", "Failed to check updates: ${e.message}", e)
+        }
     }
 
     override fun onResume() {
@@ -139,7 +163,7 @@ class MainActivity : AppCompatActivity() {
         val svc = ConnectMeService.instance
         val localIp = svc?.getLocalIpv4Address() ?: "Bağlanıyor..."
         val pin = svc?.localPairingPin ?: "------"
-        statusIpText.text = "📱 Android IP: $localIp  |  v1.6.0 (v1-6-0)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
+        statusIpText.text = "📱 Android IP: $localIp  |  v1.6.1 (v1-6-1)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
         localPinBadgeText.text = "🔐 BU CİHAZIN 6 HANELİ KODU: $pin"
 
         val hasOverlay = Settings.canDrawOverlays(this)
@@ -228,7 +252,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "🌐 Connect Me v1.6.0"
+            text = "🌐 Connect Me v1.6.1"
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
@@ -695,7 +719,7 @@ class MainActivity : AppCompatActivity() {
         val report = buildString {
             appendLine("=== Connect Me Android Tanılama Günlüğü ===")
             appendLine("Tarih: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
-            appendLine("Uygulama Sürümü: v1.6.0")
+            appendLine("Uygulama Sürümü: v1.6.1")
             appendLine("Cihaz Modeli: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
             appendLine("Android Sürümü: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("Erişilebilirlik Hizmeti: ${if (CursorAccessibilityService.instance != null) "AÇIK ✅" else "KAPALI ❌"}")
@@ -714,7 +738,7 @@ class MainActivity : AppCompatActivity() {
 
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.6.0.txt")
+            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.6.1.txt")
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(sendIntent, "Connect Me Loglarını Dışa Aktar / Paylaş"))
@@ -724,7 +748,7 @@ class MainActivity : AppCompatActivity() {
         if (isManual) {
             Toast.makeText(this, "Güncellemeler denetleniyor...", Toast.LENGTH_SHORT).show()
         }
-        AppUpdateManager.checkForUpdates(this, "1.6.0") { updateInfo ->
+        AppUpdateManager.checkForUpdates(this, "1.6.1") { updateInfo ->
             if (updateInfo != null) {
                 updateCard.visibility = View.VISIBLE
                 updateTitleText.text = "🎉 Yeni Sürüm Mevcut: ${updateInfo.versionName}"
@@ -741,7 +765,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 updateCard.visibility = View.GONE
                 if (isManual) {
-                    Toast.makeText(this, "Connect Me güncel (v1.6.0)!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Connect Me güncel (v1.6.1)!", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -795,6 +819,10 @@ class MainActivity : AppCompatActivity() {
     private fun toggleAudioStreaming() {
         val engine = AudioStreamEngine.instance
         if (engine.isStreaming) {
+            val intent = Intent(this, AudioStreamService::class.java).apply {
+                action = AudioStreamService.ACTION_STOP_AUDIO
+            }
+            startService(intent)
             engine.stop()
             updateAudioUi()
             Toast.makeText(this, "Ses aktarımı durduruldu", Toast.LENGTH_SHORT).show()
@@ -809,7 +837,11 @@ class MainActivity : AppCompatActivity() {
                 val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
             } else {
-                engine.start(pairedPc.ipAddress, null)
+                val intent = Intent(this, AudioStreamService::class.java).apply {
+                    action = AudioStreamService.ACTION_START_AUDIO
+                    putExtra("hostIp", pairedPc.ipAddress)
+                }
+                startService(intent)
                 updateAudioUi()
             }
         }

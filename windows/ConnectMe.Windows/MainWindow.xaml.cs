@@ -1789,7 +1789,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var update = await WindowsUpdateService.CheckForUpdatesAsync("1.6.0");
+            var update = await WindowsUpdateService.CheckForUpdatesAsync("1.6.1");
             await Dispatcher.InvokeAsync(() =>
             {
                 if (update != null)

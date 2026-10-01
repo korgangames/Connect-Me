@@ -18,6 +18,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -53,16 +54,23 @@
             </intent-filter>
         </activity>
 
-        <!-- Arka Plan Wi-Fi (UDP/TCP) + BLE Ağ Servisi & Ses Yönlendirme -->
+        <!-- Arka Plan Wi-Fi (UDP/TCP) + BLE Ağ Servisi -->
         <service
             android:name=".network.ConnectMeService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse|mediaProjection">
+            android:foregroundServiceType="connectedDevice|specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="cross_device_kvm_and_clipboard_sync" />
         </service>
+
+        <!-- İsteğe Bağlı Ses Aktarımı (MediaProjection) Ön Plan Servisi -->
+        <service
+            android:name=".audio.AudioStreamService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <!-- 120Hz Overlay Fare İmleci, Dokunma/Kaydırma ve Fiziksel Klavye Enjeksiyon Servisi -->
         <service

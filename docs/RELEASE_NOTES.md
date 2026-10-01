@@ -1,3 +1,19 @@
+# Connect Me v1.6.1 (v1-6-1) — Android 14+ FGS Crash Düzeltmesi & İyileştirmeler
+
+Bu acil güncelleme, özellikle **Android 14 ve Android 15 (One UI 7 / Samsung Galaxy A serisi)** cihazlarda uygulamanın açılışta çökmesine neden olan `foregroundServiceType` istisnasını düzeltir ve arka plan servislerini izole eder.
+
+---
+
+### 🌟 v1.6.1 Yenilikleri ve Düzeltmeleri:
+
+* **📱 Android 14/15 Açılış Çökmesi Giderildi (FGS MediaProjection İzolasyonu):**
+  - Android 14+ kurallarına göre `mediaProjection` tipindeki bir ön plan servisi, kullanıcı ekran yakalama iznini onaylamadan başlatıldığında `SecurityException` fırlatarak uygulamanın kapanmasına neden oluyordu.
+  - Ana ağ ve KVM servisi (`ConnectMeService`), resmi standart olan `connectedDevice` tipine taşındı.
+  - Ses aktarımı (`AudioPlaybackCapture`) ise bağımsız `AudioStreamService` içerisine izole edildi ve yalnızca kullanıcı "Kulaklığa Aktar" düğmesine basıp izin verdiğinde çalışacak şekilde ayrıştırıldı.
+  - Açılış döngüsü (`onCreate`) çökme korumalı (fail-safe try-catch) bloklarla zırhlandırıldı.
+
+---
+
 # Connect Me v1.6.0 (v1-6-0) — Dahili Uygulama İçi Otomatik Güncelleyici (In-Program Auto Updater)
 
 Connect Me'nin manuel güncelleme zorluklarını tamamen ortadan kaldıran, GitHub Releases üzerinden yeni sürümleri doğrudan uygulama içinden denetleyip Android (APK) ve Windows ortamında **tek dokunuşla otomatik indirip kuran** yeni kararlı sürümü yayınlandı!

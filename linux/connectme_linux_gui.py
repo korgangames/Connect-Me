@@ -30,7 +30,7 @@ except ImportError:
 class ConnectMeLinuxGui:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Connect Me v1.6.0 — Linux Kontrol Merkezi")
+        self.root.title("Connect Me v1.6.1 — Linux Kontrol Merkezi")
         self.root.geometry("980x740")
         self.root.minsize(860, 620)
         self.root.configure(bg="#0B1120")
@@ -76,7 +76,7 @@ class ConnectMeLinuxGui:
 
         title_box = ttk.Frame(header_frame)
         title_box.pack(side=tk.LEFT)
-        ttk.Label(title_box, text="⚡ Connect Me v1.6.0 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(title_box, text="⚡ Connect Me v1.6.1 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
         ttk.Label(title_box, text="KDE Plasma Wayland Çoklu Monitör & KVM Kontrol Paneli", style="SubHeader.TLabel").pack(anchor=tk.W)
 
         status_box = ttk.Frame(header_frame)
@@ -85,7 +85,7 @@ class ConnectMeLinuxGui:
         self.update_badge_btn.pack(side=tk.RIGHT, padx=4)
         self.injector_badge = ttk.Label(status_box, text=f" Girdi: {self.node.injector.mode.upper()} ", style="Badge.TLabel")
         self.injector_badge.pack(side=tk.RIGHT, padx=4)
-        status_badge = ttk.Label(status_box, text=" v1.6.0 | 🟢 Çevrimiçi ", style="Badge.TLabel")
+        status_badge = ttk.Label(status_box, text=" v1.6.1 | 🟢 Çevrimiçi ", style="Badge.TLabel")
         status_badge.pack(side=tk.RIGHT, padx=4)
 
         # Hızlı Bilgi & PIN Kartı
@@ -104,7 +104,7 @@ class ConnectMeLinuxGui:
         copy_pin_btn.pack(side=tk.LEFT, padx=10)
 
         ip_addr = self._get_local_ip()
-        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v1.6.0 (v1-6-0)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
+        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v1.6.1 (v1-6-1)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
 
         # Çoklu Sekme (Notebook)
         self.notebook = ttk.Notebook(self.root)
@@ -644,7 +644,7 @@ X-GNOME-Autostart-enabled=true
                     if remote_tag:
                         # Version comparison
                         r_parts = [int(p) for p in remote_tag.lstrip("v").split(".") if p.isdigit()]
-                        c_parts = [int(p) for p in "1.6.0".split(".") if p.isdigit()]
+                        c_parts = [int(p) for p in "1.6.1".split(".") if p.isdigit()]
                         is_newer = False
                         for i in range(max(len(r_parts), len(c_parts))):
                             r = r_parts[i] if i < len(r_parts) else 0
@@ -665,7 +665,7 @@ X-GNOME-Autostart-enabled=true
                             return
 
             if is_manual:
-                self.root.after(0, lambda: messagebox.showinfo("Connect Me Güncel", "Tebrikler! Connect Me zaten en son sürümde (v1.6.0)."))
+                self.root.after(0, lambda: messagebox.showinfo("Connect Me Güncel", "Tebrikler! Connect Me zaten en son sürümde (v1.6.1)."))
         except Exception as ex:
             if is_manual:
                 self.root.after(0, lambda: messagebox.showwarning("Güncelleme Hatası", f"Güncelleme kontrolü başarısız oldu:\n{ex}"))
