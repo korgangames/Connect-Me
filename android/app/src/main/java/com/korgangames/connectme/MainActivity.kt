@@ -1,8 +1,10 @@
 package com.korgangames.connectme
 
+import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -21,6 +23,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.korgangames.connectme.network.ConnectMeService
 import com.korgangames.connectme.service.CursorAccessibilityService
@@ -43,6 +46,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val requestPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        refreshUiState()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         title = "Connect Me v1.3.0"
@@ -54,6 +63,7 @@ class MainActivity : AppCompatActivity() {
             startService(svcIntent)
         }
 
+        checkAndRequestRuntimePermissions()
         buildProgrammaticDarkUi()
     }
 
@@ -201,25 +211,21 @@ class MainActivity : AppCompatActivity() {
         overlayStatusText = TextView(this).apply {
             textSize = 13.5f
             setPadding(0, 12, 0, 12)
-            setOnClickListener {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                )
-            }
+            setOnClickListener { showOverlayGuideDialog() }
         }
         permCard.addView(overlayStatusText)
 
         accessibilityStatusText = TextView(this).apply {
             textSize = 13.5f
             setPadding(0, 8, 0, 12)
-            setOnClickListener {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
+            setOnClickListener { showAccessibilityGuideDialog() }
         }
         permCard.addView(accessibilityStatusText)
+
+        val guideBtn = createStyledButton("📖 Samsung & Android İzin Rehberi (Adım Adım)", "#1E3A8A") {
+            showAccessibilityGuideDialog()
+        }
+        permCard.addView(guideBtn)
         root.addView(permCard)
 
         // Mutual 6-Digit PIN & PC Connection Card
@@ -378,5 +384,82 @@ class MainActivity : AppCompatActivity() {
             layoutParams = lp
             setOnClickListener { onClick() }
         }
+    }
+
+    private fun checkAndRequestRuntimePermissions() {
+        val permissions = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+                permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            }
+        }
+        if (permissions.isNotEmpty()) {
+            requestPermissionsLauncher.launch(permissions.toTypedArray())
+        }
+    }
+
+    private fun showAccessibilityGuideDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("📱 Samsung / Android Erişilebilirlik İzni")
+            .setMessage(
+                "Fare tıklamaları ve klavye girişlerinin telefonunuza iletilmesi için bu izin şarttır.\n\n" +
+                "📌 Samsung (One UI) Kurulum Adımları:\n" +
+                "1. Aşağıdaki '1. Erişilebilirlik Sayfasına Git' butonuna dokunun.\n" +
+                "2. Açılan menünün EN ALTINA kaydırın ve 'Yüklü uygulamalar' (veya Yüklü Servisler) seçeneğine girin.\n" +
+                "3. 'Connect Me — Fare & Klavye Köprüsü' servisini seçip Açık (Aktif) konuma getirin.\n\n" +
+                "⚠️ Ayar Kilitli / Gri İse ('Kısıtlanmış Ayar' Uyarısı):\n" +
+                "Google güvenlik politikası gereği dışarıdan (APK) yüklenen uygulamalar kilitlenebilir. Kilidi açmak için:\n" +
+                "-> Aşağıdaki '2. Uygulama Bilgisi (3 Nokta ⋮)' butonuna dokunun, sağ üstteki üç noktaya (⋮) basıp 'Kısıtlanmış ayarlara izin ver' seçeneğini onaylayın."
+            )
+            .setPositiveButton("1. Erişilebilirlik Sayfasına Git") { _, _ ->
+                try {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Ayar sayfası açılamadı: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNeutralButton("2. Uygulama Bilgisi (3 Nokta ⋮)") { _, _ ->
+                try {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Uygulama bilgisi açılamadı: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun showOverlayGuideDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("🖱️ İmleç Görünürlüğü (Overlay) İzni")
+            .setMessage(
+                "Bilgisayar farenizi ekran kenarından telefonunuza geçirdiğinizde 120Hz imlecin ekran üzerinde görünmesi için bu izin gereklidir.\n\n" +
+                "Açılan listede Connect Me'yi bulup anahtarı açık konuma getirin."
+            )
+            .setPositiveButton("İzin Sayfasına Git") { _, _ ->
+                try {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        )
+                    )
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Ayar sayfası açılamadı: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
     }
 }

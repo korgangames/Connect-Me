@@ -45,6 +45,11 @@ Android paketi, 120Hz donanım hızlandırmalı şeffaf imleç bindirmesi (*over
    * **2. İzin (Erişilebilirlik Servisi):** Bilgisayardan gelen fare tıklamalarını, kaydırmaları ve klavye girişlerini ekrana aktarmak için gereklidir.
 4. İki izni de açtıktan sonra Android cihazınız eşleşmeye hazırdır. Üst kısımda 6 haneli kodunuzu görebilirsiniz.
 
+> [!TIP]
+> **Samsung (One UI) Kullanıcıları İçin Erişilebilirlik İzni:**  
+> Samsung telefonlarda Erişilebilirlik sayfasına girdiğinizde Connect Me doğrudan genel listede görünmez. Menünün **en altına kaydırıp "Yüklü uygulamalar" (Installed apps)** başlığına girin; **`Connect Me — Fare & Klavye Köprüsü`** servisini orada bulup açabilirsiniz.  
+> *Eğer ayar gri/kilitli görünüyorsa ("Kısıtlanmış Ayar"):* Telefonunuzda **Ayarlar ➔ Uygulamalar ➔ Connect Me** sayfasına gidin, sağ üst köşedeki **üç noktaya (⋮)** dokunup **"Kısıtlanmış ayarlara izin ver"** seçeneğini onaylayın.
+
 > [!NOTE]
 > **Google Play Protect Uyarısı Görünürse:**  
 > Connect Me açık kaynaklı bir proje olup doğrudan GitHub üzerinden bağımsız APK olarak yüklendiği için Play Protect tarafından "Bilinmeyen uygulama" olarak karşılanabilir.  
