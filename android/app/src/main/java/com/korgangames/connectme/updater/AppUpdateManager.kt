@@ -44,7 +44,7 @@ object AppUpdateManager {
     fun checkForUpdates(
         context: Context,
         currentVersionName: String,
-        onResult: (UpdateInfo?) -> Unit
+        onResult: (updateInfo: UpdateInfo?, errorMessage: String?) -> Unit
     ) {
         thread(isDaemon = true, name = "ConnectMe-UpdateChecker") {
             try {
@@ -53,12 +53,18 @@ object AppUpdateManager {
                     requestMethod = "GET"
                     connectTimeout = 8000
                     readTimeout = 8000
-                    setRequestProperty("User-Agent", "ConnectMe-Android")
+                    setRequestProperty("User-Agent", "ConnectMe-Android/1.6.2")
                     setRequestProperty("Accept", "application/vnd.github.v3+json")
                 }
 
-                if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                    mainHandler.post { onResult(null) }
+                val code = conn.responseCode
+                if (code != HttpURLConnection.HTTP_OK) {
+                    val msg = if (code == 404) {
+                        "GitHub 404 Not Found (Depo 'Private' olabilir, güncelleme için 'Public' olmalıdır)."
+                    } else {
+                        "GitHub HTTP $code hatası döndürdü."
+                    }
+                    mainHandler.post { onResult(null, msg) }
                     return@thread
                 }
 
@@ -70,8 +76,13 @@ object AppUpdateManager {
                 val releaseTitle = json.optString("name", remoteTag)
                 val releaseNotes = json.optString("body", "")
 
-                if (remoteTag.isEmpty() || !isNewerVersion(remoteTag, currentVersionName)) {
-                    mainHandler.post { onResult(null) }
+                if (remoteTag.isEmpty()) {
+                    mainHandler.post { onResult(null, "Sürüm etiketi bulunamadı.") }
+                    return@thread
+                }
+
+                if (!isNewerVersion(remoteTag, currentVersionName)) {
+                    mainHandler.post { onResult(null, null) } // Güncel
                     return@thread
                 }
 
@@ -94,7 +105,7 @@ object AppUpdateManager {
                 }
 
                 if (downloadUrl.isEmpty()) {
-                    mainHandler.post { onResult(null) }
+                    mainHandler.post { onResult(null, "Sürüm $remoteTag bulundu ancak APK dosyası yer almıyor.") }
                     return@thread
                 }
 
@@ -107,10 +118,10 @@ object AppUpdateManager {
                     fileSize = fileSize
                 )
 
-                mainHandler.post { onResult(updateInfo) }
+                mainHandler.post { onResult(updateInfo, null) }
             } catch (e: Exception) {
                 e.printStackTrace()
-                mainHandler.post { onResult(null) }
+                mainHandler.post { onResult(null, "Bağlantı hatası: ${e.message}") }
             }
         }
     }

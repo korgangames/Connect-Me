@@ -70,7 +70,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"v1.6.0 (v1-6-0) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
+            $"v1.6.2 (v1-6-2) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -84,7 +84,7 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me v1.6.0 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
+        AppendLog($"[Sistem] Connect Me v1.6.2 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
 
         // Otomatik GitHub güncelleme denetimi (Arka planda)
         _ = CheckForUpdatesAsync(isManual: false);
@@ -1852,11 +1852,12 @@ public partial class MainWindow : Window
 
         try
         {
-            var update = await WindowsUpdateService.CheckForUpdatesAsync("1.6.2");
+            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.6.2");
             await Dispatcher.InvokeAsync(() =>
             {
-                if (update != null)
+                if (result.HasUpdate && result.UpdateInfo != null)
                 {
+                    var update = result.UpdateInfo;
                     _latestAvailableUpdate = update;
                     UpdateBadge.Visibility = Visibility.Visible;
                     UpdateBadgeText.Text = $"🎉 Yeni Sürüm: {update.VersionTag}";
@@ -1867,7 +1868,7 @@ public partial class MainWindow : Window
                         var res = MessageBox.Show(
                             this,
                             $"Yeni bir Connect Me sürümü mevcut!\n\n" +
-                            $"Mevcut Sürüm: v1.6.0\n" +
+                            $"Mevcut Sürüm: v1.6.2\n" +
                             $"Yeni Sürüm: {update.VersionTag}\n\n" +
                             $"{update.ReleaseTitle}\n\n" +
                             $"Şimdi otomatik olarak indirilip kurulsun mu?",
@@ -1881,6 +1882,20 @@ public partial class MainWindow : Window
                         }
                     }
                 }
+                else if (!result.IsSuccess)
+                {
+                    UpdateBadge.Visibility = Visibility.Collapsed;
+                    AppendLog($"⚠️ [Güncelleme] {result.ErrorMessage}");
+                    if (isManual)
+                    {
+                        MessageBox.Show(
+                            this,
+                            $"Güncelleme denetlenemedi:\n\n{result.ErrorMessage}",
+                            "Güncelleme Hatası",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }
+                }
                 else
                 {
                     UpdateBadge.Visibility = Visibility.Collapsed;
@@ -1888,7 +1903,7 @@ public partial class MainWindow : Window
                     {
                         MessageBox.Show(
                             this,
-                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.0).",
+                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.2).",
                             "Connect Me Güncel",
                             MessageBoxButton.OK,
                             MessageBoxImage.Information);

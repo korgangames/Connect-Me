@@ -748,7 +748,7 @@ class MainActivity : AppCompatActivity() {
         if (isManual) {
             Toast.makeText(this, "Güncellemeler denetleniyor...", Toast.LENGTH_SHORT).show()
         }
-        AppUpdateManager.checkForUpdates(this, "1.6.2") { updateInfo ->
+        AppUpdateManager.checkForUpdates(this, "1.6.2") { updateInfo, errorMsg ->
             if (updateInfo != null) {
                 updateCard.visibility = View.VISIBLE
                 updateTitleText.text = "🎉 Yeni Sürüm Mevcut: ${updateInfo.versionName}"
@@ -761,6 +761,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (isManual) {
                     Toast.makeText(this, "Yeni sürüm bulundu: ${updateInfo.versionName}", Toast.LENGTH_SHORT).show()
+                }
+            } else if (errorMsg != null) {
+                updateCard.visibility = View.GONE
+                appendLog("⚠️ [Güncelleme] $errorMsg")
+                if (isManual) {
+                    Toast.makeText(this, "Güncelleme denetlenemedi:\n$errorMsg", Toast.LENGTH_LONG).show()
                 }
             } else {
                 updateCard.visibility = View.GONE

@@ -750,9 +750,10 @@ X-GNOME-Autostart-enabled=true
     def _check_for_updates(self, is_manual: bool = False):
         try:
             import urllib.request
+            import urllib.error
             req = urllib.request.Request(
                 "https://api.github.com/repos/korgangames/Connect-Me/releases/latest",
-                headers={"User-Agent": "ConnectMe-Linux", "Accept": "application/vnd.github.v3+json"}
+                headers={"User-Agent": f"ConnectMe-Linux/{VERSION}", "Accept": "application/vnd.github.v3+json"}
             )
             with urllib.request.urlopen(req, timeout=6) as response:
                 if response.status == 200:
@@ -782,7 +783,15 @@ X-GNOME-Autostart-enabled=true
 
             if is_manual:
                 self.root.after(0, lambda: messagebox.showinfo("Connect Me Güncel", f"Tebrikler! Connect Me zaten en son sürümde (v{VERSION})."))
+        except urllib.error.HTTPError as he:
+            err_msg = f"GitHub HTTP {he.code}: {he.reason}"
+            if he.code == 404:
+                err_msg = "GitHub 404 Not Found (Depo 'Private' olabilir, güncelleme için 'Public' olmalıdır)."
+            self._log(f"[Güncelleme Hatası] {err_msg}")
+            if is_manual:
+                self.root.after(0, lambda: messagebox.showwarning("Güncelleme Hatası", f"Güncelleme kontrolü başarısız oldu:\n\n{err_msg}"))
         except Exception as ex:
+            self._log(f"[Güncelleme Hatası] {ex}")
             if is_manual:
                 self.root.after(0, lambda: messagebox.showwarning("Güncelleme Hatası", f"Güncelleme kontrolü başarısız oldu:\n{ex}"))
 

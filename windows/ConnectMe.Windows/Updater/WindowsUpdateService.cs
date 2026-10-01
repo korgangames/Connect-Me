@@ -16,6 +16,13 @@ public record UpdateReleaseInfo(
     long FileSizeBytes
 );
 
+public record UpdateCheckResult(
+    bool IsSuccess,
+    bool HasUpdate,
+    UpdateReleaseInfo? UpdateInfo,
+    string? ErrorMessage
+);
+
 public static class WindowsUpdateService
 {
     private const string GITHUB_LATEST_RELEASE_URL =
@@ -28,17 +35,23 @@ public static class WindowsUpdateService
 
     static WindowsUpdateService()
     {
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ConnectMe-Windows", "1.6.0"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ConnectMe-Windows", "1.6.2"));
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
     }
 
-    public static async Task<UpdateReleaseInfo?> CheckForUpdatesAsync(string currentVersion, CancellationToken ct = default)
+    public static async Task<UpdateCheckResult> CheckForUpdatesAsync(string currentVersion, CancellationToken ct = default)
     {
         try
         {
             using var resp = await _http.GetAsync(GITHUB_LATEST_RELEASE_URL, ct);
             if (!resp.IsSuccessStatusCode)
-                return null;
+            {
+                int code = (int)resp.StatusCode;
+                string hint = code == 404
+                    ? "GitHub 404 Not Found döndürdü. Depo (korgangames/Connect-Me) Private (Gizli) ayarlanmış olabilir. Güncellemelerin cihazlar tarafından görülebilmesi için deponun 'Public' (Açık) olması gerekir."
+                    : $"GitHub API HTTP {code} ({resp.ReasonPhrase}) hatası döndürdü.";
+                return new UpdateCheckResult(false, false, null, hint);
+            }
 
             var jsonStream = await resp.Content.ReadAsStreamAsync(ct);
             using var doc = await JsonDocument.ParseAsync(jsonStream, cancellationToken: ct);
@@ -48,8 +61,11 @@ public static class WindowsUpdateService
             string title = root.TryGetProperty("name", out var tProp) ? (tProp.GetString() ?? tag) : tag;
             string body = root.TryGetProperty("body", out var bProp) ? (bProp.GetString() ?? "") : "";
 
-            if (string.IsNullOrWhiteSpace(tag) || !IsNewerVersion(tag, currentVersion))
-                return null;
+            if (string.IsNullOrWhiteSpace(tag))
+                return new UpdateCheckResult(false, false, null, "Sürüm etiketi (tag_name) bulunamadı.");
+
+            if (!IsNewerVersion(tag, currentVersion))
+                return new UpdateCheckResult(true, false, null, null);
 
             string downloadUrl = "";
             string zipName = $"ConnectMe-Windows-x64{tag}.zip";
@@ -71,13 +87,14 @@ public static class WindowsUpdateService
             }
 
             if (string.IsNullOrWhiteSpace(downloadUrl))
-                return null;
+                return new UpdateCheckResult(false, false, null, $"Yeni sürüm ({tag}) bulundu ancak Windows uyumlu .zip paketi yer almıyor.");
 
-            return new UpdateReleaseInfo(tag, title, body, downloadUrl, zipName, size);
+            var updateInfo = new UpdateReleaseInfo(tag, title, body, downloadUrl, zipName, size);
+            return new UpdateCheckResult(true, true, updateInfo, null);
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            return new UpdateCheckResult(false, false, null, $"Güncelleme sunucusuna erişilemedi: {ex.Message}");
         }
     }
 
