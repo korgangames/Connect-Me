@@ -38,6 +38,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
+VERSION = "0.45"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -374,7 +375,7 @@ class ConnectMeLinuxNode:
         mons = self.topology.monitors
         _, _, vw, vh = self.topology.virtual_desktop_bounds()
         self.log("=" * 72)
-        self.log(" Connect Me — Nobara Linux (KDE Plasma) Çoklu Monitör & KVM Servisi")
+        self.log(f" Connect Me v{VERSION} — Nobara Linux (KDE Plasma) Çoklu Monitör & KVM Servisi")
         self.log(f" Cihaz Adı : {self.device_name} ({self.device_id})")
         self.log(f" 6 Haneli Kodu : {self.local_pin[:3]} {self.local_pin[3:]}")
         self.log(f" Algılanan Ekran Sayısı : {len(mons)} (Toplam Alan: {vw}x{vh})")

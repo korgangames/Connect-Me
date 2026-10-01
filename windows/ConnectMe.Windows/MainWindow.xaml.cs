@@ -64,7 +64,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort}";
+            $"v0.45 (v0-45) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -78,7 +78,7 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin}");
+        AppendLog($"[Sistem] Connect Me v0.45 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin}");
     }
 
     private async void MainWindow_Closed(object? sender, EventArgs e)

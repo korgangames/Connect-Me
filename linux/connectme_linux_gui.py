@@ -28,7 +28,7 @@ except ImportError:
 class ConnectMeLinuxGui:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Connect Me — Linux Kontrol Merkezi")
+        self.root.title("Connect Me v0.45 — Linux Kontrol Merkezi")
         self.root.geometry("980x740")
         self.root.minsize(860, 620)
         self.root.configure(bg="#0B1120")
@@ -73,14 +73,14 @@ class ConnectMeLinuxGui:
 
         title_box = ttk.Frame(header_frame)
         title_box.pack(side=tk.LEFT)
-        ttk.Label(title_box, text="⚡ Connect Me — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(title_box, text="⚡ Connect Me v0.45 — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
         ttk.Label(title_box, text="KDE Plasma Wayland Çoklu Monitör & KVM Kontrol Paneli", style="SubHeader.TLabel").pack(anchor=tk.W)
 
         status_box = ttk.Frame(header_frame)
         status_box.pack(side=tk.RIGHT)
         self.injector_badge = ttk.Label(status_box, text=f" Girdi: {self.node.injector.mode.upper()} ", style="Badge.TLabel")
         self.injector_badge.pack(side=tk.RIGHT, padx=4)
-        status_badge = ttk.Label(status_box, text=" 🟢 Çevrimiçi ", style="Badge.TLabel")
+        status_badge = ttk.Label(status_box, text=" v0.45 | 🟢 Çevrimiçi ", style="Badge.TLabel")
         status_badge.pack(side=tk.RIGHT, padx=4)
 
         # Hızlı Bilgi & PIN Kartı
@@ -99,7 +99,7 @@ class ConnectMeLinuxGui:
         copy_pin_btn.pack(side=tk.LEFT, padx=10)
 
         ip_addr = self._get_local_ip()
-        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  UDP: 42850  |  TCP: 42851", foreground="#94A3B8").pack(side=tk.RIGHT)
+        ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v0.45 (v0-45)  |  UDP: 42850  |  TCP: 42851", foreground="#94A3B8").pack(side=tk.RIGHT)
 
         # Çoklu Sekme (Notebook)
         self.notebook = ttk.Notebook(self.root)

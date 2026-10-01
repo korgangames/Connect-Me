@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        title = "Connect Me v0.45"
 
         val svcIntent = Intent(this, ConnectMeService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -73,7 +74,7 @@ class MainActivity : AppCompatActivity() {
         val svc = ConnectMeService.instance
         val localIp = svc?.getLocalIpv4Address() ?: "Bağlanıyor..."
         val pin = svc?.localPairingPin ?: "------"
-        statusIpText.text = "📱 Android IP: $localIp  |  UDP Girdi: 42850  |  TCP Veri & PIN: 42851"
+        statusIpText.text = "📱 Android IP: $localIp  |  v0.45 (v0-45)  |  UDP: 42850  |  TCP: 42851"
         localPinBadgeText.text = "🔐 BU CİHAZIN 6 HANELİ KODU: $pin"
 
         val hasOverlay = Settings.canDrawOverlays(this)
@@ -162,7 +163,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "🌐 Connect Me"
+            text = "🌐 Connect Me v0.45"
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))

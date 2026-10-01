@@ -14,13 +14,13 @@
 
 Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir geliştirici aracı veya konsol / cmd açılması gerekmez:
 
-| İşletim Sistemi | Paket | Açıklama | Doğrudan İndir |
+| İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | Çift tıkla çalışan bağımsız WPF GUI (.NET gömülü) | [⬇️ **ConnectMe-Windows-x64.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.3.0/ConnectMe-Windows-x64.zip) |
-| 📱 **Android** | `.apk` | Doğrudan yüklenebilir APK (120Hz KVM & Pano) | [⬇️ **ConnectMe.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.3.0/ConnectMe.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | Masaüstü başlatıcılı ve menü entegrasyonlu GUI | [⬇️ **ConnectMe-Linux-x64.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.3.0/ConnectMe-Linux-x64.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64v0-45.zip` | [⬇️ **ConnectMe-Windows-x64v0-45.zip**](https://github.com/korgangames/Connect-Me/releases/download/v0.45/ConnectMe-Windows-x64v0-45.zip) |
+| 📱 **Android** | `.apk` | `ConnectMeV0-45.apk` | [⬇️ **ConnectMeV0-45.apk**](https://github.com/korgangames/Connect-Me/releases/download/v0.45/ConnectMeV0-45.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64v0-45.tar.gz` | [⬇️ **ConnectMe-Linux-x64v0-45.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v0.45/ConnectMe-Linux-x64v0-45.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.3.0 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.3.0)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v0.45 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v0.45)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
