@@ -26,7 +26,9 @@ EOF
 
 chmod +x "$DESKTOP_FILE"
 chmod +x "$DIR/start-connectme.sh"
+chmod +x "$DIR/setup-uinput.sh"
 chmod +x "$DIR/connectme_linux_gui.py"
+chmod +x "$DIR/connectme_linux_daemon.py"
 
 echo "✅ Connect Me başarıyla başlat menünüze eklendi!"
 echo "Artık KDE Plasma / Nobara menünüzden doğrudan 'Connect Me' yazarak konsolsuz başlatabilirsiniz."

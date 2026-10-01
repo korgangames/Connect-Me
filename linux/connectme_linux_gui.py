@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Connect Me — Linux (Nobara / KDE Plasma / Wayland & X11) Gelişmiş Kontrol Paneli (GUI)
-Korgan Games (v1.6.3 Manuel IP ile Bağlantı, Çoklu Monitör & Görünür İmleç)
+Korgan Games (v1.6.4 Gerçek Ölçekli Çoklu Monitör, Manuel IP & Wayland Fare Desteği)
 
 - 2D Ekran Konfigürasyonu Kanvası
 - Çift Yönlü UDP Cihaz Keşfi (Canlı Algılama)
@@ -145,11 +145,32 @@ class ConnectMeLinuxGui:
         copy_pin_btn = ttk.Button(top_row, text="Kodu Kopyala", command=self._copy_local_pin)
         copy_pin_btn.pack(side=tk.LEFT, padx=(10, 4))
 
-        ip_btn = ttk.Button(top_row, text="🌐 IP ile Bağlan", command=self._jump_to_manual_ip)
+        ip_btn = ttk.Button(top_row, text="🌐 IP ile Bağlan", style="Accent.TButton", command=self._show_manual_ip_dialog)
         ip_btn.pack(side=tk.LEFT, padx=4)
 
         ip_addr = self._get_local_ip()
         ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v{VERSION}  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
+
+        # UInput Sürücü İzni Banner'ı (Wayland Fare Hareketi için)
+        self.uinput_banner = ttk.Frame(self.root, style="Card.TFrame", padding=10)
+        u_box = ttk.Frame(self.uinput_banner, style="Card.TFrame")
+        u_box.pack(fill=tk.X)
+        self.uinput_warn_lbl = ttk.Label(
+            u_box,
+            text="⚠️ Linux Fare Yetkisi Gerekiyor (Wayland): İmlecin serbestçe hareket etmesi için /dev/uinput izni verilmelidir.",
+            font=("Segoe UI", 10, "bold"),
+            foreground="#F59E0B"
+        )
+        self.uinput_warn_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.uinput_fix_btn = ttk.Button(
+            u_box,
+            text="🖱️ Tek Tıkla Sürücü İznini Etkinleştir",
+            style="Accent.TButton",
+            command=self._fix_uinput_permissions
+        )
+        self.uinput_fix_btn.pack(side=tk.RIGHT, padx=4)
+        if self.node.injector.mode == "none" or (os.path.exists("/dev/uinput") and not os.access("/dev/uinput", os.W_OK)):
+            self.uinput_banner.pack(fill=tk.X, padx=16, pady=(4, 0))
 
         # Çoklu Sekme (Notebook)
         self.notebook = ttk.Notebook(self.root)
@@ -180,15 +201,19 @@ class ConnectMeLinuxGui:
         ctrl_bar = ttk.Frame(tab)
         ctrl_bar.pack(fill=tk.X, pady=4)
         ttk.Label(ctrl_bar, text="Linux ve bağlı cihazların 2D uzamsal kenar haritası:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+
+        ip_canvas_btn = ttk.Button(ctrl_bar, text="🌐 IP ile Cihaz Ekle", style="Accent.TButton", command=self._show_manual_ip_dialog)
+        ip_canvas_btn.pack(side=tk.RIGHT, padx=4)
+
         refresh_btn = ttk.Button(ctrl_bar, text="🔄 Ekranları Yeniden Tara", command=self._refresh_monitors)
-        refresh_btn.pack(side=tk.RIGHT)
+        refresh_btn.pack(side=tk.RIGHT, padx=4)
 
         self.canvas = tk.Canvas(tab, bg="#0F172A", highlightthickness=1, highlightbackground="#334155")
         self.canvas.pack(fill=tk.BOTH, expand=True, pady=6)
 
         legend_bar = ttk.Frame(tab)
         legend_bar.pack(fill=tk.X, pady=2)
-        ttk.Label(legend_bar, text="🟦 Mavi: Yerel Linux Monitörleri   |   🟩 Yeşil: Dış Geçiş Kenarları   |   🟪 Mor: İç Birleşim Çizgisi (İmleç Serbest)", foreground="#94A3B8", font=("Segoe UI", 9)).pack(side=tk.LEFT)
+        ttk.Label(legend_bar, text="🟦 Mavi: Yerel Linux Monitörleri   |   🟩 Yeşil: Bağlı Cihazlar (Aktif)   |   🟧 Sarı: PIN Bekleyen Cihazlar   |   🟪 Mor: İç Monitör Geçişi", foreground="#94A3B8", font=("Segoe UI", 9)).pack(side=tk.LEFT)
 
     def _build_tab_devices(self):
         tab = ttk.Frame(self.notebook, padding=14)
@@ -506,44 +531,242 @@ class ConnectMeLinuxGui:
         self.canvas.delete("all")
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
-        if cw < 50 or ch < 50:
+        if cw < 60 or ch < 60:
             return
 
         min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
-        scale = min((cw - 120) / max(1, total_w), (ch - 100) / max(1, total_h))
-        offset_x = (cw - total_w * scale) / 2
-        offset_y = (ch - total_h * scale) / 2
+        all_peers = list(self.node.peers.values())
 
-        # Grid arka plan
+        # Proportional layout: allocate left 58% to local multi-monitor, right 38% to remote devices
+        has_peers = len(all_peers) > 0
+        local_area_w = cw * 0.58 if has_peers else (cw - 80)
+        local_area_h = ch - 80
+
+        scale = min(local_area_w / max(1, total_w), local_area_h / max(1, total_h), 0.12)
+        offset_x = 35 + (local_area_w - total_w * scale) / 2
+        offset_y = 40 + (local_area_h - total_h * scale) / 2
+
+        # 1. Subtle Grid
         for gx in range(0, cw, 40):
-            self.canvas.create_line(gx, 0, gx, ch, fill="#131F37", width=1)
+            self.canvas.create_line(gx, 0, gx, ch, fill="#111C33", width=1)
         for gy in range(0, ch, 40):
-            self.canvas.create_line(0, gy, cw, gy, fill="#131F37", width=1)
+            self.canvas.create_line(0, gy, cw, gy, fill="#111C33", width=1)
 
-        # Yerel Monitörler
+        # 2. Local Linux Monitors (True to scale)
+        local_mon_rects = []
         for m in self.node.topology.monitors:
             x1 = offset_x + (m.virtualX - min_x) * scale
             y1 = offset_y + (m.virtualY - min_y) * scale
             x2 = x1 + m.width * scale
             y2 = y1 + m.height * scale
+            local_mon_rects.append((m, x1, y1, x2, y2))
 
-            self.canvas.create_rectangle(x1, y1, x2, y2, fill="#1E293B", outline="#38BDF8", width=2)
-            prim_txt = " [BİRİNCİL]" if m.isPrimary else ""
-            self.canvas.create_text(x1 + 10, y1 + 14, anchor=tk.W, text=f"{m.name}{prim_txt}", fill="#F8FAFC", font=("Segoe UI", 9, "bold"))
+            bg_color = "#172554" if m.isPrimary else "#0F172A"
+            outline_color = "#38BDF8" if m.isPrimary else "#334155"
+            self.canvas.create_rectangle(x1, y1, x2, y2, fill=bg_color, outline=outline_color, width=2)
+
+            prim_txt = " ★ [BİRİNCİL]" if m.isPrimary else ""
+            self.canvas.create_text(x1 + 10, y1 + 14, anchor=tk.W, text=f"🐧 {m.name}{prim_txt}", fill="#F8FAFC", font=("Segoe UI", 9, "bold"))
             self.canvas.create_text(x1 + 10, y1 + 32, anchor=tk.W, text=f"{m.width}x{m.height} @ ({m.virtualX}, {m.virtualY})", fill="#94A3B8", font=("Segoe UI", 8))
 
-        # Bağlı Cihazlar
-        paired_peers = [p for p in self.node.peers.values() if p.get("isMutuallyPaired")]
-        for idx, p in enumerate(paired_peers):
-            px1 = offset_x + total_w * scale + 15
-            py1 = offset_y + idx * 80
-            px2 = px1 + 130
-            py2 = py1 + 65
-            self.canvas.create_rectangle(px1, py1, px2, py2, fill="#14532D", outline="#4ADE80", width=2)
-            self.canvas.create_text(px1 + 8, py1 + 14, anchor=tk.W, text=f"📱 {p.get('deviceName', 'Peer')[:12]}", fill="#FFFFFF", font=("Segoe UI", 8, "bold"))
-            mon_info = f"({len(p.get('monitors', []))} Ekran)" if len(p.get("monitors", [])) > 1 else "Bağlı"
-            self.canvas.create_text(px1 + 8, py1 + 30, anchor=tk.W, text=mon_info, fill="#86EFAC", font=("Segoe UI", 8))
-            self.canvas.create_line(offset_x + total_w * scale, py1 + 32, px1, py1 + 32, fill="#4ADE80", dash=(4, 2), width=2)
+            if m.isPrimary and not self.node.active_remote_peer:
+                self.canvas.create_text(x1 + 10, y1 + 50, anchor=tk.W, text="🎯 [İMLEÇ YERELDE]", fill="#4ADE80", font=("Segoe UI", 8, "bold"))
+
+        # Internal Seam Lines between adjacent local monitors
+        for i in range(len(local_mon_rects)):
+            for j in range(i + 1, len(local_mon_rects)):
+                ma, ax1, ay1, ax2, ay2 = local_mon_rects[i]
+                mb, bx1, by1, bx2, by2 = local_mon_rects[j]
+                if abs(ax2 - bx1) < 3.0 or abs(bx2 - ax1) < 3.0:
+                    seam_x = bx1 if abs(ax2 - bx1) < 3.0 else ax1
+                    s_top = max(ay1, by1) + 4
+                    s_bot = min(ay2, by2) - 4
+                    if s_bot > s_top:
+                        self.canvas.create_line(seam_x, s_top, seam_x, s_bot, fill="#A855F7", dash=(3, 2), width=3)
+
+        # 3. All Discovered & Connected Peers
+        if has_peers:
+            remote_base_x = offset_x + total_w * scale + 45
+            peer_gap_y = max(85, (ch - 100) // max(1, len(all_peers)))
+
+            for idx, p in enumerate(all_peers):
+                py1 = 40 + idx * peer_gap_y
+                is_mut = p.get("isMutuallyPaired", False)
+                is_pending = p.get("in_ok", False) or p.get("out_ok", False)
+                p_monitors = p.get("monitors", [])
+
+                card_w = 210 if len(p_monitors) > 1 else 170
+                card_h = 75
+                px1 = remote_base_x
+                px2 = px1 + card_w
+                py2 = py1 + card_h
+
+                if is_mut:
+                    card_fill = "#064E3B"
+                    card_outline = "#10B981"
+                    status_txt = "🟢 Çift Taraflı Bağlı (Aktif)"
+                    status_col = "#4ADE80"
+                    line_col = "#10B981"
+                    line_dash = ()
+                elif is_pending:
+                    card_fill = "#451A03"
+                    card_outline = "#F59E0B"
+                    status_txt = "⏳ PIN Onayı Bekleniyor"
+                    status_col = "#FCD34D"
+                    line_col = "#F59E0B"
+                    line_dash = (4, 3)
+                else:
+                    card_fill = "#0F172A"
+                    card_outline = "#38BDF8"
+                    status_txt = "🌐 Keşfedildi (Eşleşin)"
+                    status_col = "#93C5FD"
+                    line_col = "#38BDF8"
+                    line_dash = (2, 2)
+
+                # Connecting portal line from local right edge to peer
+                conn_y = min(py1 + 35, offset_y + (total_h * scale) / 2)
+                self.canvas.create_line(offset_x + total_w * scale, conn_y, px1, py1 + 35, fill=line_col, dash=line_dash, width=2)
+
+                # Peer Card Box
+                card_tag = f"peer_{p['deviceId']}"
+                rect_id = self.canvas.create_rectangle(px1, py1, px2, py2, fill=card_fill, outline=card_outline, width=2, tags=(card_tag, "peer_card"))
+
+                dev_icon = "🪟" if "win" in p.get("platform", "").lower() else ("📱" if "android" in p.get("platform", "").lower() else "💻")
+                dev_name = p.get("deviceName", p.get("deviceId", "Peer"))[:16]
+                self.canvas.create_text(px1 + 10, py1 + 14, anchor=tk.W, text=f"{dev_icon} {dev_name}", fill="#FFFFFF", font=("Segoe UI", 9, "bold"), tags=(card_tag,))
+                self.canvas.create_text(px1 + 10, py1 + 32, anchor=tk.W, text=status_txt, fill=status_col, font=("Segoe UI", 8, "bold"), tags=(card_tag,))
+
+                # Multi-Monitor details
+                if p_monitors and len(p_monitors) > 1:
+                    mon_str = " | ".join(f"{m.get('width', 1920)}x{m.get('height', 1080)}" for m in p_monitors[:2])
+                    self.canvas.create_text(px1 + 10, py1 + 50, anchor=tk.W, text=f"🖥️ {len(p_monitors)} Ekran: {mon_str}", fill="#CBD5E1", font=("Segoe UI", 7), tags=(card_tag,))
+                else:
+                    sw = p.get("screenWidth", 1920)
+                    sh = p.get("screenHeight", 1080)
+                    self.canvas.create_text(px1 + 10, py1 + 50, anchor=tk.W, text=f"🖥️ Çözünürlük: {sw}x{sh}", fill="#94A3B8", font=("Segoe UI", 8), tags=(card_tag,))
+
+                # Bind click to select peer
+                pid = p["deviceId"]
+                self.canvas.tag_bind(card_tag, "<Button-1>", lambda e, p_id=pid: self._select_peer_and_focus_pin(p_id))
+        else:
+            # Empty state helper
+            empty_x = offset_x + total_w * scale + 30
+            self.canvas.create_text(empty_x, ch / 2, anchor=tk.W,
+                                    text="Ağda bağlı başka cihaz yok.\nWindows veya Android'de Connect Me'yi açın\nveya yukarıdaki '🌐 IP ile Cihaz Ekle' butonuna basın.",
+                                    fill="#64748B", font=("Segoe UI", 9))
+
+    def _select_peer_and_focus_pin(self, peer_id: str):
+        self.selected_peer_id = peer_id
+        self.notebook.select(1)
+        self._refresh_state()
+        if peer_id in self.node.peers:
+            peer = self.node.peers[peer_id]
+            self.pair_prompt_lbl.configure(text=f"'{peer.get('deviceName')}' 6 Haneli Kodu:")
+            self.pin_entry.focus_set()
+
+    def _show_manual_ip_dialog(self):
+        """Opens a prominent modal dialog to directly connect to any device by IP address."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("🌐 Manuel IP ile Cihaz Ekle & Doğrudan Bağlan")
+        dlg.geometry("480x280")
+        dlg.minsize(440, 260)
+        dlg.configure(bg="#0B1120")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        frm = ttk.Frame(dlg, padding=16)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frm, text="🌐 Cihaza Doğrudan IP ile Bağlan", font=("Segoe UI", 12, "bold"), foreground="#38BDF8").pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(frm, text="Ağ keşfinin router veya güvenlik duvarı nedeniyle engellendiği durumlarda\nkarşı cihazın (Windows/Android/Linux) IP adresini girin:",
+                  font=("Segoe UI", 9), foreground="#94A3B8").pack(anchor=tk.W, pady=(0, 12))
+
+        grid = ttk.Frame(frm)
+        grid.pack(fill=tk.X, pady=4)
+
+        ttk.Label(grid, text="Hedef Cihazın IP'si:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky=tk.W, pady=6)
+        local_ip = self._get_local_ip()
+        parts = local_ip.split(".")
+        default_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}." if len(parts) == 4 and parts[0] != "127" else "192.168.1."
+
+        ip_ent = tk.Entry(grid, font=("Consolas", 11), bg="#1E293B", fg="#38BDF8", insertbackground="#38BDF8",
+                          relief="solid", bd=1, highlightthickness=1, highlightbackground="#38BDF8")
+        ip_ent.insert(0, default_prefix)
+        ip_ent.grid(row=0, column=1, sticky=tk.EW, padx=(8, 0), pady=6)
+
+        ttk.Label(grid, text="6 Haneli Kodu (PIN):", font=("Segoe UI", 9, "bold")).grid(row=1, column=0, sticky=tk.W, pady=6)
+        pin_ent = tk.Entry(grid, font=("Consolas", 11, "bold"), bg="#1E293B", fg="#4ADE80", insertbackground="#4ADE80",
+                           relief="solid", bd=1, highlightthickness=1, highlightbackground="#334155")
+        pin_ent.grid(row=1, column=1, sticky=tk.EW, padx=(8, 0), pady=6)
+        grid.columnconfigure(1, weight=1)
+
+        trust_var = tk.BooleanVar(value=True)
+        chk = tk.Checkbutton(frm, text="⭐ Bu cihaza güven ve hatırla (Bir sonraki açılışta PIN sorma)",
+                             variable=trust_var, bg="#0B1120", fg="#FBBF24", selectcolor="#0F172A",
+                             activebackground="#0B1120", activeforeground="#FBBF24", font=("Segoe UI", 9))
+        chk.pack(anchor=tk.W, pady=6)
+
+        btn_box = ttk.Frame(frm)
+        btn_box.pack(fill=tk.X, pady=(12, 0))
+
+        def _do_connect():
+            target_ip = ip_ent.get().strip()
+            import ipaddress
+            try:
+                ipaddress.ip_address(target_ip)
+            except ValueError:
+                messagebox.showwarning("Geçersiz IP", f"Lütfen geçerli bir IP adresi girin.\nGirilen: '{target_ip}'", parent=dlg)
+                return
+
+            peer = self.node.register_manual_peer(target_ip)
+            self.selected_peer_id = peer["deviceId"]
+            self.manual_ip_entry.delete(0, tk.END)
+            self.manual_ip_entry.insert(0, target_ip)
+
+            pin = pin_ent.get().strip()
+            if len(pin) == 6 and pin.isdigit():
+                req_trust = trust_var.get()
+                token = f"trust-{self.node.device_id}-{os.urandom(8).hex()}" if req_trust else ""
+                self._log(f"[Manuel IP] '{target_ip}' için PIN ({pin}) doğrulanıyor...")
+                threading.Thread(target=self._send_pair_request, args=(peer, pin, req_trust, token), daemon=True).start()
+            else:
+                self.notebook.select(1)
+                self.pin_entry.focus_set()
+
+            self._refresh_state()
+            dlg.destroy()
+            messagebox.showinfo("Cihaz Eklendi", f"🌐 '{target_ip}' listeye eklendi ve bağlantı isteği gönderildi!", parent=self.root)
+
+        ttk.Button(btn_box, text="🚀 Bağlan ve Ekle", style="Accent.TButton", command=_do_connect).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(btn_box, text="İptal", command=dlg.destroy).pack(side=tk.RIGHT, padx=4)
+
+        ip_ent.focus_set()
+        ip_ent.icursor(tk.END)
+        ip_ent.bind("<Return>", lambda e: _do_connect())
+        pin_ent.bind("<Return>", lambda e: _do_connect())
+
+    def _fix_uinput_permissions(self):
+        """Installs the udev rule and chmods /dev/uinput using Polkit (pkexec) to guarantee Wayland mouse input."""
+        cmd = (
+            'echo \'KERNEL=="uinput", GROUP="input", MODE="0660", TAG+="uaccess", OPTIONS+="static_node=uinput"\' > /etc/udev/rules.d/99-connectme-uinput.rules && '
+            'chmod 666 /dev/uinput && '
+            f'groupadd -f input && usermod -aG input "$USER" && '
+            'udevadm control --reload-rules && udevadm trigger'
+        )
+        try:
+            res = subprocess.run(["pkexec", "sh", "-c", cmd], capture_output=True, text=True, timeout=30.0)
+            if res.returncode == 0:
+                self.node.injector._init_injector()
+                if self.node.injector.mode != "none":
+                    self.uinput_banner.pack_forget()
+                    self.injector_badge.configure(text=f" Girdi: {self.node.injector.mode.upper()} ", foreground="#4ADE80")
+                    messagebox.showinfo("Başarılı", "✅ Linux sanal donanım sürücüsü (/dev/uinput) başarıyla etkinleştirildi!\nFare ve klavye KDE Plasma Wayland'de sorunsuz çalışacaktır.")
+                else:
+                    messagebox.showwarning("Yeniden Başlatma Gerekebilir", "İzinler ayarlandı. Lütfen oturumunuzu kapatıp açın veya bilgisayarı yeniden başlatın.")
+            else:
+                messagebox.showerror("Yetkilendirme Başarısız", f"İzin verilemedi veya iptal edildi:\n{res.stderr}")
+        except Exception as ex:
+            messagebox.showerror("Hata", f"Yetkilendirme penceresi açılamadı: {ex}")
 
     def _refresh_monitors(self):
         mons = self.node.topology.refresh_monitors()

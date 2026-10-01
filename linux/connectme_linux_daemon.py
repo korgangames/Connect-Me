@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
 Connect Me — Nobara Linux (KDE Plasma Wayland / wlroots / X11) Tam Entegre Sistem Servisi & KVM Motoru
-Korgan Games (v1.6.3 Manuel IP ile Bağlantı, Çoklu Monitör & Çift Taraflı PIN)
+Korgan Games (v1.6.4 Gerçek Ölçekli Çoklu Monitör, Manuel IP & Wayland Fare Desteği)
 
 Özellikler:
 1. Çoklu Monitör Otomatik Algılama & 2D Topoloji:
-   - KDE Plasma Wayland (`kscreen-doctor -j`)
+   - KDE Plasma Wayland (`kscreen-doctor -j`, `kscreen-doctor -o`, `kscreen-console json`)
    - wlroots / Sway / Hyprland (`wlr-randr --json`)
    - X11 / XWayland (`xrandr --query`)
 2. Çift Yönlü UDP Keşif & Doğrudan Manuel IP Bağlantısı:
    - UDP 42849 portunda tüm Windows, Android ve Linux cihazlarını canlı algılama
-   - Güvenlik duvarı arkasındaki cihazlara doğrudan unicast keşif ve manuel IP bağlantısı
+   - Güvenlik duvarı arkasındaki cihazlara doğrudan unicast keşif ve tek tıkla IP bağlantısı
 3. 4 Kademeli Yüksek Performanslı Linux Girdi Enjeksiyonu (Linux Virtual Input):
    - Tier 1: evdev.UInput (Kernel seviyesinde sanal USB fare/klavye, <0.2ms gecikme, KDE Wayland doğrudan tanır)
    - Tier 2: /dev/uinput raw fcntl ioctl (Harici kütüphane gerektirmeyen çekirdek sürücüsü)
@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.6.3"
+VERSION = "1.6.4"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -106,6 +106,8 @@ class LinuxMultiMonitorTopology:
     def refresh_monitors(self) -> List[PhysicalMonitor]:
         detected = (
             self._try_kscreen_doctor()
+            or self._try_kscreen_console()
+            or self._try_kscreen_doctor_text()
             or self._try_wlr_randr()
             or self._try_xrandr()
         )
@@ -124,6 +126,8 @@ class LinuxMultiMonitorTopology:
             ]
         if not any(m.isPrimary for m in detected):
             detected[0].isPrimary = True
+        # Sort monitors deterministically by X then Y
+        detected.sort(key=lambda m: (m.virtualX, m.virtualY))
         self.monitors = detected
         return self.monitors
 
@@ -164,41 +168,201 @@ class LinuxMultiMonitorTopology:
         if not shutil.which(cmd[0]):
             return None
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=2.0)
             return proc.stdout if proc.returncode == 0 else None
         except Exception:
             return None
+
+    def _parse_kscreen_json(self, raw_json: str) -> List[PhysicalMonitor]:
+        clean = re.sub(r"\x1B\[[0-9;]*[a-zA-Z]", "", raw_json)
+        idx = clean.find("{")
+        if idx >= 0:
+            clean = clean[idx:]
+        data = json.loads(clean)
+        result: List[PhysicalMonitor] = []
+        outputs = data.get("outputs", [])
+        if isinstance(outputs, dict):
+            outputs = list(outputs.values())
+
+        for i, item in enumerate(outputs, start=1):
+            if not item.get("connected", True) or not item.get("enabled", True):
+                continue
+            name = str(item.get("name") or f"DP-{i}")
+            scale = float(item.get("scale", 1.0))
+            if scale <= 0.05:
+                scale = 1.0
+            is_prim = bool(item.get("primary", False)) or (item.get("priority") == 1)
+
+            # 1. Parse position (virtualX, virtualY)
+            pos = item.get("pos") or item.get("position") or {}
+            if isinstance(pos, dict):
+                vx = int(pos.get("x", 0))
+                vy = int(pos.get("y", 0))
+            elif isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                vx = int(pos[0])
+                vy = int(pos[1])
+            else:
+                vx, vy = 0, 0
+
+            # 2. Parse resolution (width and height) via currentModeId or modes
+            raw_w, raw_h = 0, 0
+            cur_mode_id = str(item.get("currentModeId") or "")
+            modes = item.get("modes", [])
+            if isinstance(modes, dict):
+                modes = list(modes.values())
+
+            # Find matching mode by ID
+            if cur_mode_id and isinstance(modes, list):
+                for m in modes:
+                    if str(m.get("id", "")) == cur_mode_id:
+                        sz = m.get("size", {})
+                        if isinstance(sz, dict):
+                            raw_w = int(sz.get("width", 0))
+                            raw_h = int(sz.get("height", 0))
+                        break
+
+            # If not matched, look for mode where current is True
+            if (raw_w <= 0 or raw_h <= 0) and isinstance(modes, list):
+                for m in modes:
+                    if m.get("current") or m.get("active"):
+                        sz = m.get("size", {})
+                        if isinstance(sz, dict):
+                            raw_w = int(sz.get("width", 0))
+                            raw_h = int(sz.get("height", 0))
+                        break
+
+            # Fallback to currentMode dict if present
+            if raw_w <= 0 or raw_h <= 0:
+                cm = item.get("currentMode")
+                if isinstance(cm, dict):
+                    sz = cm.get("size", {})
+                    if isinstance(sz, dict):
+                        raw_w = int(sz.get("width", 0))
+                        raw_h = int(sz.get("height", 0))
+
+            # Fallback to direct size dict
+            if raw_w <= 0 or raw_h <= 0:
+                sz = item.get("size", {})
+                if isinstance(sz, dict):
+                    raw_w = int(sz.get("width", 0))
+                    raw_h = int(sz.get("height", 0))
+
+            # Fallback to first available mode
+            if (raw_w <= 0 or raw_h <= 0) and isinstance(modes, list) and modes:
+                sz = modes[0].get("size", {})
+                if isinstance(sz, dict):
+                    raw_w = int(sz.get("width", 1920))
+                    raw_h = int(sz.get("height", 1080))
+
+            if raw_w <= 0:
+                raw_w = 1920
+            if raw_h <= 0:
+                raw_h = 1080
+
+            # Rotation (2=90, 4=270 deg)
+            rot = item.get("rotation", 1)
+            if rot in (2, 4, 90, 270):
+                raw_w, raw_h = raw_h, raw_w
+
+            result.append(
+                PhysicalMonitor(
+                    monitorId=name,
+                    name=f"Monitör {i} ({name})",
+                    virtualX=vx,
+                    virtualY=vy,
+                    width=raw_w,
+                    height=raw_h,
+                    scaleFactor=scale,
+                    isPrimary=is_prim,
+                )
+            )
+        return result
 
     def _try_kscreen_doctor(self) -> List[PhysicalMonitor]:
         out = self._run_cmd(["kscreen-doctor", "-j"])
         if not out:
             return []
         try:
-            clean = re.sub(r"\x1B\[[0-9;]*[a-zA-Z]", "", out)
-            idx = clean.find("{")
-            if idx > 0:
-                clean = clean[idx:]
-            data = json.loads(clean)
+            return self._parse_kscreen_json(out)
+        except Exception:
+            return []
+
+    def _try_kscreen_console(self) -> List[PhysicalMonitor]:
+        out = self._run_cmd(["kscreen-console", "json"])
+        if not out:
+            return []
+        try:
+            return self._parse_kscreen_json(out)
+        except Exception:
+            return []
+
+    def _try_kscreen_doctor_text(self) -> List[PhysicalMonitor]:
+        out = self._run_cmd(["kscreen-doctor", "-o"])
+        if not out:
+            return []
+        try:
             result: List[PhysicalMonitor] = []
-            for i, item in enumerate(data.get("outputs", []), start=1):
-                if not item.get("connected", True) or not item.get("enabled", True):
-                    continue
-                name = item.get("name", f"DP-{i}")
-                pos = item.get("pos", {})
-                size = item.get("size", {})
-                is_prim = bool(item.get("primary", False)) or (item.get("priority") == 1)
-                result.append(
-                    PhysicalMonitor(
-                        monitorId=name,
-                        name=f"Monitör {i} ({name})",
-                        virtualX=int(pos.get("x", 0)),
-                        virtualY=int(pos.get("y", 0)),
-                        width=max(320, int(size.get("width", 1920))),
-                        height=max(240, int(size.get("height", 1080))),
-                        scaleFactor=float(item.get("scale", 1.0)),
-                        isPrimary=is_prim,
-                    )
-                )
+            lines = out.splitlines()
+            current_name = ""
+            current_prim = False
+            current_vx, current_vy = 0, 0
+            current_w, current_h = 0, 0
+            current_scale = 1.0
+            idx = 1
+
+            for line in lines:
+                line_str = line.strip()
+                if line_str.startswith("Output:"):
+                    if current_name and (current_w > 0 or current_h > 0):
+                        result.append(PhysicalMonitor(
+                            monitorId=current_name,
+                            name=f"Monitör {idx} ({current_name})",
+                            virtualX=current_vx,
+                            virtualY=current_vy,
+                            width=current_w or 1920,
+                            height=current_h or 1080,
+                            scaleFactor=current_scale,
+                            isPrimary=current_prim,
+                        ))
+                        idx += 1
+                    current_name = ""
+                    current_prim = False
+                    current_vx, current_vy = 0, 0
+                    current_w, current_h = 0, 0
+                    current_scale = 1.0
+
+                    parts = line_str.split()
+                    if len(parts) >= 3:
+                        current_name = parts[2]
+                    current_prim = "primary" in line_str
+                    if "disabled" in line_str:
+                        current_name = ""
+                elif current_name:
+                    geom_m = re.search(r"(\d+),(\d+)\s+(\d+)x(\d+)", line_str)
+                    if geom_m:
+                        current_vx = int(geom_m.group(1))
+                        current_vy = int(geom_m.group(2))
+                        current_w = int(geom_m.group(3))
+                        current_h = int(geom_m.group(4))
+                    mode_m = re.search(r"(\d+)x(\d+)@[\d\.]+\*", line_str)
+                    if mode_m and current_w == 0:
+                        current_w = int(mode_m.group(1))
+                        current_h = int(mode_m.group(2))
+                    scale_m = re.search(r"scale\s*[:=]?\s*([\d\.]+)", line_str, re.IGNORECASE)
+                    if scale_m:
+                        current_scale = float(scale_m.group(1))
+
+            if current_name and (current_w > 0 or current_h > 0):
+                result.append(PhysicalMonitor(
+                    monitorId=current_name,
+                    name=f"Monitör {idx} ({current_name})",
+                    virtualX=current_vx,
+                    virtualY=current_vy,
+                    width=current_w or 1920,
+                    height=current_h or 1080,
+                    scaleFactor=current_scale,
+                    isPrimary=current_prim,
+                ))
             return result
         except Exception:
             return []
@@ -274,23 +438,50 @@ class LinuxInputInjector:
         self.on_log = on_log
         self.evdev_device = None
         self.uinput_fd = None
+        self._ensure_uinput_accessible()
         self._init_injector()
+
+    def _ensure_uinput_accessible(self) -> None:
+        """Attempts non-interactive chmod on /dev/uinput if available."""
+        if os.path.exists("/dev/uinput") and not os.access("/dev/uinput", os.W_OK):
+            try:
+                subprocess.run(["sudo", "-n", "chmod", "666", "/dev/uinput"], capture_output=True, timeout=1.0)
+            except Exception:
+                pass
 
     def _init_injector(self) -> None:
         # Tier 1: Try evdev module
         try:
             import evdev
             from evdev import UInput, ecodes
+
+            keys = [
+                ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE,
+                ecodes.BTN_SIDE, ecodes.BTN_EXTRA,
+                ecodes.KEY_ESC, ecodes.KEY_ENTER, ecodes.KEY_BACKSPACE, ecodes.KEY_TAB,
+                ecodes.KEY_SPACE, ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT,
+                ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL, ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT,
+                ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA, ecodes.KEY_UP, ecodes.KEY_DOWN,
+                ecodes.KEY_LEFT, ecodes.KEY_RIGHT, ecodes.KEY_DELETE, ecodes.KEY_HOME,
+                ecodes.KEY_END, ecodes.KEY_PAGEUP, ecodes.KEY_PAGEDOWN, ecodes.KEY_CAPSLOCK,
+                ecodes.KEY_INSERT, ecodes.KEY_SCROLLLOCK, ecodes.KEY_PAUSE,
+            ]
+            for c in range(ord('A'), ord('Z') + 1):
+                attr = f"KEY_{chr(c)}"
+                if hasattr(ecodes, attr):
+                    keys.append(getattr(ecodes, attr))
+            for i in range(10):
+                attr = f"KEY_{i}"
+                if hasattr(ecodes, attr):
+                    keys.append(getattr(ecodes, attr))
+            for i in range(1, 13):
+                attr = f"KEY_F{i}"
+                if hasattr(ecodes, attr):
+                    keys.append(getattr(ecodes, attr))
+
             cap = {
                 ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL, ecodes.REL_HWHEEL],
-                ecodes.EV_KEY: [
-                    ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE,
-                    ecodes.BTN_SIDE, ecodes.BTN_EXTRA,
-                    ecodes.KEY_ESC, ecodes.KEY_ENTER, ecodes.KEY_BACKSPACE, ecodes.KEY_TAB,
-                    ecodes.KEY_SPACE, ecodes.KEY_LEFTSHIFT, ecodes.KEY_LEFTCTRL, ecodes.KEY_LEFTALT,
-                    ecodes.KEY_LEFTMETA, ecodes.KEY_UP, ecodes.KEY_DOWN, ecodes.KEY_LEFT, ecodes.KEY_RIGHT,
-                    ecodes.KEY_DELETE, ecodes.KEY_HOME, ecodes.KEY_END, ecodes.KEY_PAGEUP, ecodes.KEY_PAGEDOWN
-                ]
+                ecodes.EV_KEY: list(set(keys))
             }
             self.evdev_device = UInput(cap, name="Connect-Me-Virtual-Mouse", version=0x1)
             self.mode = "evdev"
@@ -429,9 +620,62 @@ class LinuxInputInjector:
             wheel_arg = f"-w{sy}"
             subprocess.run(["ydotool", "mousemove", wheel_arg], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def _vk_to_evdev_code(self, vk: int) -> Optional[int]:
+        try:
+            import evdev
+            from evdev import ecodes
+            if 0x41 <= vk <= 0x5A:  # A-Z
+                char = chr(vk)
+                return getattr(ecodes, f"KEY_{char}", None)
+            if 0x30 <= vk <= 0x39:  # 0-9
+                num = chr(vk)
+                return getattr(ecodes, f"KEY_{num}", None)
+            if 0x70 <= vk <= 0x7B:  # F1-F12
+                fnum = vk - 0x70 + 1
+                return getattr(ecodes, f"KEY_F{fnum}", None)
+
+            mapping = {
+                0x08: ecodes.KEY_BACKSPACE,
+                0x09: ecodes.KEY_TAB,
+                0x0D: ecodes.KEY_ENTER,
+                0x1B: ecodes.KEY_ESC,
+                0x20: ecodes.KEY_SPACE,
+                0x21: ecodes.KEY_PAGEUP,
+                0x22: ecodes.KEY_PAGEDOWN,
+                0x23: ecodes.KEY_END,
+                0x24: ecodes.KEY_HOME,
+                0x25: ecodes.KEY_LEFT,
+                0x26: ecodes.KEY_UP,
+                0x27: ecodes.KEY_RIGHT,
+                0x28: ecodes.KEY_DOWN,
+                0x2D: ecodes.KEY_INSERT,
+                0x2E: ecodes.KEY_DELETE,
+                0x5B: ecodes.KEY_LEFTMETA,
+                0x5C: ecodes.KEY_RIGHTMETA,
+                0xA0: ecodes.KEY_LEFTSHIFT,
+                0xA1: ecodes.KEY_RIGHTSHIFT,
+                0xA2: ecodes.KEY_LEFTCTRL,
+                0xA3: ecodes.KEY_RIGHTCTRL,
+                0xA4: ecodes.KEY_LEFTALT,
+                0xA5: ecodes.KEY_RIGHTALT,
+            }
+            return mapping.get(vk)
+        except Exception:
+            return None
+
     def key_event(self, vk: int, is_pressed: bool, ch: str) -> None:
+        if self.mode == "evdev" and self.evdev_device:
+            import evdev
+            from evdev import ecodes
+            code = self._vk_to_evdev_code(vk)
+            if code is not None:
+                self.evdev_device.write(ecodes.EV_KEY, code, 1 if is_pressed else 0)
+                self.evdev_device.syn()
+                return
+
         if not is_pressed:
             return
+
         if self.mode in ("xdotool", "ydotool"):
             if vk == 0x08:  # Backspace
                 cmd = ["ydotool", "key", "14:1", "14:0"] if self.mode == "ydotool" else ["xdotool", "key", "BackSpace"]
@@ -923,6 +1167,9 @@ class ConnectMeLinuxNode:
                     self.cursor_y = min_y + int(vh * 0.5)
 
                 self.log(f"[Kenar Geçişi] ➡️ İmleç '{peer.get('deviceName')}' ekranından Linux'a geçti ({int(self.cursor_x)}, {int(self.cursor_y)}).")
+                # Nudge hardware cursor to wake up and display pointer immediately on Wayland
+                self.injector.move_relative(1, 0)
+                self.injector.move_relative(-1, 0)
                 if self.on_cursor_update:
                     try:
                         self.on_cursor_update(True, int(self.cursor_x), int(self.cursor_y))

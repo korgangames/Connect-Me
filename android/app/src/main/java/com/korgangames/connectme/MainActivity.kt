@@ -104,7 +104,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "Connect Me v1.6.3"
+        title = "Connect Me v1.6.4"
 
         try {
             val svcIntent = Intent(this, ConnectMeService::class.java)
@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity() {
         val svc = ConnectMeService.instance
         val localIp = svc?.getLocalIpv4Address() ?: "Bağlanıyor..."
         val pin = svc?.localPairingPin ?: "------"
-        statusIpText.text = "📱 Android IP: $localIp  |  v1.6.3 (v1-6-3)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
+        statusIpText.text = "📱 Android IP: $localIp  |  v1.6.4 (v1-6-4)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
         localPinBadgeText.text = "🔐 BU CİHAZIN 6 HANELİ KODU: $pin"
 
         val hasOverlay = Settings.canDrawOverlays(this)
@@ -252,7 +252,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "🌐 Connect Me v1.6.3"
+            text = "🌐 Connect Me v1.6.4"
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
@@ -719,7 +719,7 @@ class MainActivity : AppCompatActivity() {
         val report = buildString {
             appendLine("=== Connect Me Android Tanılama Günlüğü ===")
             appendLine("Tarih: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
-            appendLine("Uygulama Sürümü: v1.6.3")
+            appendLine("Uygulama Sürümü: v1.6.4")
             appendLine("Cihaz Modeli: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
             appendLine("Android Sürümü: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("Erişilebilirlik Hizmeti: ${if (CursorAccessibilityService.instance != null) "AÇIK ✅" else "KAPALI ❌"}")
@@ -738,7 +738,7 @@ class MainActivity : AppCompatActivity() {
 
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.6.3.txt")
+            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.6.4.txt")
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(sendIntent, "Connect Me Loglarını Dışa Aktar / Paylaş"))
@@ -748,7 +748,7 @@ class MainActivity : AppCompatActivity() {
         if (isManual) {
             Toast.makeText(this, "Güncellemeler denetleniyor...", Toast.LENGTH_SHORT).show()
         }
-        AppUpdateManager.checkForUpdates(this, "1.6.3") { updateInfo, errorMsg ->
+        AppUpdateManager.checkForUpdates(this, "1.6.4") { updateInfo, errorMsg ->
             if (updateInfo != null) {
                 updateCard.visibility = View.VISIBLE
                 updateTitleText.text = "🎉 Yeni Sürüm Mevcut: ${updateInfo.versionName}"
@@ -772,7 +772,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 updateCard.visibility = View.GONE
                 if (isManual) {
-                    Toast.makeText(this, "Connect Me güncel (v1.6.3)!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Connect Me güncel (v1.6.4)!", Toast.LENGTH_SHORT).show()
                 }
             }
         }

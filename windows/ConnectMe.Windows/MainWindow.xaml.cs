@@ -70,7 +70,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"v1.6.3 (v1-6-3) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
+            $"v1.6.4 (v1-6-4) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -84,7 +84,7 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me v1.6.3 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
+        AppendLog($"[Sistem] Connect Me v1.6.4 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
 
         // Otomatik GitHub güncelleme denetimi (Arka planda)
         _ = CheckForUpdatesAsync(isManual: false);
@@ -113,10 +113,7 @@ public partial class MainWindow : Window
                 _selectedPeer = peer;
             }
 
-            if (peer.IsMutuallyPaired)
-            {
-                EnsurePeerPlacedOnTopology(peer);
-            }
+            EnsurePeerPlacedOnTopology(peer);
 
             RefreshPeersList();
             UpdateSelectedPeerPairingPanel();
@@ -404,6 +401,25 @@ public partial class MainWindow : Window
         DisplayArrangementCanvas.RenderTransformOrigin = new Point(0.5, 0.5);
     }
 
+    private double GetCanvasMonitorScale()
+    {
+        double cw = Math.Max(420, DisplayArrangementCanvas.ActualWidth);
+        double ch = Math.Max(280, DisplayArrangementCanvas.ActualHeight);
+        var monitors = _topology.LocalMonitors;
+
+        int minVx = monitors.Count > 0 ? monitors.Min(m => m.VirtualX) : 0;
+        int minVy = monitors.Count > 0 ? monitors.Min(m => m.VirtualY) : 0;
+        int maxVx = monitors.Count > 0 ? monitors.Max(m => m.Right) : 1920;
+        int maxVy = monitors.Count > 0 ? monitors.Max(m => m.Bottom) : 1080;
+
+        double totalVw = Math.Max(1920, maxVx - minVx);
+        double totalVh = Math.Max(1080, maxVy - minVy);
+
+        double maxClusterW = Math.Min(380, cw * 0.50);
+        double maxClusterH = Math.Min(220, ch * 0.50);
+        return Math.Min(maxClusterW / totalVw, maxClusterH / totalVh);
+    }
+
     /// <summary>
     /// Computes the proportional 2D Canvas rectangles for all physical monitors of the local computer.
     /// </summary>
@@ -412,12 +428,13 @@ public partial class MainWindow : Window
         double cw = Math.Max(420, DisplayArrangementCanvas.ActualWidth);
         double ch = Math.Max(280, DisplayArrangementCanvas.ActualHeight);
         var monitors = _topology.LocalMonitors;
+        double scale = GetCanvasMonitorScale();
 
         if (monitors.Count <= 1)
         {
             var m = monitors.FirstOrDefault() ?? new PhysicalMonitorDescriptor { MonitorId = "DISPLAY1", Name = "Birincil Ekran", Width = 1920, Height = 1080, IsPrimary = true };
-            double primW = 164;
-            double primH = 98;
+            double primW = Math.Max(130, m.Width * scale);
+            double primH = Math.Max(80, m.Height * scale);
             double primLeft = (cw - primW) / 2.0;
             double primTop = (ch - primH) / 2.0;
             return [(m, primLeft, primTop, primW, primH)];
@@ -430,10 +447,6 @@ public partial class MainWindow : Window
 
         double totalVw = Math.Max(800, maxVx - minVx);
         double totalVh = Math.Max(600, maxVy - minVy);
-
-        double maxClusterW = Math.Min(360, cw * 0.56);
-        double maxClusterH = Math.Min(210, ch * 0.54);
-        double scale = Math.Min(maxClusterW / totalVw, maxClusterH / totalVh);
 
         double clusterW = totalVw * scale;
         double clusterH = totalVh * scale;
@@ -455,25 +468,23 @@ public partial class MainWindow : Window
 
     private (double Width, double Height) GetScaledPeerBoxSize(PeerDeviceNode peer)
     {
-        bool isPortrait = peer.ScreenHeight > peer.ScreenWidth;
-        if (isPortrait)
+        double scale = GetCanvasMonitorScale();
+        if (peer.RemoteMonitors is { Count: > 0 })
         {
-            return (62, 106); // Vertical Android Phone
+            int minVx = peer.RemoteMonitors.Min(m => m.VirtualX);
+            int minVy = peer.RemoteMonitors.Min(m => m.VirtualY);
+            int maxVx = peer.RemoteMonitors.Max(m => m.VirtualX + m.Width);
+            int maxVy = peer.RemoteMonitors.Max(m => m.VirtualY + m.Height);
+            double deskW = (maxVx - minVx) * scale;
+            double deskH = (maxVy - minVy) * scale;
+            return (Math.Max(120, deskW + 16), Math.Max(76, deskH + 46));
         }
-        if (peer.Platform.Contains("android", StringComparison.OrdinalIgnoreCase))
-        {
-            return (104, 70); // Android Tablet
-        }
-        if (peer.RemoteMonitorCount > 1)
-        {
-            double totalVirtualW = peer.ScreenWidth > 0 ? peer.ScreenWidth : (peer.RemoteMonitors?.Sum(m => m.Width) ?? 3840);
-            double totalVirtualH = peer.ScreenHeight > 0 ? peer.ScreenHeight : (peer.RemoteMonitors?.Max(m => m.Height) ?? 1080);
-            double aspect = totalVirtualW / Math.Max(1.0, totalVirtualH);
-            double h = 88;
-            double w = Math.Clamp(h * aspect * 0.75, 195, 270);
-            return (w, h);
-        }
-        return (132, 78); // Single-Monitor Desktop or Laptop
+
+        double rawW = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
+        double rawH = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
+        double w = Math.Max(90, rawW * scale + 16);
+        double h = Math.Max(64, rawH * scale + 44);
+        return (w, h);
     }
 
     private void RedrawDisplayArrangementCanvas()
@@ -577,9 +588,11 @@ public partial class MainWindow : Window
             }
         }
 
-        // 2. Draw all Mutually Paired Peer Display Boxes & Shared Portal Lines
-        var pairedPeers = _topology.GetConfiguredPeers().Where(p => p.IsMutuallyPaired).ToList();
-        foreach (var peer in pairedPeers)
+        // 2. Draw all Configured and Discovered Peer Display Boxes & Shared Portal Lines
+        var allPeers = _topology.GetConfiguredPeers().ToList();
+        double scale = GetCanvasMonitorScale();
+
+        foreach (var peer in allPeers)
         {
             var (boxW, boxH) = GetScaledPeerBoxSize(peer);
             peer.CanvasWidth = boxW;
@@ -616,9 +629,10 @@ public partial class MainWindow : Window
 
             bool isSelected = _selectedPeer?.DeviceId == peer.DeviceId;
             bool isCursorHere = _inputEngine.ActiveRemotePeer?.DeviceId == peer.DeviceId;
+            bool isPaired = peer.IsMutuallyPaired;
 
             string multiMonInfo = peer.RemoteMonitorCount > 1
-                ? $" ({peer.RemoteMonitorCount} Monitörlü Masaüstü)"
+                ? $" ({peer.RemoteMonitorCount} Ekran)"
                 : $" ({peer.ScreenWidth}x{peer.ScreenHeight})";
 
             var peerBorder = new Border
@@ -627,32 +641,37 @@ public partial class MainWindow : Window
                 Height = boxH,
                 Background = isCursorHere
                     ? new SolidColorBrush(Color.FromRgb(6, 78, 59))
-                    : isSelected
-                        ? new SolidColorBrush(Color.FromRgb(30, 58, 138))
-                        : new SolidColorBrush(Color.FromRgb(31, 41, 55)),
+                    : (!isPaired
+                        ? new SolidColorBrush(Color.FromRgb(30, 20, 10))
+                        : (isSelected
+                            ? new SolidColorBrush(Color.FromRgb(30, 58, 138))
+                            : new SolidColorBrush(Color.FromRgb(24, 32, 47)))),
                 BorderBrush = isCursorHere
                     ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
-                    : isSelected
-                        ? new SolidColorBrush(Color.FromRgb(56, 189, 248))
-                        : new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                    : (!isPaired
+                        ? new SolidColorBrush(Color.FromRgb(245, 158, 11))
+                        : (isSelected
+                            ? new SolidColorBrush(Color.FromRgb(56, 189, 248))
+                            : new SolidColorBrush(Color.FromRgb(100, 116, 139)))),
                 BorderThickness = new Thickness(isSelected || isCursorHere ? 2.2 : 1.5),
-                CornerRadius = new CornerRadius(7),
+                CornerRadius = new CornerRadius(8),
                 Cursor = Cursors.SizeAll,
                 Tag = peer,
-                ToolTip = $"{peer.DeviceName}{multiMonInfo}\nBağlı Yerel Monitör: {peer.AttachedLocalMonitorId} — {FormatEdgeTr(peer.AssignedEdgeOnLocal)} Kenar (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek herhangi bir yerel monitörün dış kenarına yapıştırabilirsiniz."
+                ToolTip = $"{peer.DeviceName}{multiMonInfo}\nDurum: {(isPaired ? "Çift Taraflı Aktif" : "PIN Onayı Bekleniyor")}\nBağlı Yerel Monitör: {peer.AttachedLocalMonitorId} — {FormatEdgeTr(peer.AssignedEdgeOnLocal)} Kenar (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek herhangi bir yerel monitörün dış kenarına yapıştırabilirsiniz."
             };
 
             var stack = new StackPanel
             {
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(4)
+                Margin = new Thickness(3)
             };
 
+            // Peer Device Title Banner
             stack.Children.Add(new TextBlock
             {
                 Text = $"{GetPlatformIcon(peer.Platform)} {peer.DeviceName}",
-                FontWeight = FontWeights.SemiBold,
+                FontWeight = FontWeights.Bold,
                 FontSize = 10.5,
                 Foreground = Brushes.White,
                 TextTrimming = TextTrimming.CharacterEllipsis,
@@ -660,107 +679,193 @@ public partial class MainWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Center
             });
 
-            string subLabel = localBoxes.Count > 1
-                ? $"{peer.AttachedLocalMonitorId} {FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}"
-                : $"{FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}";
+            // Status Sub-label
+            string statusSubText = !isPaired
+                ? "⏳ PIN Onayı Bekleniyor"
+                : (localBoxes.Count > 1
+                    ? $"{peer.AttachedLocalMonitorId} {FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}"
+                    : $"{FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}");
 
             stack.Children.Add(new TextBlock
             {
-                Text = subLabel,
-                FontSize = 9.2,
-                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                Text = statusSubText,
+                FontSize = 8.8,
+                FontWeight = !isPaired ? FontWeights.Bold : FontWeights.Normal,
+                Foreground = !isPaired
+                    ? new SolidColorBrush(Color.FromRgb(251, 191, 36))
+                    : new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 2, 0, 0)
+                Margin = new Thickness(0, 1, 0, 2)
             });
 
-            if (peer.RemoteMonitorCount > 1 && peer.RemoteMonitors is { Count: > 1 })
+            // True-To-Scale Monitor Boxes
+            if (peer.RemoteMonitors is { Count: > 0 })
             {
-                var monGrid = new Grid
+                int pMinVx = peer.RemoteMonitors.Min(m => m.VirtualX);
+                int pMinVy = peer.RemoteMonitors.Min(m => m.VirtualY);
+                int pMaxVx = peer.RemoteMonitors.Max(m => m.VirtualX + m.Width);
+                int pMaxVy = peer.RemoteMonitors.Max(m => m.VirtualY + m.Height);
+
+                double deskW = Math.Max(1, (pMaxVx - pMinVx) * scale);
+                double deskH = Math.Max(1, (pMaxVy - pMinVy) * scale);
+
+                var monCanvas = new Canvas
                 {
-                    Margin = new Thickness(2, 3, 2, 2),
-                    HorizontalAlignment = HorizontalAlignment.Center
+                    Width = deskW,
+                    Height = deskH,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(2, 2, 2, 2)
                 };
 
                 for (int mIdx = 0; mIdx < peer.RemoteMonitors.Count; mIdx++)
                 {
-                    monGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                }
-
-                for (int mIdx = 0; mIdx < peer.RemoteMonitors.Count; mIdx++)
-                {
                     var mon = peer.RemoteMonitors[mIdx];
-                    bool isCursorOnThisMon = isCursorHere && mon.ContainsPoint(peer.RemoteCursorX, peer.RemoteCursorY);
+                    double mw = Math.Max(48, mon.Width * scale);
+                    double mh = Math.Max(34, mon.Height * scale);
+                    double ml = (mon.VirtualX - pMinVx) * scale;
+                    double mt = (mon.VirtualY - pMinVy) * scale;
+
+                    bool isCursorOnThis = isCursorHere && mon.ContainsPoint(peer.RemoteCursorX, peer.RemoteCursorY);
 
                     var monSubBox = new Border
                     {
-                        Background = isCursorOnThisMon
+                        Width = mw,
+                        Height = mh,
+                        Background = isCursorOnThis
                             ? new SolidColorBrush(Color.FromRgb(6, 78, 59))
-                            : new SolidColorBrush(Color.FromRgb(15, 23, 42)),
-                        BorderBrush = isCursorOnThisMon
+                            : (mon.IsPrimary ? new SolidColorBrush(Color.FromRgb(23, 37, 84)) : new SolidColorBrush(Color.FromRgb(15, 23, 42))),
+                        BorderBrush = isCursorOnThis
                             ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
                             : (mon.IsPrimary ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(71, 85, 105))),
-                        BorderThickness = new Thickness(isCursorOnThisMon ? 1.6 : 1.0),
-                        CornerRadius = new CornerRadius(4),
-                        Margin = new Thickness(2, 0, 2, 0),
-                        Padding = new Thickness(4, 2, 4, 2)
+                        BorderThickness = new Thickness(isCursorOnThis ? 2.0 : 1.2),
+                        CornerRadius = new CornerRadius(5),
+                        ToolTip = $"{mon.MonitorId}\n{mon.Width}x{mon.Height} @ ({mon.VirtualX}, {mon.VirtualY})"
                     };
 
-                    var monStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+                    var monStack = new StackPanel
+                    {
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(2)
+                    };
+
                     string monShortName = !string.IsNullOrWhiteSpace(mon.MonitorId) ? mon.MonitorId : $"Ekran {mIdx + 1}";
                     string star = mon.IsPrimary ? " ★" : "";
                     monStack.Children.Add(new TextBlock
                     {
                         Text = $"🖥️ {monShortName}{star}",
-                        FontSize = 8.2,
+                        FontSize = 8.5,
                         FontWeight = FontWeights.Bold,
-                        Foreground = isCursorOnThisMon ? new SolidColorBrush(Color.FromRgb(74, 222, 128)) : Brushes.White,
+                        Foreground = isCursorOnThis ? new SolidColorBrush(Color.FromRgb(74, 222, 128)) : Brushes.White,
                         HorizontalAlignment = HorizontalAlignment.Center
                     });
+
                     monStack.Children.Add(new TextBlock
                     {
                         Text = $"{mon.Width}x{mon.Height}",
-                        FontSize = 7.2,
-                        Foreground = isCursorOnThisMon ? new SolidColorBrush(Color.FromRgb(187, 247, 208)) : new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                        FontSize = 7.5,
+                        Foreground = isCursorOnThis ? new SolidColorBrush(Color.FromRgb(187, 247, 208)) : new SolidColorBrush(Color.FromRgb(148, 163, 184)),
                         HorizontalAlignment = HorizontalAlignment.Center
                     });
 
+                    if (isCursorOnThis)
+                    {
+                        monStack.Children.Add(new TextBlock
+                        {
+                            Text = "🎯 [İMLEÇ]",
+                            FontSize = 7.5,
+                            FontWeight = FontWeights.Bold,
+                            Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128)),
+                            HorizontalAlignment = HorizontalAlignment.Center
+                        });
+                    }
+
                     monSubBox.Child = monStack;
-                    Grid.SetColumn(monSubBox, mIdx);
-                    monGrid.Children.Add(monSubBox);
+                    Canvas.SetLeft(monSubBox, ml);
+                    Canvas.SetTop(monSubBox, mt);
+                    monCanvas.Children.Add(monSubBox);
                 }
 
-                stack.Children.Add(monGrid);
-            }
-            else if (peer.RemoteMonitorCount > 1)
-            {
-                stack.Children.Add(new TextBlock
+                // Internal Seam between adjacent remote monitors
+                for (int i = 0; i < peer.RemoteMonitors.Count; i++)
                 {
-                    Text = $"🖥️ {peer.RemoteMonitorCount} Monitör",
-                    FontSize = 8.8,
-                    Foreground = new SolidColorBrush(Color.FromRgb(167, 243, 208)),
-                    HorizontalAlignment = HorizontalAlignment.Center
-                });
-            }
+                    for (int j = i + 1; j < peer.RemoteMonitors.Count; j++)
+                    {
+                        var ma = peer.RemoteMonitors[i];
+                        var mb = peer.RemoteMonitors[j];
+                        if (Math.Abs((ma.VirtualX + ma.Width) - mb.VirtualX) <= 2)
+                        {
+                            double seamX = (mb.VirtualX - pMinVx) * scale;
+                            double sTop = (Math.Max(ma.VirtualY, mb.VirtualY) - pMinVy) * scale + 2;
+                            double sBot = (Math.Min(ma.VirtualY + ma.Height, mb.VirtualY + mb.Height) - pMinVy) * scale - 2;
+                            if (sBot > sTop)
+                            {
+                                monCanvas.Children.Add(new Line
+                                {
+                                    X1 = seamX, Y1 = sTop, X2 = seamX, Y2 = sBot,
+                                    Stroke = new SolidColorBrush(Color.FromRgb(168, 85, 247)),
+                                    StrokeThickness = 2,
+                                    StrokeDashArray = new DoubleCollection([2, 2])
+                                });
+                            }
+                        }
+                    }
+                }
 
-            if (isCursorHere)
+                stack.Children.Add(monCanvas);
+            }
+            else
             {
-                stack.Children.Add(new TextBlock
+                // Single Screen
+                double rawW = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
+                double rawH = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
+                double sw = Math.Max(70, rawW * scale);
+                double sh = Math.Max(48, rawH * scale);
+
+                var singleBox = new Border
                 {
-                    Text = "🎯 [İMLEÇ BURADA]",
-                    FontSize = 9.2,
-                    FontWeight = FontWeights.Bold,
-                    Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128)),
+                    Width = sw,
+                    Height = sh,
+                    Background = isCursorHere
+                        ? new SolidColorBrush(Color.FromRgb(6, 78, 59))
+                        : new SolidColorBrush(Color.FromRgb(15, 23, 42)),
+                    BorderBrush = isCursorHere
+                        ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
+                        : new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                    BorderThickness = new Thickness(isCursorHere ? 2.0 : 1.2),
+                    CornerRadius = new CornerRadius(5),
+                    Margin = new Thickness(2, 2, 2, 2)
+                };
+
+                var singleStack = new StackPanel
+                {
                     HorizontalAlignment = HorizontalAlignment.Center,
-                    Margin = new Thickness(0, 2, 0, 0)
-                });
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(2)
+                };
 
-                stack.Children.Add(new TextBlock
+                singleStack.Children.Add(new TextBlock
                 {
-                    Text = $"({peer.RemoteCursorX}, {peer.RemoteCursorY})",
+                    Text = $"{rawW:F0}x{rawH:F0}",
                     FontSize = 8.5,
-                    Foreground = new SolidColorBrush(Color.FromRgb(187, 247, 208)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(147, 197, 253)),
                     HorizontalAlignment = HorizontalAlignment.Center
                 });
+
+                if (isCursorHere)
+                {
+                    singleStack.Children.Add(new TextBlock
+                    {
+                        Text = "🎯 [İMLEÇ BURADA]",
+                        FontSize = 8.0,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128)),
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    });
+                }
+
+                singleBox.Child = singleStack;
+                stack.Children.Add(singleBox);
             }
 
             peerBorder.Child = stack;
@@ -1852,7 +1957,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.6.3");
+            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.6.4");
             await Dispatcher.InvokeAsync(() =>
             {
                 if (result.HasUpdate && result.UpdateInfo != null)
@@ -1868,7 +1973,7 @@ public partial class MainWindow : Window
                         var res = MessageBox.Show(
                             this,
                             $"Yeni bir Connect Me sürümü mevcut!\n\n" +
-                            $"Mevcut Sürüm: v1.6.3\n" +
+                            $"Mevcut Sürüm: v1.6.4\n" +
                             $"Yeni Sürüm: {update.VersionTag}\n\n" +
                             $"{update.ReleaseTitle}\n\n" +
                             $"Şimdi otomatik olarak indirilip kurulsun mu?",
@@ -1903,7 +2008,7 @@ public partial class MainWindow : Window
                     {
                         MessageBox.Show(
                             this,
-                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.3).",
+                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.4).",
                             "Connect Me Güncel",
                             MessageBoxButton.OK,
                             MessageBoxImage.Information);

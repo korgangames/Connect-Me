@@ -1,3 +1,43 @@
+# Connect Me v1.6.4 (v1-6-4) — Çoklu Monitör Topolojisi, Gerçek Boyutlu Kanvas & Nobara Wayland Donanım İmleç Entegrasyonu
+
+Bu sürüm; Nobara Linux üzerinde çoklu monitör geometrisinin gerçek piksel çözünürlükleriyle algılanması, Windows ve Nobara 2D ekran kanvaslarında gerçek boyutlu orantılı monitör çizimi, Wayland üzerinde farenin donanım düzeyinde hareket etmesini sağlayan tek tıkla `/dev/uinput` sürücü izin entegrasyonu, keşif anında 2D kanvasta anında beliren cihaz kartları ve Manuel IP iletişim kutusunu içerir.
+
+---
+
+### 🌟 v1.6.4 Yenilikleri ve Düzeltmeleri:
+
+* **🖥️ Nobara Linux Çoklu Monitör Topolojisi & Geometrisi (KScreen Doctor & Fallback Revizyonu):**
+  - KDE Plasma Wayland üzerinde `kscreen-doctor -j` çıktısının monitör çözünürlüklerini doğrudan `size` objesinde değil, `currentModeId` ile eşleşen `modes` dizisinde barındırması nedeniyle yaşanan çözünürlük tespit hatası giderildi.
+  - `currentModeId`, `current: true` ve `currentMode` sözlükleri üzerinden kesin çözünürlük eşleşmesi yapıldı. 90° ve 270° ekran döndürmeleri için genişlik/yükseklik takası eklendi.
+  - `kscreen-console json` ve `kscreen-doctor -o` metin tabanlı regex ayrıştırıcıları kademeli yedekleme katmanı olarak entegre edildi.
+  - Monitörler `(virtualX, virtualY)` koordinatlarına göre deterministik olarak sıralanır; çift ekranlar Nobara ve Windows üzerinde kusursuz bir şekilde yan yana algılanır.
+
+* **📐 Windows ve Nobara 2D Kanvasında Birebir Gerçek Ölçekli (Proportional) Monitör Çizimi:**
+  - Windows arayüzündeki uzak cihaz (Nobara) ekranlarının orantısız veya sıkışık tek bir kutu olarak görünmesi sorunu çözüldü.
+  - `GetCanvasMonitorScale()` ile hem yerel monitörler hem de uzak cihaz ekranları birebir aynı piksel ölçeğiyle hesaplanır.
+  - Çift ekranlı Nobara sisteminde her bir monitör kendi gerçek en-boy oranında, yan yana birleşim dikişleriyle (seam lines) çizilir.
+  - İmleç Nobara'ya geçtiğinde, farenin tam olarak hangi ekranda ve piksel koordinatında olduğunu gösteren canlı hedef göstergesi (`🎯 [İMLEÇ BURADA] - DP-1 (1920x1080) @ 350, 420`) çizilir.
+
+* **🖱️ Nobara Linux Wayland Donanım İmleç & Çekirdek (Kernel) `/dev/uinput` Entegrasyonu:**
+  - Farenin Windows'tan Nobara'ya geçtiğinde görünmemesi veya hareket etmemesinin kök nedeni tespit edildi: Nobara'da kök olmayan (`non-root`) kullanıcıların `/dev/uinput` aygıtına yazma yetkisi olmaması nedeniyle girdi enjektörünün `none` moduna düşmesi.
+  - Linux GUI'ye yüksek kontrastlı sürücü uyarı paneli ve tek tıkla yetkilendirme (`pkexec` Polkit) butonu eklendi. Kullanıcı terminale tek bir komut bile yazmadan `/etc/udev/rules.d/99-connectme-uinput.rules` kuralını kurabilir ve `evdev` çekirdek sürücüsünü anında aktifleştirebilir.
+  - Alfanümerik tuşlar (A-Z, 0-9), fonksiyon tuşları (F1-F12) ve yön tuşları `evdev.UInput` yeteneklerine eklenerek yerel klavye haritalaması tamamlandı.
+  - İmleç geçişi anında (`PACKET_EDGE_HANDOFF`) Wayland donanım imlecini uyandıran mikro göreli hareket sinyali entegre edildi.
+
+* **🗺️ 2D Kanvasta Henüz Eşleşmemiş / Bekleyen Cihazların Görünürlüğü:**
+  - Önceden yalnızca çift taraflı PIN doğrulaması (`IsMutuallyPaired`) tamamlanan cihazlar 2D kanvasta çiziliyordu. Bu durum, eşleşme sürecinde cihazların haritada kaybolmasına yol açıyordu.
+  - Artık keşfedilen tüm cihazlar kanvasta anında yerini alır:
+    - Çift taraflı onaylı cihazlar: Zümrüt Yeşili (`#064E3B`)
+    - PIN doğrulaması bekleyen cihazlar: Kehribar Sarı kesikli kenarlık (`⏳ PIN Onayı Bekleniyor`)
+    - Yeni keşfedilen cihazlar: Gece Mavisi / Camgöbeği
+  - Kanvastaki karta tıklandığında doğrudan ilgili cihazın PIN doğrulama kutusuna odaklanılır.
+
+* **🌐 Nobara Linux Manuel IP ile Bağlantı Penceresi:**
+  - Linux GUI üst başlık barına ve Cihazlar sekmesine `🌐 IP ile Bağlan` butonu eklendi.
+  - Modal iletişim kutusu üzerinden doğrudan hedef IP adresi ve port girilerek hem UDP keşif paketi gönderilebilir hem de TCP üzerinden doğrudan PIN doğrulaması tetiklenebilir.
+
+---
+
 # Connect Me v1.6.3 (v1-6-3) — Nobara Linux Manuel IP ile Bağlantı, Herkese Açık Dağıtım ve Güncelleyici Düzeltmeleri
 
 Bu sürüm; Nobara Linux üzerinde doğrudan IP adresi girerek cihaz bağlama (Manual IP Direct Connect), otomatik ağ alt ağı tarama (Subnet Broadcast Scan), GitHub reposunun Public yapılarak tüm cihazlar için tek tıkla güncellemenin ve dosya indirmelerinin kesintisiz hale getirilmesini sağlar.
