@@ -134,6 +134,8 @@ class ConnectMeService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    fun log(msg: String) = Companion.log(msg)
+
     private var discoverySocket: DatagramSocket? = null
     private var inputUdpSocket: DatagramSocket? = null
     private var tcpServerSocket: ServerSocket? = null

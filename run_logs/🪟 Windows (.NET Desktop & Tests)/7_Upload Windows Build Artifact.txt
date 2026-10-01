@@ -1,0 +1,31 @@
+﻿2026-10-01T16:12:57.6464642Z ##[group]Run actions/upload-artifact@v7
+2026-10-01T16:12:57.6465198Z with:
+2026-10-01T16:12:57.6465526Z   name: ConnectMe-Windows-x64
+2026-10-01T16:12:57.6466063Z   path: publish/ConnectMe-Windows-x64v1-6-0.zip
+2026-10-01T16:12:57.6466615Z   if-no-files-found: warn
+2026-10-01T16:12:57.6467018Z   compression-level: 6
+2026-10-01T16:12:57.6467372Z   overwrite: false
+2026-10-01T16:12:57.6467717Z   include-hidden-files: false
+2026-10-01T16:12:57.6468098Z   archive: true
+2026-10-01T16:12:57.6468387Z env:
+2026-10-01T16:12:57.6468688Z   DOTNET_ROOT: C:\Program Files\dotnet
+2026-10-01T16:12:57.6469123Z ##[endgroup]
+2026-10-01T16:12:58.1390635Z With the provided path, there will be 1 file uploaded
+2026-10-01T16:12:58.1500350Z Artifact name is valid!
+2026-10-01T16:12:58.1599030Z Root directory input is valid!
+2026-10-01T16:12:58.5993587Z Uploading artifact: ConnectMe-Windows-x64.zip
+2026-10-01T16:12:58.5995945Z Beginning upload of artifact content to blob storage
+2026-10-01T16:12:59.9097212Z Uploaded bytes 8388608
+2026-10-01T16:13:00.5369290Z Uploaded bytes 16777216
+2026-10-01T16:13:00.8246842Z Uploaded bytes 25165824
+2026-10-01T16:13:01.4696489Z Uploaded bytes 33554432
+2026-10-01T16:13:01.8875107Z Uploaded bytes 41943040
+2026-10-01T16:13:03.0697490Z Uploaded bytes 50331648
+2026-10-01T16:13:05.0027803Z Uploaded bytes 58720256
+2026-10-01T16:13:05.6997135Z Uploaded bytes 60675419
+2026-10-01T16:13:05.7579859Z Finished uploading artifact content to blob storage!
+2026-10-01T16:13:05.7582127Z SHA256 digest of uploaded artifact is 7096b55f576739e681881191353daf0ac814822df0b1fb8edcc57bb18cbda596
+2026-10-01T16:13:05.7606053Z Finalizing artifact upload
+2026-10-01T16:13:06.1464846Z Artifact ConnectMe-Windows-x64 successfully finalized. Artifact ID 11176142194
+2026-10-01T16:13:06.1474126Z Artifact ConnectMe-Windows-x64 has been successfully uploaded! Final size is 60675419 bytes. Artifact ID is 11176142194
+2026-10-01T16:13:06.1833820Z Artifact download URL: https://github.com/korgangames/Connect-Me/actions/runs/36890107425/artifacts/11176142194

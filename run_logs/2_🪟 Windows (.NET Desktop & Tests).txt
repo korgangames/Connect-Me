@@ -1,0 +1,257 @@
+﻿2026-10-01T16:11:33.5418817Z Current runner version: '2.337.0'
+2026-10-01T16:11:33.5456355Z ##[group]Runner Image Provisioner
+2026-10-01T16:11:33.5457655Z Hosted Compute Agent
+2026-10-01T16:11:33.5458597Z Version: 20260901.588
+2026-10-01T16:11:33.5459632Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-10-01T16:11:33.5460887Z Build Date: 2026-09-01T19:56:44Z
+2026-10-01T16:11:33.5461977Z Worker ID: {85b29b07-bc08-44f4-8967-8ad0bdcd9e72}
+2026-10-01T16:11:33.5463197Z Azure Region: westcentralus
+2026-10-01T16:11:33.5464300Z ##[endgroup]
+2026-10-01T16:11:33.5466678Z ##[group]Operating System
+2026-10-01T16:11:33.5467896Z Microsoft Windows Server 2025
+2026-10-01T16:11:33.5468971Z 10.0.26100
+2026-10-01T16:11:33.5469832Z Datacenter
+2026-10-01T16:11:33.5471243Z ##[endgroup]
+2026-10-01T16:11:33.5472269Z ##[group]Runner Image
+2026-10-01T16:11:33.5473351Z Image: windows-2025-vs2026
+2026-10-01T16:11:33.5474437Z Version: 20260925.250.1
+2026-10-01T16:11:33.5476987Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260925.250/images/windows/Windows2025-VS2026-Readme.md
+2026-10-01T16:11:33.5480174Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260925.250
+2026-10-01T16:11:33.5481985Z ##[endgroup]
+2026-10-01T16:11:33.5483807Z ##[group]GITHUB_TOKEN Permissions
+2026-10-01T16:11:33.5486350Z Contents: write
+2026-10-01T16:11:33.5487319Z Metadata: read
+2026-10-01T16:11:33.5488153Z ##[endgroup]
+2026-10-01T16:11:33.5491486Z Secret source: Actions
+2026-10-01T16:11:33.5493041Z Cache mode: write
+2026-10-01T16:11:33.5494306Z Prepare workflow directory
+2026-10-01T16:11:33.6063394Z Prepare all required actions
+2026-10-01T16:11:33.6134349Z Getting action download info
+2026-10-01T16:11:33.9375213Z Download action repository 'actions/checkout@v6' (SHA:d23441a48e516b6c34aea4fa41551a30e30af803)
+2026-10-01T16:11:34.1280119Z Download action repository 'actions/setup-dotnet@v6' (SHA:a98b56852c35b8e3190ac28c8c2271da59106c68)
+2026-10-01T16:11:34.7977172Z Download action repository 'actions/upload-artifact@v7' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+2026-10-01T16:11:35.0406550Z Complete job name: 🪟 Windows (.NET Desktop & Tests)
+2026-10-01T16:11:35.2061619Z ##[group]Run actions/checkout@v6
+2026-10-01T16:11:35.2062755Z with:
+2026-10-01T16:11:35.2063243Z   repository: korgangames/Connect-Me
+2026-10-01T16:11:35.2068458Z   token: ***
+2026-10-01T16:11:35.2068975Z   ssh-strict: true
+2026-10-01T16:11:35.2069471Z   ssh-user: git
+2026-10-01T16:11:35.2069965Z   persist-credentials: true
+2026-10-01T16:11:35.2070519Z   clean: true
+2026-10-01T16:11:35.2071016Z   sparse-checkout-cone-mode: true
+2026-10-01T16:11:35.2071602Z   fetch-depth: 1
+2026-10-01T16:11:35.2072079Z   fetch-tags: false
+2026-10-01T16:11:35.2072570Z   show-progress: true
+2026-10-01T16:11:35.2073075Z   lfs: false
+2026-10-01T16:11:35.2073537Z   submodules: false
+2026-10-01T16:11:35.2074036Z   set-safe-directory: true
+2026-10-01T16:11:35.2074610Z   allow-unsafe-pr-checkout: false
+2026-10-01T16:11:35.2075462Z ##[endgroup]
+2026-10-01T16:11:37.8653969Z Syncing repository: korgangames/Connect-Me
+2026-10-01T16:11:37.8657983Z ##[group]Getting Git version info
+2026-10-01T16:11:37.8660034Z Working directory is 'D:\a\Connect-Me\Connect-Me'
+2026-10-01T16:11:37.8663251Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-01T16:11:37.8665342Z git version 2.55.0.windows.5
+2026-10-01T16:11:37.8671436Z ##[endgroup]
+2026-10-01T16:11:37.8684984Z Temporarily overriding HOME='D:\a\_temp\aaf86ba1-b594-44f9-8af6-d78583aba479' before making global git config changes
+2026-10-01T16:11:37.8689645Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-01T16:11:37.8694131Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\Connect-Me\Connect-Me
+2026-10-01T16:11:37.8700284Z Deleting the contents of 'D:\a\Connect-Me\Connect-Me'
+2026-10-01T16:11:37.8704139Z ##[group]Determining repository object format
+2026-10-01T16:11:37.8707343Z ##[endgroup]
+2026-10-01T16:11:37.8717069Z ##[group]Initializing the repository
+2026-10-01T16:11:37.8719862Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\Connect-Me\Connect-Me
+2026-10-01T16:11:37.8723476Z Initialized empty Git repository in D:/a/Connect-Me/Connect-Me/.git/
+2026-10-01T16:11:37.8730207Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/korgangames/Connect-Me
+2026-10-01T16:11:37.8736674Z ##[endgroup]
+2026-10-01T16:11:37.8739513Z ##[group]Disabling automatic garbage collection
+2026-10-01T16:11:37.8742294Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-10-01T16:11:37.8747814Z ##[endgroup]
+2026-10-01T16:11:37.8750203Z ##[group]Setting up auth
+2026-10-01T16:11:37.8752406Z Removing SSH command configuration
+2026-10-01T16:11:37.8755516Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-01T16:11:37.8768637Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-01T16:11:39.0941856Z Removing HTTP extra header
+2026-10-01T16:11:39.0956421Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-01T16:11:42.4367579Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-01T16:11:42.4370873Z Removing includeIf entries pointing to credentials config files
+2026-10-01T16:11:42.4371932Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-01T16:11:42.4373922Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-01T16:11:42.4387061Z [command]"C:\Program Files\Git\bin\git.exe" config --file D:\a\_temp\git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-10-01T16:11:42.4393527Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/Connect-Me/Connect-Me/.git.path D:\a\_temp\git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:11:42.4399784Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/Connect-Me/Connect-Me/.git/worktrees/*.path D:\a\_temp\git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:11:42.4406266Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:11:42.4411803Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:11:42.4414292Z ##[endgroup]
+2026-10-01T16:11:42.4414979Z ##[group]Fetching the repository
+2026-10-01T16:11:42.4416432Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +0429721c3d096479dbe61ee220a29ce0c425ab8f:refs/remotes/origin/main
+2026-10-01T16:11:44.6028141Z From https://github.com/korgangames/Connect-Me
+2026-10-01T16:11:44.6041857Z  * [new ref]         0429721c3d096479dbe61ee220a29ce0c425ab8f -> origin/main
+2026-10-01T16:11:44.6308418Z [command]"C:\Program Files\Git\bin\git.exe" branch --list --remote origin/main
+2026-10-01T16:11:44.6721592Z   origin/main
+2026-10-01T16:11:44.6803784Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse refs/remotes/origin/main
+2026-10-01T16:11:44.8210213Z 0429721c3d096479dbe61ee220a29ce0c425ab8f
+2026-10-01T16:11:44.9069439Z ##[endgroup]
+2026-10-01T16:11:44.9124827Z ##[group]Determining the checkout info
+2026-10-01T16:11:44.9160112Z ##[endgroup]
+2026-10-01T16:11:44.9419676Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-10-01T16:11:44.9965878Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-10-01T16:11:45.0579837Z ##[group]Checking out the ref
+2026-10-01T16:11:45.0597727Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B main refs/remotes/origin/main
+2026-10-01T16:11:45.1915355Z Switched to a new branch 'main'
+2026-10-01T16:11:45.1999187Z branch 'main' set up to track 'origin/main'.
+2026-10-01T16:11:45.2156320Z ##[endgroup]
+2026-10-01T16:11:45.3090194Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-10-01T16:11:45.3429628Z 0429721c3d096479dbe61ee220a29ce0c425ab8f
+2026-10-01T16:11:45.5034563Z ##[group]Run actions/setup-dotnet@v6
+2026-10-01T16:11:45.5035062Z with:
+2026-10-01T16:11:45.5035638Z   dotnet-version: 10.0.x
+2026-10-01T16:11:45.5036008Z   cache: false
+2026-10-01T16:11:45.5036335Z ##[endgroup]
+2026-10-01T16:11:45.9966078Z [command]"C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo -Sta -NoProfile -NonInteractive -ExecutionPolicy Unrestricted -Command & 'D:\a\_actions\actions\setup-dotnet\v6\externals\install-dotnet.ps1' -SkipNonVersionedFiles -Runtime dotnet -Channel LTS
+2026-10-01T16:11:48.3812563Z dotnet-install: .NET Core Runtime with version '10.0.12' is already installed.
+2026-10-01T16:11:48.8235763Z [command]"C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo -Sta -NoProfile -NonInteractive -ExecutionPolicy Unrestricted -Command & 'D:\a\_actions\actions\setup-dotnet\v6\externals\install-dotnet.ps1' -SkipNonVersionedFiles -Channel 10.0
+2026-10-01T16:11:50.6781849Z dotnet-install: .NET Core SDK with version '10.0.401' is already installed.
+2026-10-01T16:11:50.8616718Z ##[group]Run dotnet build ConnectMe.sln -c Release
+2026-10-01T16:11:50.8617462Z [36;1mdotnet build ConnectMe.sln -c Release[0m
+2026-10-01T16:11:50.9533628Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-01T16:11:50.9534235Z env:
+2026-10-01T16:11:50.9534528Z   DOTNET_ROOT: C:\Program Files\dotnet
+2026-10-01T16:11:50.9534941Z ##[endgroup]
+2026-10-01T16:12:05.6940115Z   Determining projects to restore...
+2026-10-01T16:12:09.8421384Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Core\ConnectMe.Core.csproj (in 763 ms).
+2026-10-01T16:12:09.9800350Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Windows\ConnectMe.Windows.csproj (in 137 ms).
+2026-10-01T16:12:09.9912044Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Tests\ConnectMe.Tests.csproj (in 4 ms).
+2026-10-01T16:12:18.4604793Z   ConnectMe.Core -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Core\bin\Release\net10.0\ConnectMe.Core.dll
+2026-10-01T16:12:21.9385649Z   ConnectMe.Tests -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Tests\bin\Release\net10.0\ConnectMe.Tests.dll
+2026-10-01T16:12:21.9694332Z   ConnectMe.Windows -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Windows\bin\Release\net10.0-windows\ConnectMe.Windows.dll
+2026-10-01T16:12:21.9870138Z 
+2026-10-01T16:12:21.9877968Z Build succeeded.
+2026-10-01T16:12:21.9879034Z     0 Warning(s)
+2026-10-01T16:12:21.9879545Z     0 Error(s)
+2026-10-01T16:12:21.9881380Z 
+2026-10-01T16:12:21.9882002Z Time Elapsed 00:00:25.32
+2026-10-01T16:12:22.5301900Z ##[group]Run dotnet run --project windows/ConnectMe.Tests/ConnectMe.Tests.csproj -c Release --no-build
+2026-10-01T16:12:22.5303689Z [36;1mdotnet run --project windows/ConnectMe.Tests/ConnectMe.Tests.csproj -c Release --no-build[0m
+2026-10-01T16:12:22.5423636Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-01T16:12:22.5424246Z env:
+2026-10-01T16:12:22.5424565Z   DOTNET_ROOT: C:\Program Files\dotnet
+2026-10-01T16:12:22.5425019Z ##[endgroup]
+2026-10-01T16:12:25.2275352Z === Connect Me — Çoklu Cihaz, 2D Ekran Kanvası, Çift Taraflı PIN ve Protokol Test Paketi ===
+2026-10-01T16:12:25.2356553Z   [PASS] UDP MouseMove ikili serileştirme ve çözümleme (10 bayt)
+2026-10-01T16:12:25.2365035Z   [PASS] UDP MouseButton (6B) ve MouseScroll (8B) serileştirme
+2026-10-01T16:12:25.2366496Z   [PASS] UDP KeyEvent Türkçe Unicode ('Ş') ve Modifier serileştirme (12 bayt)
+2026-10-01T16:12:25.2489787Z   [PASS] UDP EdgeHandOff orantısal kenar koordinatı serileştirme
+2026-10-01T16:12:25.2500321Z   [PASS] UDP AudioChunk ikili serileştirme ve çözümleme (14 bayt başlık + 960 bayt PCM)
+2026-10-01T16:12:25.2544756Z   [PASS] Bluetooth LE (BLE) 16-bayt yakınlık ve IP keşif paketi kodlama
+2026-10-01T16:12:25.2666293Z   [PASS] Köşe Koruması (Dead-Corner): Pencere kapatma ('X') köşesinde yanlışlıkla geçiş engellendi
+2026-10-01T16:12:25.2711384Z   [PASS] Kenar Direnci (Edge Resistance) ve Sağ Kenardan -> Android Sol Kenarına (%50 hizalı) geçiş
+2026-10-01T16:12:25.2788742Z   [PASS] Android'den Windows'a dönüş koordinat eşlemesi (2552, 1080)
+2026-10-01T16:12:25.2846920Z   [PASS] Çoklu Cihaz Kısmi Kenar Segmenti: Sağ Üst -> Laptop, Sağ Alt -> Android, Sol -> Nobara KDE yönlendirmesi
+2026-10-01T16:12:25.2848442Z   [PASS] 2D Ekran Konfigürasyonu GUI Manyetik Kenar Yapışması (SnapPeerBoxToPrimaryOnCanvas)
+2026-10-01T16:12:25.3182223Z   [PASS] Çoklu Monitör İç Birleşim Koruması: Monitör 1 -> Monitör 2 geçişinde imleç serbest, Monitör 2 dış kenarında Android'e geçiş
+2026-10-01T16:12:25.3239321Z   [PASS] Çoklu Monitör Negatif Koordinat Geri Dönüşü (DISPLAY3 sol dikey ekran: -1072, 720)
+2026-10-01T16:12:25.3349062Z   [PASS] Linux KDE Plasma Wayland (kscreen-doctor -j) Çoklu Monitör JSON Ayrıştırıcı
+2026-10-01T16:12:25.3444257Z   [PASS] Linux X11/XWayland (xrandr --query) Çoklu Monitör Çıktı Ayrıştırıcı
+2026-10-01T16:12:25.3501357Z   [PASS] 2D Çoklu Monitör Kanvasında İstenen Monitöre (DISPLAY2 Sağ Kenar) Manyetik Kenetleme
+2026-10-01T16:12:25.3595893Z   [PASS] TrustedDeviceStore: 24-baytlık (48 karakter hex) kriptografik belirteç üretildi
+2026-10-01T16:12:25.4369637Z   [PASS] TrustedDeviceStore: Güvenilir cihaz eklendi ve hafızada doğrulandı
+2026-10-01T16:12:25.4593824Z   [PASS] TrustedDeviceStore: Kriptografik güven belirteci doğru eşleşti
+2026-10-01T16:12:25.4707308Z   [PASS] TrustedDeviceStore: Yanlış güven belirteci reddedildi
+2026-10-01T16:12:25.4961333Z   [PASS] TrustedDeviceStore: Diske JSON olarak kaydedildi ve yeni store örneğinde tam topolojiyle okundu
+2026-10-01T16:12:25.5039528Z   [PASS] TrustedDeviceStore: Cihaz güveni başarıyla kaldırıldı (unutuldu)
+2026-10-01T16:12:25.5146116Z   [PASS] TCP Çerçeveli (Framed) Kontrol Başlığı + Drop Shelf Dosya Akışı
+2026-10-01T16:12:25.7631948Z   [PASS] Çift Taraflı 6 Haneli PIN: Hatalı kod (000000) reddedildi
+2026-10-01T16:12:25.7861701Z   [PASS] Çift Taraflı 6 Haneli PIN (Adım 1): Tek taraflı kod girişi kabul edildi ancak karşı onay bekleniyor
+2026-10-01T16:12:25.8144128Z   [PASS] Çift Taraflı 6 Haneli PIN (Adım 2): İki taraf da birbirinin kodunu girdi ve karşılıklı eşleşme tamamlandı
+2026-10-01T16:12:25.8794084Z   [PASS] Çift Taraflı PIN Onayı Sonrası Uçtan Uca UDP Kenar Geçişi ve TCP Pano Senkronizasyonu
+2026-10-01T16:12:25.9156485Z   [PASS] Sıfır-PIN Otomatik Bağlantı Hazırlığı: İlk eşleşmede iki taraf da kodu doğruladı ve güven belirteci paylaştı
+2026-10-01T16:12:25.9324045Z   [PASS] Sıfır-PIN: İki tarafta da IsTrusted bayrağı aktifleşti ve diske kaydedildi
+2026-10-01T16:12:25.9411871Z   [PASS] Simülasyon: Uygulama kapatıldı ve bağlantı koptu
+2026-10-01T16:12:25.9418386Z   [PASS] Sıfır-PIN Otomatik Bağlantı: Hiçbir PIN girilmeden TRUSTED_RECONNECT ile otomatik bağlantı sağlandı!
+2026-10-01T16:12:25.9502882Z   [PASS] Sıfır-PIN: Otomatik bağlanan cihazın ekran konfigürasyonu ve kenar konumu aynen korundu
+2026-10-01T16:12:25.9601274Z 
+2026-10-01T16:12:25.9610311Z SONUÇ: 32 Başarılı, 0 Başarısız.
+2026-10-01T16:12:26.2339942Z ##[group]Run dotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/windows
+2026-10-01T16:12:26.2342942Z [36;1mdotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/windows[0m
+2026-10-01T16:12:26.2345789Z [36;1mMove-Item publish/windows/ConnectMe.Windows.exe publish/windows/ConnectMe.exe[0m
+2026-10-01T16:12:26.2347207Z [36;1mCompress-Archive -Path publish/windows/ConnectMe.exe -DestinationPath publish/ConnectMe-Windows-x64v1-6-0.zip[0m
+2026-10-01T16:12:26.2466608Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-01T16:12:26.2467199Z env:
+2026-10-01T16:12:26.2467524Z   DOTNET_ROOT: C:\Program Files\dotnet
+2026-10-01T16:12:26.2467977Z ##[endgroup]
+2026-10-01T16:12:28.9341144Z   Determining projects to restore...
+2026-10-01T16:12:39.4903436Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Core\ConnectMe.Core.csproj (in 10 sec).
+2026-10-01T16:12:39.4906237Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Windows\ConnectMe.Windows.csproj (in 9.97 sec).
+2026-10-01T16:12:44.0731413Z   ConnectMe.Core -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Core\bin\Release\net10.0\ConnectMe.Core.dll
+2026-10-01T16:12:51.7306219Z   ConnectMe.Windows -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Windows\bin\Release\net10.0-windows\win-x64\ConnectMe.Windows.dll
+2026-10-01T16:12:51.7308075Z   ConnectMe.Windows -> D:\a\Connect-Me\Connect-Me\publish\windows\
+2026-10-01T16:12:57.6464668Z ##[group]Run actions/upload-artifact@v7
+2026-10-01T16:12:57.6465203Z with:
+2026-10-01T16:12:57.6465533Z   name: ConnectMe-Windows-x64
+2026-10-01T16:12:57.6466072Z   path: publish/ConnectMe-Windows-x64v1-6-0.zip
+2026-10-01T16:12:57.6466623Z   if-no-files-found: warn
+2026-10-01T16:12:57.6467024Z   compression-level: 6
+2026-10-01T16:12:57.6467378Z   overwrite: false
+2026-10-01T16:12:57.6467721Z   include-hidden-files: false
+2026-10-01T16:12:57.6468102Z   archive: true
+2026-10-01T16:12:57.6468392Z env:
+2026-10-01T16:12:57.6468693Z   DOTNET_ROOT: C:\Program Files\dotnet
+2026-10-01T16:12:57.6469129Z ##[endgroup]
+2026-10-01T16:12:58.1390684Z With the provided path, there will be 1 file uploaded
+2026-10-01T16:12:58.1500385Z Artifact name is valid!
+2026-10-01T16:12:58.1599066Z Root directory input is valid!
+2026-10-01T16:12:58.5993618Z Uploading artifact: ConnectMe-Windows-x64.zip
+2026-10-01T16:12:58.5995958Z Beginning upload of artifact content to blob storage
+2026-10-01T16:12:59.9097529Z Uploaded bytes 8388608
+2026-10-01T16:13:00.5369336Z Uploaded bytes 16777216
+2026-10-01T16:13:00.8246897Z Uploaded bytes 25165824
+2026-10-01T16:13:01.4696538Z Uploaded bytes 33554432
+2026-10-01T16:13:01.8875169Z Uploaded bytes 41943040
+2026-10-01T16:13:03.0697547Z Uploaded bytes 50331648
+2026-10-01T16:13:05.0027857Z Uploaded bytes 58720256
+2026-10-01T16:13:05.6997186Z Uploaded bytes 60675419
+2026-10-01T16:13:05.7579907Z Finished uploading artifact content to blob storage!
+2026-10-01T16:13:05.7582146Z SHA256 digest of uploaded artifact is 7096b55f576739e681881191353daf0ac814822df0b1fb8edcc57bb18cbda596
+2026-10-01T16:13:05.7606073Z Finalizing artifact upload
+2026-10-01T16:13:06.1464901Z Artifact ConnectMe-Windows-x64 successfully finalized. Artifact ID 11176142194
+2026-10-01T16:13:06.1474141Z Artifact ConnectMe-Windows-x64 has been successfully uploaded! Final size is 60675419 bytes. Artifact ID is 11176142194
+2026-10-01T16:13:06.1833868Z Artifact download URL: https://github.com/korgangames/Connect-Me/actions/runs/36890107425/artifacts/11176142194
+2026-10-01T16:13:06.2482748Z Post job cleanup.
+2026-10-01T16:13:07.0374682Z Post job cleanup.
+2026-10-01T16:13:08.9226532Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-01T16:13:08.9800972Z git version 2.55.0.windows.5
+2026-10-01T16:13:09.0234330Z Temporarily overriding HOME='D:\a\_temp\854a51fb-ff40-41cb-89c7-dd5215b42914' before making global git config changes
+2026-10-01T16:13:09.0389609Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-01T16:13:09.0395067Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\Connect-Me\Connect-Me
+2026-10-01T16:13:09.0586566Z Removing SSH command configuration
+2026-10-01T16:13:09.0632303Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-01T16:13:09.1105928Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-01T16:13:10.1222181Z Removing HTTP extra header
+2026-10-01T16:13:10.1300384Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-01T16:13:10.1820560Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-01T16:13:10.9055766Z Removing includeIf entries pointing to credentials config files
+2026-10-01T16:13:10.9069791Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-01T16:13:10.9497460Z includeif.gitdir:D:/a/Connect-Me/Connect-Me/.git.path
+2026-10-01T16:13:10.9503460Z includeif.gitdir:D:/a/Connect-Me/Connect-Me/.git/worktrees/*.path
+2026-10-01T16:13:10.9513918Z includeif.gitdir:/github/workspace/.git.path
+2026-10-01T16:13:10.9526933Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-01T16:13:10.9724678Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/Connect-Me/Connect-Me/.git.path
+2026-10-01T16:13:11.0021030Z D:\a\_temp\git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:13:11.0068543Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/Connect-Me/Connect-Me/.git.path D:\a\_temp\git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:13:11.0399068Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/Connect-Me/Connect-Me/.git/worktrees/*.path
+2026-10-01T16:13:11.0677403Z D:\a\_temp\git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:13:11.0719389Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/Connect-Me/Connect-Me/.git/worktrees/*.path D:\a\_temp\git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:13:11.1041859Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-01T16:13:11.1337370Z /github/runner_temp/git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:13:11.1385206Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:13:11.1726309Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-01T16:13:11.2013617Z /github/runner_temp/git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:13:11.2061750Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config
+2026-10-01T16:13:11.2382437Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-01T16:13:11.8255765Z Removing credentials config 'D:\a\_temp\git-credentials-4cf6c983-ca30-4d31-af88-97dd302dffbe.config'
+2026-10-01T16:13:11.8475246Z Cleaning up orphan processes
+2026-10-01T16:13:11.9174541Z Terminate orphan process: pid (8964) (dotnet)
+2026-10-01T16:13:11.9259038Z Terminate orphan process: pid (9024) (conhost)
+2026-10-01T16:13:12.0179121Z Terminate orphan process: pid (9020) (VBCSCompiler)

@@ -1,0 +1,86 @@
+﻿2026-10-01T16:11:37.2740819Z ##[group]Run actions/checkout@v6
+2026-10-01T16:11:37.2741521Z with:
+2026-10-01T16:11:37.2741820Z   repository: korgangames/Connect-Me
+2026-10-01T16:11:37.2744410Z   token: ***
+2026-10-01T16:11:37.2744689Z   ssh-strict: true
+2026-10-01T16:11:37.2744980Z   ssh-user: git
+2026-10-01T16:11:37.2745256Z   persist-credentials: true
+2026-10-01T16:11:37.2745563Z   clean: true
+2026-10-01T16:11:37.2745837Z   sparse-checkout-cone-mode: true
+2026-10-01T16:11:37.2746148Z   fetch-depth: 1
+2026-10-01T16:11:37.2746411Z   fetch-tags: false
+2026-10-01T16:11:37.2746689Z   show-progress: true
+2026-10-01T16:11:37.2746968Z   lfs: false
+2026-10-01T16:11:37.2747213Z   submodules: false
+2026-10-01T16:11:37.2747931Z   set-safe-directory: true
+2026-10-01T16:11:37.2748312Z   allow-unsafe-pr-checkout: false
+2026-10-01T16:11:37.2748978Z ##[endgroup]
+2026-10-01T16:11:37.3996144Z Syncing repository: korgangames/Connect-Me
+2026-10-01T16:11:37.3998440Z ##[group]Getting Git version info
+2026-10-01T16:11:37.3999221Z Working directory is '/home/runner/work/Connect-Me/Connect-Me'
+2026-10-01T16:11:37.4000383Z [command]/usr/bin/git version
+2026-10-01T16:11:37.4001744Z git version 2.55.0
+2026-10-01T16:11:37.4088264Z ##[endgroup]
+2026-10-01T16:11:37.4094995Z Temporarily overriding HOME='/home/runner/work/_temp/71185b2a-ab81-4081-a1f1-23d92300172a' before making global git config changes
+2026-10-01T16:11:37.4097118Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-01T16:11:37.4099029Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Connect-Me/Connect-Me
+2026-10-01T16:11:37.4169522Z Deleting the contents of '/home/runner/work/Connect-Me/Connect-Me'
+2026-10-01T16:11:37.4171021Z ##[group]Determining repository object format
+2026-10-01T16:11:37.4172083Z ##[endgroup]
+2026-10-01T16:11:37.4173511Z ##[group]Initializing the repository
+2026-10-01T16:11:37.4174369Z [command]/usr/bin/git init /home/runner/work/Connect-Me/Connect-Me
+2026-10-01T16:11:37.4340569Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-01T16:11:37.4342401Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-01T16:11:37.4373043Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-01T16:11:37.4374208Z hint: call:
+2026-10-01T16:11:37.4376422Z hint:
+2026-10-01T16:11:37.4376999Z hint: 	git config --global init.defaultBranch <name>
+2026-10-01T16:11:37.4377913Z hint:
+2026-10-01T16:11:37.4378561Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-01T16:11:37.4379593Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-01T16:11:37.4380283Z hint:
+2026-10-01T16:11:37.4380740Z hint: 	git branch -m <name>
+2026-10-01T16:11:37.4381224Z hint:
+2026-10-01T16:11:37.4381918Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-01T16:11:37.4383014Z Initialized empty Git repository in /home/runner/work/Connect-Me/Connect-Me/.git/
+2026-10-01T16:11:37.4384953Z [command]/usr/bin/git remote add origin https://github.com/korgangames/Connect-Me
+2026-10-01T16:11:37.4386803Z ##[endgroup]
+2026-10-01T16:11:37.4387896Z ##[group]Disabling automatic garbage collection
+2026-10-01T16:11:37.4388581Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-01T16:11:37.4424782Z ##[endgroup]
+2026-10-01T16:11:37.4426289Z ##[group]Setting up auth
+2026-10-01T16:11:37.4428143Z Removing SSH command configuration
+2026-10-01T16:11:37.4455829Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-01T16:11:37.4549765Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-01T16:11:37.5010622Z Removing HTTP extra header
+2026-10-01T16:11:37.5018636Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-01T16:11:37.5093377Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-01T16:11:37.5452120Z Removing includeIf entries pointing to credentials config files
+2026-10-01T16:11:37.5453761Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-01T16:11:37.5494394Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-01T16:11:37.5739527Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-a51d3c50-9626-41c5-b574-5705a05a59b7.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-01T16:11:37.5786010Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/Connect-Me/Connect-Me/.git.path /home/runner/work/_temp/git-credentials-a51d3c50-9626-41c5-b574-5705a05a59b7.config
+2026-10-01T16:11:37.5826963Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/Connect-Me/Connect-Me/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-a51d3c50-9626-41c5-b574-5705a05a59b7.config
+2026-10-01T16:11:37.5985323Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-a51d3c50-9626-41c5-b574-5705a05a59b7.config
+2026-10-01T16:11:37.5993513Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-a51d3c50-9626-41c5-b574-5705a05a59b7.config
+2026-10-01T16:11:37.5998144Z ##[endgroup]
+2026-10-01T16:11:37.5999225Z ##[group]Fetching the repository
+2026-10-01T16:11:37.6000516Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +0429721c3d096479dbe61ee220a29ce0c425ab8f:refs/remotes/origin/main
+2026-10-01T16:11:38.1089825Z From https://github.com/korgangames/Connect-Me
+2026-10-01T16:11:38.1137108Z  * [new ref]         0429721c3d096479dbe61ee220a29ce0c425ab8f -> origin/main
+2026-10-01T16:11:38.1161864Z [command]/usr/bin/git branch --list --remote origin/main
+2026-10-01T16:11:38.1191222Z   origin/main
+2026-10-01T16:11:38.1218274Z [command]/usr/bin/git rev-parse refs/remotes/origin/main
+2026-10-01T16:11:38.1219597Z 0429721c3d096479dbe61ee220a29ce0c425ab8f
+2026-10-01T16:11:38.1222095Z ##[endgroup]
+2026-10-01T16:11:38.1223240Z ##[group]Determining the checkout info
+2026-10-01T16:11:38.1224277Z ##[endgroup]
+2026-10-01T16:11:38.1224901Z [command]/usr/bin/git sparse-checkout disable
+2026-10-01T16:11:38.1273912Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-01T16:11:38.1309395Z ##[group]Checking out the ref
+2026-10-01T16:11:38.1313298Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-10-01T16:11:38.1440497Z Switched to a new branch 'main'
+2026-10-01T16:11:38.1446493Z branch 'main' set up to track 'origin/main'.
+2026-10-01T16:11:38.1457187Z ##[endgroup]
+2026-10-01T16:11:38.1506446Z [command]/usr/bin/git log -1 --format=%H
+2026-10-01T16:11:38.1539732Z 0429721c3d096479dbe61ee220a29ce0c425ab8f

@@ -1,0 +1,14 @@
+﻿2026-10-01T16:12:26.2339915Z ##[group]Run dotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/windows
+2026-10-01T16:12:26.2342928Z [36;1mdotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/windows[0m
+2026-10-01T16:12:26.2345775Z [36;1mMove-Item publish/windows/ConnectMe.Windows.exe publish/windows/ConnectMe.exe[0m
+2026-10-01T16:12:26.2347196Z [36;1mCompress-Archive -Path publish/windows/ConnectMe.exe -DestinationPath publish/ConnectMe-Windows-x64v1-6-0.zip[0m
+2026-10-01T16:12:26.2466596Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-01T16:12:26.2467194Z env:
+2026-10-01T16:12:26.2467519Z   DOTNET_ROOT: C:\Program Files\dotnet
+2026-10-01T16:12:26.2467970Z ##[endgroup]
+2026-10-01T16:12:28.9340988Z   Determining projects to restore...
+2026-10-01T16:12:39.4903389Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Core\ConnectMe.Core.csproj (in 10 sec).
+2026-10-01T16:12:39.4906227Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Windows\ConnectMe.Windows.csproj (in 9.97 sec).
+2026-10-01T16:12:44.0731353Z   ConnectMe.Core -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Core\bin\Release\net10.0\ConnectMe.Core.dll
+2026-10-01T16:12:51.7306170Z   ConnectMe.Windows -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Windows\bin\Release\net10.0-windows\win-x64\ConnectMe.Windows.dll
+2026-10-01T16:12:51.7308058Z   ConnectMe.Windows -> D:\a\Connect-Me\Connect-Me\publish\windows\

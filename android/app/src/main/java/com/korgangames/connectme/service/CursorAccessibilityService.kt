@@ -139,7 +139,7 @@ class CursorAccessibilityService : AccessibilityService() {
 
             lastSentClipboardHash = hash
             ConnectMeService.instance?.sendClipboardTextToPc(text)
-            ConnectMeService.instance?.log("[Evrensel Pano] Android'den kopyalanan metin (${text.length} krk) bilgisayara otomatik aktarıldı.")
+            ConnectMeService.log("[Evrensel Pano] Android'den kopyalanan metin (${text.length} krk) bilgisayara otomatik aktarıldı.")
         } catch (_: Exception) {
         }
     }

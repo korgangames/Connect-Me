@@ -1,0 +1,153 @@
+﻿2026-10-01T16:12:49.9668548Z Post job cleanup.
+2026-10-01T16:12:50.3068666Z In post-action step
+2026-10-01T16:12:50.3072437Z Enhanced Caching: This build is using the proprietary 'gradle-actions-caching' provider for optimized caching support. See https://github.com/gradle/actions/blob/main/DISTRIBUTION.md for terms of use and opt-out instructions.
+2026-10-01T16:12:50.4158118Z ##[group]Stopping Gradle daemons
+2026-10-01T16:12:50.4159665Z Stopping Gradle daemons for /home/runner/work/_temp/.gradle-actions/gradle-installations/installs/gradle-8.7
+2026-10-01T16:12:50.4181477Z [command]/home/runner/work/_temp/.gradle-actions/gradle-installations/installs/gradle-8.7/bin/gradle --stop
+2026-10-01T16:12:51.6826766Z No Gradle daemons are running.
+2026-10-01T16:12:51.6916400Z ##[endgroup]
+2026-10-01T16:12:51.6917648Z Not performing cache-cleanup due to build failure
+2026-10-01T16:12:51.6919260Z ##[group]Caching Gradle state
+2026-10-01T16:12:52.1192288Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/Connect-Me/Connect-Me --files-from manifest.txt --use-compress-program zstdmt
+2026-10-01T16:12:52.8299045Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/Connect-Me/Connect-Me --files-from manifest.txt --use-compress-program zstdmt
+2026-10-01T16:12:52.9587088Z Sent 108913 of 108913 (100.0%), 0.2 MBs/sec
+2026-10-01T16:12:53.2709102Z Saved cache entry with key gradle-kotlin-dsl-v2-d4399c4ea6a05dcf43a7a1a203210975 from /home/runner/.gradle/caches/*/kotlin-dsl/accessors/*/,/home/runner/.gradle/caches/*/kotlin-dsl/scripts/*/ in 1208ms
+2026-10-01T16:12:56.0553066Z Sent 24969216 of 118061550 (21.1%), 23.8 MBs/sec
+2026-10-01T16:12:57.0555673Z Sent 84934656 of 118061550 (71.9%), 40.5 MBs/sec
+2026-10-01T16:12:57.7693764Z Sent 118061550 of 118061550 (100.0%), 41.5 MBs/sec
+2026-10-01T16:12:58.0900463Z Saved cache entry with key gradle-transforms-v2-d9bc98345b6b6d3ec211120a5aad2b83 from /home/runner/.gradle/caches/transforms-4/*/,/home/runner/.gradle/caches/*/transforms/*/ in 5635ms
+2026-10-01T16:12:58.7364526Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/Connect-Me/Connect-Me --files-from manifest.txt --use-compress-program zstdmt
+2026-10-01T16:12:59.1968161Z Sent 540068 of 540068 (100.0%), 3.3 MBs/sec
+2026-10-01T16:12:59.4805017Z Saved cache entry with key gradle-home-v2|Linux-X64|build-android[2fc623f94d7b2a8c5dfeb81a8a12d84b]-0429721c3d096479dbe61ee220a29ce0c425ab8f from /home/runner/.gradle/caches,/home/runner/.gradle/notifications,/home/runner/.gradle/.setup-gradle in 756ms
+2026-10-01T16:12:59.4808286Z ##[endgroup]
+2026-10-01T16:12:59.4813219Z ##[group]Generating Job Summary
+2026-10-01T16:12:59.4825018Z 
+2026-10-01T16:12:59.4825592Z 
+2026-10-01T16:12:59.4826015Z <table>
+2026-10-01T16:12:59.4826822Z     <tr>
+2026-10-01T16:12:59.4827904Z         <th>Gradle Root Project</th>
+2026-10-01T16:12:59.4828841Z         <th>Requested Tasks</th>
+2026-10-01T16:12:59.4829705Z         <th>Gradle Version</th>
+2026-10-01T16:12:59.4830783Z         <th>Build Outcome</th>
+2026-10-01T16:12:59.4831984Z         <th>Build&nbsp;Scan®</th>
+2026-10-01T16:12:59.4832860Z     </tr>
+2026-10-01T16:12:59.4833552Z     <tr>
+2026-10-01T16:12:59.4834619Z         <td>ConnectMeAndroid</td>
+2026-10-01T16:12:59.4835531Z         <td>assembleRelease</td>
+2026-10-01T16:12:59.4836487Z         <td align='center'>8.7 :information_source:</td>
+2026-10-01T16:12:59.4837733Z         <td align='center'>:x:</td>
+2026-10-01T16:12:59.4839474Z         <td><a href="https://scans.gradle.com" rel="nofollow" target="_blank"><img src="https://img.shields.io/badge/Not%20published-lightgrey" alt="Build Scan not published" /></a></td>
+2026-10-01T16:12:59.4841177Z     </tr>
+2026-10-01T16:12:59.4841891Z </table>
+2026-10-01T16:12:59.4842534Z 
+2026-10-01T16:12:59.4844539Z <p>:information_source: Gradle version is out of date — consider upgrading. See <a href="https://docs.gradle.org/current/userguide/feature_lifecycle.html#eol_support">Gradle release lifecycle</a></p>
+2026-10-01T16:12:59.4846527Z 
+2026-10-01T16:12:59.4854472Z ============================
+2026-10-01T16:12:59.4858740Z <h4>Gradle State Caching - ⚡ Enhanced</h4>
+2026-10-01T16:12:59.4859576Z 
+2026-10-01T16:12:59.4861531Z **[Enhanced Caching](https://github.com/gradle/actions/blob/main/docs/setup-gradle.md#enhanced-caching)** uses the proprietary `gradle-actions-caching` provider. See [DISTRIBUTION.md](https://github.com/gradle/actions/blob/main/DISTRIBUTION.md) for terms of use and opt-out instructions.
+2026-10-01T16:12:59.4863763Z 
+2026-10-01T16:12:59.4872805Z <details>
+2026-10-01T16:12:59.4873765Z <summary>Entries: 7 restored (412Mb), 3 saved (113Mb) - Expand for more details</summary>
+2026-10-01T16:12:59.4874649Z 
+2026-10-01T16:12:59.4876484Z [Cache was enabled](https://github.com/gradle/actions/blob/main/docs/setup-gradle.md#caching-build-state-between-jobs) — Gradle User Home was restored from the cache and saved for use by subsequent jobs.
+2026-10-01T16:12:59.4878538Z 
+2026-10-01T16:12:59.4879882Z [Cache cleanup](https://github.com/gradle/actions/blob/main/docs/setup-gradle.md#configuring-cache-cleanup) was skipped due to a build failure. Use `cache-cleanup: always` to override.
+2026-10-01T16:12:59.4881436Z 
+2026-10-01T16:12:59.4881795Z <table>
+2026-10-01T16:12:59.4882606Z     <tr><td></td><th>Count</th><th>Total Size (Mb)</th><th>Total Time (ms)</th></tr>
+2026-10-01T16:12:59.4883594Z     <tr><td>Entries Restored</td>
+2026-10-01T16:12:59.4884612Z         <td>7</td>
+2026-10-01T16:12:59.4885254Z         <td>412</td>
+2026-10-01T16:12:59.4885897Z         <td>25247</td>
+2026-10-01T16:12:59.4886526Z     </tr>
+2026-10-01T16:12:59.4887151Z     <tr><td>Entries Saved</td>
+2026-10-01T16:12:59.4888590Z         <td>3</td>
+2026-10-01T16:12:59.4889245Z         <td>113</td>
+2026-10-01T16:12:59.4889899Z         <td>7599</td>
+2026-10-01T16:12:59.4890541Z     </tr>
+2026-10-01T16:12:59.4891118Z </table>
+2026-10-01T16:12:59.4891529Z 
+2026-10-01T16:12:59.4891876Z <pre>
+2026-10-01T16:12:59.4892479Z Entry: Gradle User Home
+2026-10-01T16:12:59.4893742Z     Requested Key : gradle-home-v2|Linux-X64|build-android[2fc623f94d7b2a8c5dfeb81a8a12d84b]-0429721c3d096479dbe61ee220a29ce0c425ab8f
+2026-10-01T16:12:59.4895598Z     Restored  Key : gradle-home-v2|Linux-X64|build-android[2fc623f94d7b2a8c5dfeb81a8a12d84b]-0a77d012d20e95ed9a5df29ef741af3f0f5eba40
+2026-10-01T16:12:59.4896831Z               Size: 1 MB (540873 B)
+2026-10-01T16:12:59.4897824Z               Time: 1354 ms
+2026-10-01T16:12:59.4898844Z               (Entry restored: partial match found)
+2026-10-01T16:12:59.4900109Z     Saved     Key : gradle-home-v2|Linux-X64|build-android[2fc623f94d7b2a8c5dfeb81a8a12d84b]-0429721c3d096479dbe61ee220a29ce0c425ab8f
+2026-10-01T16:12:59.4901315Z               Size: 1 MB (540068 B)
+2026-10-01T16:12:59.4902000Z               Time: 756 ms
+2026-10-01T16:12:59.4902647Z               (Entry saved)
+2026-10-01T16:12:59.4903264Z ---
+2026-10-01T16:12:59.4903951Z Entry: caches/8.7/generated-gradle-jars/gradle-api-8.7.jar
+2026-10-01T16:12:59.4905081Z     Requested Key : gradle-generated-gradle-jars-v2-d6d47bedd9337a0be6f3a426277e63ee
+2026-10-01T16:12:59.4906410Z     Restored  Key : gradle-generated-gradle-jars-v2-d6d47bedd9337a0be6f3a426277e63ee
+2026-10-01T16:12:59.4907808Z               Size: 36 MB (37946146 B)
+2026-10-01T16:12:59.4908608Z               Time: 5293 ms
+2026-10-01T16:12:59.4909375Z               (Entry restored: exact match found)
+2026-10-01T16:12:59.4910170Z     Saved     Key : 
+2026-10-01T16:12:59.4910927Z               Size: 
+2026-10-01T16:12:59.4911653Z               Time: 
+2026-10-01T16:12:59.4912415Z               (Entry not saved: contents unchanged)
+2026-10-01T16:12:59.4913179Z ---
+2026-10-01T16:12:59.4913767Z Entry: dependencies
+2026-10-01T16:12:59.4914770Z     Requested Key : gradle-dependencies-v2-e2e9b3a94246a5945e7b02c8869603f7
+2026-10-01T16:12:59.4916056Z     Restored  Key : gradle-dependencies-v2-e2e9b3a94246a5945e7b02c8869603f7
+2026-10-01T16:12:59.4917037Z               Size: 263 MB (275625959 B)
+2026-10-01T16:12:59.4918101Z               Time: 6449 ms
+2026-10-01T16:12:59.4919085Z               (Entry restored: exact match found)
+2026-10-01T16:12:59.4919867Z     Saved     Key : 
+2026-10-01T16:12:59.4920489Z               Size: 
+2026-10-01T16:12:59.4921104Z               Time: 
+2026-10-01T16:12:59.4921786Z               (Entry not saved: contents unchanged)
+2026-10-01T16:12:59.4922545Z ---
+2026-10-01T16:12:59.4923154Z Entry: instrumented-jars
+2026-10-01T16:12:59.4924134Z     Requested Key : gradle-instrumented-jars-v2-344e4c29295e02be6c20e174f76a97d9
+2026-10-01T16:12:59.4925430Z     Restored  Key : gradle-instrumented-jars-v2-344e4c29295e02be6c20e174f76a97d9
+2026-10-01T16:12:59.4926542Z               Size: 0 MB (69370 B)
+2026-10-01T16:12:59.4927271Z               Time: 1016 ms
+2026-10-01T16:12:59.4928335Z               (Entry restored: exact match found)
+2026-10-01T16:12:59.4931284Z     Saved     Key : 
+2026-10-01T16:12:59.4931954Z               Size: 
+2026-10-01T16:12:59.4932571Z               Time: 
+2026-10-01T16:12:59.4933228Z               (Entry not saved: contents unchanged)
+2026-10-01T16:12:59.4933987Z ---
+2026-10-01T16:12:59.4934571Z Entry: kotlin-dsl
+2026-10-01T16:12:59.4935381Z     Requested Key : gradle-kotlin-dsl-v2-d57d034f759699722fb5ea5d76262a3d
+2026-10-01T16:12:59.4936498Z     Restored  Key : gradle-kotlin-dsl-v2-d57d034f759699722fb5ea5d76262a3d
+2026-10-01T16:12:59.4937646Z               Size: 0 MB (107077 B)
+2026-10-01T16:12:59.4938611Z               Time: 1094 ms
+2026-10-01T16:12:59.4939309Z               (Entry restored: exact match found)
+2026-10-01T16:12:59.4940261Z     Saved     Key : gradle-kotlin-dsl-v2-d4399c4ea6a05dcf43a7a1a203210975
+2026-10-01T16:12:59.4941187Z               Size: 0 MB (108913 B)
+2026-10-01T16:12:59.4941893Z               Time: 1208 ms
+2026-10-01T16:12:59.4942540Z               (Entry saved)
+2026-10-01T16:12:59.4943172Z ---
+2026-10-01T16:12:59.4943728Z Entry: groovy-dsl
+2026-10-01T16:12:59.4944576Z     Requested Key : gradle-groovy-dsl-v2-3cf34c248de95fab52a02dd6996bf5e5
+2026-10-01T16:12:59.4945842Z     Restored  Key : gradle-groovy-dsl-v2-3cf34c248de95fab52a02dd6996bf5e5
+2026-10-01T16:12:59.4946836Z               Size: 0 MB (109347 B)
+2026-10-01T16:12:59.4947737Z               Time: 896 ms
+2026-10-01T16:12:59.4948496Z               (Entry restored: exact match found)
+2026-10-01T16:12:59.4949287Z     Saved     Key : 
+2026-10-01T16:12:59.4949924Z               Size: 
+2026-10-01T16:12:59.4950542Z               Time: 
+2026-10-01T16:12:59.4951225Z               (Entry not saved: contents unchanged)
+2026-10-01T16:12:59.4951986Z ---
+2026-10-01T16:12:59.4952566Z Entry: transforms
+2026-10-01T16:12:59.4953419Z     Requested Key : gradle-transforms-v2-5347c407c1dbe91a99002379539c81df
+2026-10-01T16:12:59.4954662Z     Restored  Key : gradle-transforms-v2-5347c407c1dbe91a99002379539c81df
+2026-10-01T16:12:59.4955631Z               Size: 113 MB (117977765 B)
+2026-10-01T16:12:59.4956370Z               Time: 9145 ms
+2026-10-01T16:12:59.4957079Z               (Entry restored: exact match found)
+2026-10-01T16:12:59.4958362Z     Saved     Key : gradle-transforms-v2-d9bc98345b6b6d3ec211120a5aad2b83
+2026-10-01T16:12:59.4959348Z               Size: 113 MB (118061550 B)
+2026-10-01T16:12:59.4960086Z               Time: 5635 ms
+2026-10-01T16:12:59.4960758Z               (Entry saved)
+2026-10-01T16:12:59.4961408Z </pre>
+2026-10-01T16:12:59.4961976Z </details>
+2026-10-01T16:12:59.4962392Z 
+2026-10-01T16:12:59.4963107Z ##[endgroup]
+2026-10-01T16:12:59.4978947Z ##[notice]Gradle 8.7 is out of date: consider updating to the latest Gradle version. See https://docs.gradle.org/current/userguide/feature_lifecycle.html#eol_support
+2026-10-01T16:12:59.4981636Z Completed post-action step

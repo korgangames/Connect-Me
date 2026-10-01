@@ -1,0 +1,19 @@
+﻿2026-10-01T16:11:50.8616695Z ##[group]Run dotnet build ConnectMe.sln -c Release
+2026-10-01T16:11:50.8617457Z [36;1mdotnet build ConnectMe.sln -c Release[0m
+2026-10-01T16:11:50.9533610Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-01T16:11:50.9534230Z env:
+2026-10-01T16:11:50.9534524Z   DOTNET_ROOT: C:\Program Files\dotnet
+2026-10-01T16:11:50.9534937Z ##[endgroup]
+2026-10-01T16:12:05.6940058Z   Determining projects to restore...
+2026-10-01T16:12:09.8421327Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Core\ConnectMe.Core.csproj (in 763 ms).
+2026-10-01T16:12:09.9800303Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Windows\ConnectMe.Windows.csproj (in 137 ms).
+2026-10-01T16:12:09.9912010Z   Restored D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Tests\ConnectMe.Tests.csproj (in 4 ms).
+2026-10-01T16:12:18.4604744Z   ConnectMe.Core -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Core\bin\Release\net10.0\ConnectMe.Core.dll
+2026-10-01T16:12:21.9385481Z   ConnectMe.Tests -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Tests\bin\Release\net10.0\ConnectMe.Tests.dll
+2026-10-01T16:12:21.9694279Z   ConnectMe.Windows -> D:\a\Connect-Me\Connect-Me\windows\ConnectMe.Windows\bin\Release\net10.0-windows\ConnectMe.Windows.dll
+2026-10-01T16:12:21.9870096Z 
+2026-10-01T16:12:21.9877953Z Build succeeded.
+2026-10-01T16:12:21.9879024Z     0 Warning(s)
+2026-10-01T16:12:21.9879540Z     0 Error(s)
+2026-10-01T16:12:21.9881365Z 
+2026-10-01T16:12:21.9881986Z Time Elapsed 00:00:25.32
