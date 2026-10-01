@@ -1,3 +1,30 @@
+# Connect Me v1.6.3 (v1-6-3) — Nobara Linux Manuel IP ile Bağlantı, Herkese Açık Dağıtım ve Güncelleyici Düzeltmeleri
+
+Bu sürüm; Nobara Linux üzerinde doğrudan IP adresi girerek cihaz bağlama (Manual IP Direct Connect), otomatik ağ alt ağı tarama (Subnet Broadcast Scan), GitHub reposunun Public yapılarak tüm cihazlar için tek tıkla güncellemenin ve dosya indirmelerinin kesintisiz hale getirilmesini sağlar.
+
+---
+
+### 🌟 v1.6.3 Yenilikleri ve Düzeltmeleri:
+
+* **🌐 Nobara Linux Manuel IP ile Cihaz Ekleme & Doğrudan Bağlantı:**
+  - Linux GUI (`connectme_linux_gui.py`) "Cihazlar & Güvenlik" sekmesine ve üst başlık kartına **"Manuel IP ile Cihaz Ekle & Doğrudan Bağlan"** paneli eklendi.
+  - Ağ keşfinin router AP izolasyonu, güvenlik duvarı veya karmaşık Wi-Fi ağları nedeniyle engellendiği durumlarda, hedef cihazın (Windows veya Android) IP adresi yazılarak doğrudan UDP ve TCP üzerinden anında bağlantı kurulabilir.
+  - Yerel alt ağ öneki (`192.168.1.` vb.) otomatik doldurulur; Enter tuşu veya `➕ IP ile Cihaz Ekle & Keşfet` butonu ile cihaz anında listeye alınır.
+  - PIN kodu önceden girilmişse tek tıkla doğrudan TCP üzerinden PIN doğrulama ve karşılıklı eşleşme başlatılır.
+
+* **📡 Manuel Ağ Alt Ağı Tarama (Subnet Broadcast):**
+  - Linux arayüzüne eklenen `📡 Alt Ağı Tara` butonu sayesinde tüm yerel alt ağa anında doğrudan keşif sinyalleri yollanarak yeni açılan cihazlar saniyeler içinde yakalanır.
+
+* **🔓 GitHub Depo Görünürlüğü (Public) & 3 İşletim Sisteminde Otomatik Güncelleme:**
+  - Deponun Private olmasından dolayı cihazların aldığı `HTTP 404 Not Found` engeli GitHub API üzerinden depo **Public (Herkese Açık)** yapılarak kalıcı olarak giderildi.
+  - Windows, Android ve Linux cihazlardaki dahili otomatik güncelleyici (In-Program Updater) artık yeni sürümleri doğrudan görüp tek tıkla indirip kurabilir.
+  - Olası ağ veya sunucu aksaklıklarında *"Uygulamanız güncel"* yanıltması kaldırılarak detaylı tanı mesajları eklendi.
+
+* **📱 Android Derleme Hatası Düzeltmesi:**
+  - Android `MainActivity.kt` içerisindeki güncelleyici loglama çağrısı düzeltilerek GitHub Actions CI/CD derleme zincirinin başarıyla APK üretmesi sağlandı.
+
+---
+
 # Connect Me v1.6.2 (v1-6-2) — Nobara Linux & Çoklu Monitör İyileştirmeleri, Kernel Sanal Girdi ve Çift Taraflı PIN Güvenliği
 
 Bu sürüm; Nobara Linux (KDE Plasma Wayland), Windows ve Android arasındaki ağ keşfi, Linux sanal fare/klavye sürücüsü, çoklu monitör topolojisi ve karşılıklı PIN doğrulama güvenliğini mükemmelleştiren kapsamlı bir güncellemedir.

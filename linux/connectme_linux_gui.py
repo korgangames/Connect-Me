@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Connect Me — Linux (Nobara / KDE Plasma / Wayland & X11) Gelişmiş Kontrol Paneli (GUI)
-Korgan Games (v1.6.2 Çoklu Monitör, Yüksek Kontrastlı Arayüz & Görünür İmleç Göstergesi)
+Korgan Games (v1.6.3 Manuel IP ile Bağlantı, Çoklu Monitör & Görünür İmleç)
 
 - 2D Ekran Konfigürasyonu Kanvası
 - Çift Yönlü UDP Cihaz Keşfi (Canlı Algılama)
@@ -143,7 +143,10 @@ class ConnectMeLinuxGui:
         self.pin_label.pack(side=tk.LEFT)
 
         copy_pin_btn = ttk.Button(top_row, text="Kodu Kopyala", command=self._copy_local_pin)
-        copy_pin_btn.pack(side=tk.LEFT, padx=10)
+        copy_pin_btn.pack(side=tk.LEFT, padx=(10, 4))
+
+        ip_btn = ttk.Button(top_row, text="🌐 IP ile Bağlan", command=self._jump_to_manual_ip)
+        ip_btn.pack(side=tk.LEFT, padx=4)
 
         ip_addr = self._get_local_ip()
         ttk.Label(top_row, text=f"📱 IP: {ip_addr}  |  v{VERSION}  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852", foreground="#94A3B8").pack(side=tk.RIGHT)
@@ -197,10 +200,56 @@ class ConnectMeLinuxGui:
         self.inbound_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         # Initially not packed, packed dynamically on request
 
-        # Cihaz Listesi
-        ttk.Label(tab, text="Ağdaki Keşfedilen Cihazlar (Windows, Android, Linux):", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=4)
+        # 1. Manuel IP ile Doğrudan Bağlan Kartı (Manual IP Connect Card)
+        manual_card = ttk.Frame(tab, style="Card.TFrame", padding=10)
+        manual_card.pack(fill=tk.X, pady=(0, 8))
+
+        m_header = ttk.Frame(manual_card, style="Card.TFrame")
+        m_header.pack(fill=tk.X)
+        ttk.Label(m_header, text="🌐 Manuel IP ile Cihaz Ekle & Doğrudan Bağlan",
+                  font=("Segoe UI", 10, "bold"), foreground="#38BDF8").pack(side=tk.LEFT)
+        ttk.Label(m_header, text="(Ağ keşfi güvenlik duvarı veya router izolasyonu nedeniyle engelliyse karşı cihazın IP'sini yazın)",
+                  font=("Segoe UI", 9), foreground="#94A3B8").pack(side=tk.LEFT, padx=8)
+
+        m_row = ttk.Frame(manual_card, style="Card.TFrame")
+        m_row.pack(fill=tk.X, pady=(6, 2))
+
+        ttk.Label(m_row, text="Hedef IP:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+
+        local_ip = self._get_local_ip()
+        parts = local_ip.split(".")
+        default_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}." if len(parts) == 4 and parts[0] != "127" else "192.168.1."
+
+        self.manual_ip_entry = tk.Entry(
+            m_row,
+            width=18,
+            font=("Consolas", 11),
+            bg="#0F172A",
+            fg="#38BDF8",
+            insertbackground="#38BDF8",
+            selectbackground="#0284C7",
+            selectforeground="#FFFFFF",
+            relief="solid",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground="#38BDF8",
+            highlightcolor="#38BDF8"
+        )
+        self.manual_ip_entry.insert(0, default_prefix)
+        self.manual_ip_entry.pack(side=tk.LEFT, padx=6)
+        self.manual_ip_entry.bind("<Return>", lambda e: self._on_manual_ip_connect())
+
+        manual_connect_btn = ttk.Button(m_row, text="➕ IP ile Cihaz Ekle & Keşfet",
+                                        style="Accent.TButton", command=self._on_manual_ip_connect)
+        manual_connect_btn.pack(side=tk.LEFT, padx=6)
+
+        scan_btn = ttk.Button(m_row, text="📡 Alt Ağı Tara (Broadcast)", command=self._on_trigger_scan)
+        scan_btn.pack(side=tk.LEFT, padx=4)
+
+        # 2. Cihaz Listesi
+        ttk.Label(tab, text="Ağdaki Keşfedilen Cihazlar (Windows, Android, Linux):", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(4, 2))
         self.peer_list = tk.Listbox(tab, bg="#1E293B", fg="#F8FAFC", selectbackground="#0284C7",
-                                    font=("Consolas", 10), height=7, bd=0, highlightthickness=1, highlightbackground="#334155")
+                                    font=("Consolas", 10), height=6, bd=0, highlightthickness=1, highlightbackground="#334155")
         self.peer_list.pack(fill=tk.X, pady=4)
         self.peer_list.bind("<<ListboxSelect>>", self._on_peer_select)
 
@@ -427,6 +476,11 @@ class ConnectMeLinuxGui:
                 status = f"{tag}🟢 ÇİFT TARAFLI ONAYLI (Aktif)" if is_mut else (f"{tag}🟡 Karşı Onay Bekliyor" if p.get("out_ok") else f"{tag}⚪ Eşleşme Bekleniyor")
                 self.peer_list.insert(tk.END, f"  🖥️ {name} ({ip}){mon_str} — {status}")
 
+            keys = list(self.node.peers.keys())
+            if self.selected_peer_id and self.selected_peer_id in keys:
+                idx = keys.index(self.selected_peer_id)
+                self.peer_list.selection_set(idx)
+
         # 2. Güvenilir Cihazlar Listesi
         self.trusted_list.delete(0, tk.END)
         if not self.node.trusted_devices:
@@ -496,21 +550,61 @@ class ConnectMeLinuxGui:
         self._log(f"[Topoloji] Çoklu monitör düzeni güncellendi ({len(mons)} ekran algılandı).")
         self._draw_2d_canvas()
 
+    def _jump_to_manual_ip(self):
+        self.notebook.select(1)
+        self.manual_ip_entry.focus_set()
+        self.manual_ip_entry.icursor(tk.END)
+
+    def _on_trigger_scan(self):
+        self._log("[Keşif] 📡 Yerel ağ alt ağı taranıyor (Broadcast UDP sinyali gönderildi)...")
+        threading.Thread(target=self.node.send_discovery_broadcast, daemon=True).start()
+
+    def _on_manual_ip_connect(self):
+        target_ip = self.manual_ip_entry.get().strip()
+        import ipaddress
+        try:
+            ipaddress.ip_address(target_ip)
+        except ValueError:
+            messagebox.showwarning("Geçersiz IP", f"Lütfen geçerli bir IPv4 adresi girin.\nÖrnek: 192.168.1.45\nGirilen: '{target_ip}'")
+            return
+
+        peer = self.node.register_manual_peer(target_ip)
+        self.selected_peer_id = peer["deviceId"]
+        self._refresh_state()
+        self.pair_prompt_lbl.configure(text=f"'{peer.get('deviceName')}' 6 Haneli Kodu:")
+
+        # Eğer PIN kutusuna 6 haneli kod önceden girilmişse hemen TCP eşleştirmesini başlat
+        pin = self.pin_entry.get().strip()
+        if len(pin) == 6 and pin.isdigit():
+            req_trust = self.trust_var.get()
+            token = f"trust-{self.node.device_id}-{os.urandom(8).hex()}" if req_trust else ""
+            self._log(f"[Manuel IP] '{target_ip}' için PIN ({pin}) doğrulanıyor...")
+            threading.Thread(target=self._send_pair_request, args=(peer, pin, req_trust, token), daemon=True).start()
+        else:
+            self.pin_entry.focus_set()
+            self._log(f"[Manuel IP] 🌐 '{target_ip}' listeye eklendi ve doğrudan keşif sinyali gönderildi. Karşı cihazın 6 haneli kodunu girip 'Doğrula ve Bağlan'a basın.")
+
     def _on_pair_click(self):
         pin = self.pin_entry.get().strip()
         if len(pin) != 6 or not pin.isdigit():
             messagebox.showwarning("Geçersiz Kod", "Lütfen karşı cihazın ekranında görünen 6 haneli kodu girin.")
             return
 
-        if not self.node.peers:
-            messagebox.showinfo("Cihaz Yok", "Ağda henüz eşleşilecek bir cihaz bulunamadı.")
-            return
-
         target_peer = None
         if self.selected_peer_id and self.selected_peer_id in self.node.peers:
             target_peer = self.node.peers[self.selected_peer_id]
-        else:
+        elif self.node.peers:
             target_peer = list(self.node.peers.values())[0]
+        else:
+            manual_ip = self.manual_ip_entry.get().strip()
+            import ipaddress
+            try:
+                ipaddress.ip_address(manual_ip)
+                target_peer = self.node.register_manual_peer(manual_ip)
+                self.selected_peer_id = target_peer["deviceId"]
+            except ValueError:
+                messagebox.showinfo("Cihaz Yok", "Ağda henüz eşleşilecek bir cihaz bulunamadı.\nLütfen yukarıdaki 'Hedef IP' alanına karşı cihazın IP adresini girip ekleyin.")
+                return
 
         req_trust = self.trust_var.get()
         token = f"trust-{self.node.device_id}-{os.urandom(8).hex()}" if req_trust else ""
@@ -542,6 +636,13 @@ class ConnectMeLinuxGui:
                 resp = json.loads(self.node._recv_exact(s, jlen).decode("utf-8"))
                 if resp.get("type") == "PAIR_VERIFY_ACK":
                     peer["out_ok"] = True
+                    if resp.get("senderMonitors"):
+                        peer["monitors"] = resp.get("senderMonitors")
+                    if resp.get("senderName"):
+                        peer["deviceName"] = resp.get("senderName")
+                    if resp.get("senderId"):
+                        peer["deviceId"] = resp.get("senderId")
+
                     if resp.get("isMutualComplete"):
                         peer["isMutuallyPaired"] = True
                         if req_trust and token:

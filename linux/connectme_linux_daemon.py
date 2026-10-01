@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
 Connect Me — Nobara Linux (KDE Plasma Wayland / wlroots / X11) Tam Entegre Sistem Servisi & KVM Motoru
-Korgan Games (v1.6.2 Çoklu Monitör, Yüksek Performanslı Kernel Sanal Girdi & Çift Taraflı PIN)
+Korgan Games (v1.6.3 Manuel IP ile Bağlantı, Çoklu Monitör & Çift Taraflı PIN)
 
 Özellikler:
 1. Çoklu Monitör Otomatik Algılama & 2D Topoloji:
    - KDE Plasma Wayland (`kscreen-doctor -j`)
    - wlroots / Sway / Hyprland (`wlr-randr --json`)
    - X11 / XWayland (`xrandr --query`)
-2. Çift Yönlü UDP Keşif (Discovery Dinleyici + Yayıncı):
+2. Çift Yönlü UDP Keşif & Doğrudan Manuel IP Bağlantısı:
    - UDP 42849 portunda tüm Windows, Android ve Linux cihazlarını canlı algılama
+   - Güvenlik duvarı arkasındaki cihazlara doğrudan unicast keşif ve manuel IP bağlantısı
 3. 4 Kademeli Yüksek Performanslı Linux Girdi Enjeksiyonu (Linux Virtual Input):
    - Tier 1: evdev.UInput (Kernel seviyesinde sanal USB fare/klavye, <0.2ms gecikme, KDE Wayland doğrudan tanır)
    - Tier 2: /dev/uinput raw fcntl ioctl (Harici kütüphane gerektirmeyen çekirdek sürücüsü)
@@ -40,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -499,7 +500,13 @@ class ConnectMeLinuxNode:
 
     def log(self, text: str) -> None:
         line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
-        print(line)
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            try:
+                print(line.encode("ascii", errors="replace").decode("ascii"))
+            except Exception:
+                pass
         try:
             log_dir = Path.home() / ".config" / "connectme"
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -667,19 +674,63 @@ class ConnectMeLinuxNode:
             except Exception:
                 pass
 
-    def _discovery_broadcast_loop(self) -> None:
-        """Periodically broadcasts local discovery beacon to the network."""
+    def send_discovery_broadcast(self, target_ip: Optional[str] = None) -> None:
+        """Sends an immediate discovery beacon broadcast or targeted unicast beacon."""
+        beacon_data = self.build_beacon_json()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            if target_ip:
+                sock.sendto(beacon_data, (target_ip, DISCOVERY_UDP_PORT))
+            else:
+                for bc_addr in self._get_broadcast_addresses():
+                    try:
+                        sock.sendto(beacon_data, (bc_addr, DISCOVERY_UDP_PORT))
+                    except OSError:
+                        pass
+        finally:
+            sock.close()
 
+    def register_manual_peer(self, ip: str, device_name: str = "", platform: str = "windows") -> dict:
+        """Registers a manual peer by IP address and sends an immediate targeted discovery beacon."""
+        dev_id = f"peer-{ip}"
+        for existing_id, p in self.peers.items():
+            if p.get("ipAddress") == ip:
+                dev_id = existing_id
+                break
+
+        peer = self.peers.setdefault(dev_id, {
+            "deviceId": dev_id,
+            "deviceName": device_name or f"Cihaz ({ip})",
+            "platform": platform,
+            "ipAddress": ip,
+            "udpInputPort": FAST_INPUT_UDP_PORT,
+            "tcpControlPort": DATA_CONTROL_TCP_PORT,
+            "screenWidth": 1920,
+            "screenHeight": 1080,
+            "monitors": [],
+            "in_ok": False,
+            "out_ok": False,
+            "isMutuallyPaired": False,
+            "is_trusted": dev_id in self.trusted_devices,
+            "lastSeen": time.time()
+        })
+        peer["ipAddress"] = ip
+        peer["lastSeen"] = time.time()
+
+        # Hedefe anında doğrudan UDP keşif paketi gönder
+        try:
+            self.send_discovery_broadcast(target_ip=ip)
+        except Exception:
+            pass
+
+        self.log(f"[Manuel IP] 🌐 '{ip}' hedefli cihaz eklendi ve doğrudan UDP keşif sinyali gönderildi.")
+        return peer
+
+    def _discovery_broadcast_loop(self) -> None:
+        """Periodically broadcasts local discovery beacon to the network."""
         while self.running:
-            beacon_data = self.build_beacon_json()
-            for bc_addr in self._get_broadcast_addresses():
-                try:
-                    sock.sendto(beacon_data, (bc_addr, DISCOVERY_UDP_PORT))
-                except OSError:
-                    pass
+            self.send_discovery_broadcast()
             time.sleep(2.5)
 
     def _tcp_server_loop(self) -> None:
