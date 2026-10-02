@@ -1,8 +1,42 @@
-# Connect Me v1.6.6 (v1-6-6) — Kalıcı Cihaz Kimlikleri, Çoklu Cihaz PIN Seçimi & Otomatik Reconnect
+# Connect Me v1.6.7 — Wayland Donanım İmleci, 2D Kanvas Sürükle-Bırak, Hedefe Özel PIN & Android Ses Köprüsü
 
-Bu sürüm; ağda birden fazla cihaz olduğunda Android'den girilen PIN kodunun yanlış cihaza gitmesi sorununu çözen bağımsız cihaz kartlarını ve PIN iletişim kutularını, Windows ve Android'in her yeniden başlatmada rastgele ID üretmesi nedeniyle sıfırlanan güvenilir cihaz (Trusted Reconnect) hafızasını kalıcı hale getiren persistent device ID motorunu ve Nobara Linux'un güvenilir cihazları görünce otomatik yeniden bağlanmasını sağlayan proaktif auto-reconnect mekanizmasını sunar.
+Bu sürüm; Windows'tan Nobara Linux'a fare geçtiğinde KDE Plasma Wayland üzerinde imlecin görünmemesi veya hareket etmemesi sorununu çözen ayrık çekirdek sanal cihaz mimarisini (`Connect-Me-Mouse` & `Connect-Me-Keyboard`), Linux arayüzündeki ekran yerleşimini karmaşık ve üst üste binmiş halden kurtarıp serbestçe sürüklenebilir kartlara ve temiz dik bağlantılara dönüştüren yeni 2D kanvası, PIN kodunun yanlış cihaza gitmesini engelleyen hedefe özel eşleşme pencerelerini ve Android 14/15'te ses aktarımının çökmesine yol açan `MediaProjection` kısıtlamasını çözen ses motoru iyileştirmelerini sunar.
 
 ---
+
+### 🌟 v1.6.7 Yenilikleri ve Düzeltmeleri:
+
+* **🐧 Nobara Linux / KDE Plasma Wayland Donanım İmleci ve Ayrık evdev Motoru:**
+  - Linux `uinput` sanal aygıtında fare eksenleri (`REL_X`, `REL_Y`) ile klavye tuşları aynı aygıtta birleştirildiğinde, libinput ve KWin Wayland bileşeni aygıtı yalnızca klavye olarak sınıflandırıyor ve ekranda işaretçi imleci oluşturmuyordu.
+  - Sürücü `Connect-Me-Mouse` (salt optik fare) ve `Connect-Me-Keyboard` (salt klavye) olmak üzere iki bağımsız çekirdek aygıtına ayrıldı. KWin Wayland artık gelen hareketleri gerçek bir USB fare olarak algılar ve ekranda işaretçi imlecini anında canlandırır.
+  - Windows'tan Linux'un sol kenarına geçişte ters koordinat hesaplama hatası düzeltildi (imleç artık Linux'un sol kenarından girer).
+  - Kenardan içeri geçtikten hemen sonra yanlışlıkla Windows'a geri sekmesini önleyen 8 piksellik kenar direnci eklendi.
+  - Sürücü izinleri eksik olduğunda tek tıkla sistem şifresi (`pkexec`) ile `/dev/uinput` izinlerini ayarlayan akıllı buton eklendi.
+
+* **🖥️ Yenilenen 2D Ekran Konfigürasyonu (Kanvas Sürükle-Bırak & Düzen Sıfırlama):**
+  - Uzak cihazların ekranın en sağında tek bir sütuna sıkışıp monitörlerin içinden geçen çapraz kesik çizgiler çizmesi sorunu giderildi.
+  - Windows sağa, Android ve diğer cihazlar sola/üste dengeli ve orantısal olarak yerleştirilir.
+  - Cihaz kartları kanvas üzerinde **serbestçe sürüklenebilir** (`Drag & Drop`). Kullanıcı kartı istediği yerel monitörün yanına taşıyabilir.
+  - `[ 📐 Düzeni Sıfırla ]` butonu ile tüm kartlar anında en uygun otomatik pozisyonlarına döndürülebilir.
+  - Her cihaz kartının üzerine doğrudan tıklanabilir `[ 🔐 6 Haneli Kodu Gir ]` butonu eklendi.
+
+* **🔐 Hedefe Özel PIN Eşleştirme Penceresi:**
+  - Linux'ta ağda birden fazla cihaz açıkken (ör. Huawei, Samsung, Windows) PIN kutusuna kod yazıldığında kodun rastgele ilk cihaza gitmesi ve Windows/Android ile eşleşilememesi sorunu tamamen çözüldü.
+  - Cihaz kartına tek tıkla veya cihaz listesinde çift tıklandığında o cihaza özel yüksek kontrastlı PIN doğrulama penceresi açılır.
+  - Karşı cihaz sizin kodunuzu girdiğinde üstte turuncu bildirim çubuğu ve `[ 🔐 {Cihaz} Kodunu Gir ]` butonu anında belirir.
+
+* **🎧 Android 14 / 15 (One UI 6.x / 7.x) Kulaklığa Ses Köprüsü Çökme Düzeltmesi:**
+  - Android 14+ (API 34+) sistem sesini yakalamadan önce zorunlu kılınan `MediaProjection.Callback` kaydı eklenerek Samsung Galaxy ve modern Android cihazlarda yaşanan `IllegalStateException` çökmesi giderildi.
+  - Sistem sesi yakalanamadığında akışın sessizce durması yerine otomatik olarak mikrofon moduna düşen (`AudioRecord` fallback) dayanıklı hata yakalama mekanizması uygulandı.
+  - Windows ses motoru, ses akışı başladığında arayüzde ve loglarda bağlantıyı ve ses parametrelerini (48.000 Hz Stereo) anlık bildirir.
+
+* **🪟 Windows Çoklu Monitör ve Manuel IP İyileştirmeleri:**
+  - Manuel IP ile eklenen cihazların gerçek keşif sinyali geldiğinde çift kayıt oluşturması engellendi; geçici kayıtlar otomatik birleştirilir.
+  - Nobara Linux'un çift monitörünün Windows ekran konfigürasyonu kanvasında gerçek oranlarıyla ve alt monitör isimleriyle doğru şekilde gösterilmesi sağlandı.
+
+---
+
+# Connect Me v1.6.6 (v1-6-6) — Kalıcı Cihaz Kimlikleri, Çoklu Cihaz PIN Seçimi & Otomatik Reconnect
 
 ### 🌟 v1.6.6 Yenilikleri ve Düzeltmeleri:
 

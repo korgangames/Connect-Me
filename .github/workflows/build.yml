@@ -140,11 +140,17 @@ jobs:
           find release-assets/ -type f \( -name "*.zip" -o -name "*.apk" -o -name "*.tar.gz" \) -exec cp {} dist/ \;
           ls -la dist/
 
+      - name: Read Version
+        id: get_ver
+        run: |
+          VER=$(tr -d '\r\n ' < VERSION)
+          echo "version=$VER" >> $GITHUB_OUTPUT
+
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v1.6.6
-          name: "Connect Me v1.6.6 (v1-6-6) — Kalıcı Cihaz Kimlikleri, Çoklu Cihaz PIN Seçimi & Otomatik Reconnect"
+          tag_name: v${{ steps.get_ver.outputs.version }}
+          name: "Connect Me v${{ steps.get_ver.outputs.version }} — Wayland Donanım İmleci, 2D Kanvas Sürükle-Bırak, Hedefe Özel PIN & Android Ses Köprüsü"
           body_path: docs/RELEASE_NOTES.md
           draft: false
           prerelease: false
