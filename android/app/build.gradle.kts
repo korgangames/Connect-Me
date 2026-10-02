@@ -1,5 +1,3 @@
-import java.util.Base64
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -20,15 +18,6 @@ android {
     signingConfigs {
         create("release") {
             val ksFile = rootProject.file("connectme-release.jks")
-            val b64File = rootProject.file("connectme-keystore.b64")
-            if (!ksFile.exists() && b64File.exists()) {
-                try {
-                    val bytes = java.util.Base64.getDecoder().decode(b64File.readText().trim())
-                    ksFile.writeBytes(bytes)
-                } catch (e: Exception) {
-                    println("Failed to decode keystore b64: ${e.message}")
-                }
-            }
             if (ksFile.exists()) {
                 storeFile = ksFile
                 storePassword = "connectmepassword123"
