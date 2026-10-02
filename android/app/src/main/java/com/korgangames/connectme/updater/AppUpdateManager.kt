@@ -233,7 +233,7 @@ object AppUpdateManager {
 
             try {
                 apkFile.setReadable(true, false)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {}
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!activity.packageManager.canRequestPackageInstalls()) {
@@ -288,7 +288,7 @@ object AppUpdateManager {
                 .setPositiveButton("Tarayıcıda İndir") { _, _ ->
                     try {
                         activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_LATEST_RELEASE_URL)))
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {}
                 }
                 .setNegativeButton("Kapat", null)
                 .show()

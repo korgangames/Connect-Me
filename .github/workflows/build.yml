@@ -62,9 +62,7 @@ jobs:
       - name: Build Android Release APK
         working-directory: ./android
         run: |
-          if [ -f connectme-keystore.b64 ]; then
-            base64 -d connectme-keystore.b64 > connectme-release.jks
-          fi
+          keytool -genkeypair -v -keystore connectme-release.jks -alias connectme -keyalg RSA -keysize 2048 -validity 10000 -storepass connectmepassword123 -keypass connectmepassword123 -dname "CN=Korgan Games, OU=Connect Me, O=Korgan Games, C=TR"
           gradle assembleRelease --no-daemon
           mkdir -p ../publish
           cp app/build/outputs/apk/release/*.apk ../publish/ConnectMeV1-6-5.apk
