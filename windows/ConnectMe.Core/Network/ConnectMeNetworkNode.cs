@@ -132,7 +132,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         string? fixedPin = null,
         TrustedDeviceStore? trustStore = null)
     {
-        LocalDeviceId = deviceId ?? Guid.NewGuid().ToString("N")[..12];
+        LocalDeviceId = deviceId ?? TrustedDeviceStore.GetOrCreatePersistentDeviceId();
         LocalDeviceName = deviceName ?? Environment.MachineName;
         LocalPlatform = platform;
         PairingPin = fixedPin ?? RandomNumberGenerator.GetInt32(100000, 999999).ToString();

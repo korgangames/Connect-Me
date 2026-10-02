@@ -141,7 +141,16 @@ class ConnectMeService : Service() {
     private var inputUdpSocket: DatagramSocket? = null
     private var tcpServerSocket: ServerSocket? = null
 
-    val localDeviceId: String = "android-" + UUID.randomUUID().toString().take(8)
+    val localDeviceId: String by lazy {
+        val prefs = getSharedPreferences("connectme_prefs", Context.MODE_PRIVATE)
+        var id = prefs.getString("persistent_local_device_id", null)
+        if (id.isNullOrEmpty()) {
+            val model = Build.MODEL.replace("[^a-zA-Z0-9]".toRegex(), "").take(8).lowercase()
+            id = "android-$model-${UUID.randomUUID().toString().take(6)}"
+            prefs.edit().putString("persistent_local_device_id", id).apply()
+        }
+        id
+    }
     val localDeviceName: String = "${Build.MANUFACTURER} ${Build.MODEL}"
 
     @Volatile

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Connect Me — Nobara Linux (KDE Plasma Wayland / wlroots / X11) Tam Entegre Sistem Servisi & KVM Motoru
-Korgan Games (v1.6.5 Yerinde Otomatik Güncelleyici, Sabit Android İmzası & Sürücü İyileştirmeleri)
+Korgan Games (v1.6.6 Kalıcı Cihaz Kimlikleri, Çoklu Cihaz PIN & Otomatik Reconnect)
 
 Özellikler:
 1. Çoklu Monitör Otomatik Algılama & 2D Topoloji:
@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.6.5"
+VERSION = "1.6.6"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -730,6 +730,8 @@ class ConnectMeLinuxNode:
         self.on_cursor_update: Optional[Callable[[bool, int, int], None]] = None
         self.on_pin_request_received: Optional[Callable[[str, str], None]] = None
         self.on_peer_discovered: Optional[Callable[[dict], None]] = None
+        self.on_peer_updated: Optional[Callable[[dict], None]] = None
+        self._last_auto_connect_attempt: Dict[str, float] = {}
 
         self.running = True
         self.last_copied_clipboard = ""
@@ -908,15 +910,89 @@ class ConnectMeLinuxNode:
                 peer["screenHeight"] = payload.get("screenHeight", peer.get("screenHeight", 1080))
                 peer["lastSeen"] = time.time()
 
+                is_trusted = dev_id in self.trusted_devices
+                peer["is_trusted"] = is_trusted
+
+                if is_trusted and not peer.get("isMutuallyPaired", False):
+                    threading.Thread(target=self.try_auto_reconnect, args=(peer,), daemon=True).start()
+
                 if is_new:
-                    self.log(f"[Keşif] Cihaz bulundu: {sender_name} ({sender_plat}) @ {sender_ip} — Eşleşmek için 6 haneli kod girin.")
+                    trust_tag = " [⭐ GÜVENİLİR - Otomatik Bağlanıyor...]" if is_trusted else " — Eşleşmek için 6 haneli kod girin."
+                    self.log(f"[Keşif] Cihaz bulundu: {sender_name} ({sender_plat}) @ {sender_ip}{trust_tag}")
                     if self.on_peer_discovered:
                         try:
                             self.on_peer_discovered(peer)
                         except Exception:
                             pass
+                elif self.on_peer_updated:
+                    try:
+                        self.on_peer_updated(peer)
+                    except Exception:
+                        pass
             except Exception:
                 pass
+
+    def try_auto_reconnect(self, peer: dict) -> bool:
+        """Sends TRUSTED_RECONNECT over TCP using persistent pre-shared trust token."""
+        if peer.get("isMutuallyPaired"):
+            return True
+        dev_id = peer.get("deviceId", "")
+        saved_rec = self.trusted_devices.get(dev_id)
+        if not saved_rec or not saved_rec.get("autoConnect", True):
+            return False
+        token = saved_rec.get("trustToken", "")
+        if not token:
+            return False
+
+        now = time.time()
+        if now - self._last_auto_connect_attempt.get(dev_id, 0) < 5.0:
+            return False
+        self._last_auto_connect_attempt[dev_id] = now
+
+        try:
+            remote_ip = peer.get("ipAddress")
+            tcp_port = peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3.5)
+            sock.connect((remote_ip, tcp_port))
+            req = {
+                "type": "TRUSTED_RECONNECT",
+                "senderId": self.device_id,
+                "senderName": self.device_name,
+                "senderPlatform": "linux-nobara",
+                "senderUdpPort": FAST_INPUT_UDP_PORT,
+                "senderTcpPort": DATA_CONTROL_TCP_PORT,
+                "senderScreenWidth": self.topology.total_width,
+                "senderScreenHeight": self.topology.total_height,
+                "senderMonitors": [asdict(m) for m in self.topology.monitors],
+                "trustToken": token
+            }
+            self._send_tcp_frame(sock, req)
+            prefix = self._recv_exact(sock, 12)
+            if len(prefix) < 12:
+                sock.close()
+                return False
+            json_len, _ = struct.unpack("<iq", prefix)
+            ack_bytes = self._recv_exact(sock, json_len)
+            ack = json.loads(ack_bytes.decode("utf-8"))
+            sock.close()
+
+            if ack.get("type") == "TRUSTED_RECONNECT_ACK" and ack.get("isMutualComplete"):
+                peer["in_ok"] = True
+                peer["out_ok"] = True
+                peer["is_trusted"] = True
+                peer["isMutuallyPaired"] = True
+                peer["monitors"] = ack.get("senderMonitors", peer.get("monitors", []))
+                self.log(f"[Otomatik Bağlantı] ⭐ Güvenilir cihaz '{peer.get('deviceName')}' ({remote_ip}) PIN'siz otomatik bağlandı!")
+                if self.on_peer_updated:
+                    try:
+                        self.on_peer_updated(peer)
+                    except Exception:
+                        pass
+                return True
+        except Exception:
+            pass
+        return False
 
     def send_discovery_broadcast(self, target_ip: Optional[str] = None) -> None:
         """Sends an immediate discovery beacon broadcast or targeted unicast beacon."""

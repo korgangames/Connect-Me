@@ -43,7 +43,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var localPinBadgeText: TextView
     private lateinit var overlayStatusText: TextView
     private lateinit var accessibilityStatusText: TextView
-    private lateinit var peersStatusText: TextView
+    private lateinit var peersContainer: LinearLayout
+    private lateinit var selectedPeerBadgeText: TextView
+    private var selectedPeer: ConnectMeService.DiscoveredPcPeer? = null
     private lateinit var pcIpInput: EditText
     private lateinit var remotePinInput: EditText
     private lateinit var shelfListText: TextView
@@ -104,7 +106,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "Connect Me v1.6.5"
+        title = "Connect Me v1.6.6"
 
         try {
             val svcIntent = Intent(this, ConnectMeService::class.java)
@@ -163,7 +165,7 @@ class MainActivity : AppCompatActivity() {
         val svc = ConnectMeService.instance
         val localIp = svc?.getLocalIpv4Address() ?: "Bağlanıyor..."
         val pin = svc?.localPairingPin ?: "------"
-        statusIpText.text = "📱 Android IP: $localIp  |  v1.6.5 (v1-6-5)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
+        statusIpText.text = "📱 Android IP: $localIp  |  v1.6.6 (v1-6-6)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
         localPinBadgeText.text = "🔐 BU CİHAZIN 6 HANELİ KODU: $pin"
 
         val hasOverlay = Settings.canDrawOverlays(this)
@@ -183,19 +185,122 @@ class MainActivity : AppCompatActivity() {
         accessibilityStatusText.setTextColor(if (hasAccessibility) Color.parseColor("#4ADE80") else Color.parseColor("#FBBF24"))
 
         val peers = ConnectMeService.discoveredPeers
-        peersStatusText.text = if (peers.isEmpty()) {
-            "🔍 Ağdaki bilgisayarlar ve cihazlar aranıyor..."
+        peersContainer.removeAllViews()
+
+        if (peers.isEmpty()) {
+            val emptyTv = TextView(this).apply {
+                text = "🔍 Ağdaki bilgisayarlar ve cihazlar aranıyor...\n(Bilgisayar ve telefonun aynı Wi-Fi ağına bağlı olduğundan emin olun)"
+                textSize = 12.5f
+                setTextColor(Color.parseColor("#94A3B8"))
+                setPadding(0, 8, 0, 12)
+            }
+            peersContainer.addView(emptyTv)
+            selectedPeerBadgeText.visibility = View.GONE
         } else {
-            peers.joinToString("\n\n") { p ->
+            if (selectedPeer != null && peers.none { it.deviceId == selectedPeer?.deviceId }) {
+                selectedPeer = null
+            }
+
+            for (p in peers) {
                 val isTrusted = svc?.getTrustTokenForDevice(p.deviceId) != null
                 val trustTag = if (isTrusted) "⭐ " else ""
-                val state = when {
-                    p.isMutuallyPaired -> "${trustTag}🟢 ÇİFT TARAFLI ONAYLI (Aktif)"
-                    p.myEnteredPinVerifiedByRemote -> "${trustTag}🟡 KARŞI ONAY BEKLİYOR (PC'de $pin kodunu girin)"
-                    p.remoteEnteredMyPinVerified -> "${trustTag}🟠 SİZİN ONAYINIZ BEKLENİYOR (PC'nin kodunu aşağıya girin)"
-                    else -> if (isTrusted) "⭐ ⚪ GÜVENİLİR (Otomatik Bağlanıyor...)" else "⚪ EŞLEŞMEDİ (6 Haneli PIN Gerekli)"
+                val isSelected = selectedPeer?.deviceId == p.deviceId
+
+                val itemCard = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = GradientDrawable().apply {
+                        setColor(if (isSelected) Color.parseColor("#1E293B") else Color.parseColor("#0F172A"))
+                        cornerRadius = 16f
+                        setStroke(if (isSelected) 2 else 1, if (isSelected) Color.parseColor("#38BDF8") else Color.parseColor("#334155"))
+                    }
+                    setPadding(24, 20, 24, 20)
+                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    lp.setMargins(0, 0, 0, 16)
+                    layoutParams = lp
                 }
-                "🖥️ ${p.deviceName} (${p.ipAddress})\n   Durum: $state"
+
+                val headerRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+
+                val titleTv = TextView(this).apply {
+                    text = "${trustTag}🖥️ ${p.deviceName}"
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    layoutParams = lp
+                }
+                headerRow.addView(titleTv)
+
+                val platBadge = TextView(this).apply {
+                    text = p.platform.uppercase()
+                    textSize = 10f
+                    setTextColor(Color.parseColor("#94A3B8"))
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor("#1E293B"))
+                        cornerRadius = 8f
+                    }
+                    setPadding(12, 4, 12, 4)
+                }
+                headerRow.addView(platBadge)
+                itemCard.addView(headerRow)
+
+                val ipTv = TextView(this).apply {
+                    text = "IP: ${p.ipAddress}"
+                    textSize = 11.5f
+                    setTextColor(Color.parseColor("#64748B"))
+                    setPadding(0, 4, 0, 6)
+                }
+                itemCard.addView(ipTv)
+
+                val stateDesc = when {
+                    p.isMutuallyPaired -> "🟢 ÇİFT TARAFLI EŞLEŞTİ (Aktif)"
+                    p.remoteEnteredMyPinVerified -> "🟠 BU CİHAZ SİZİN KODUNUZU ONAYLADI!\n(Aşağıdaki butona basıp bu cihazın kodunu girin)"
+                    p.myEnteredPinVerifiedByRemote -> "🟡 SİZ ONAYLADINIZ (Karşı ekranda $pin kodunu onaylayın)"
+                    isTrusted -> "⭐ GÜVENİLİR (Otomatik Bağlanıyor...)"
+                    else -> "⚪ Eşleşmedi (6 Haneli Kod Gerekli)"
+                }
+                val stateColor = when {
+                    p.isMutuallyPaired -> "#4ADE80"
+                    p.remoteEnteredMyPinVerified -> "#FB923C"
+                    p.myEnteredPinVerifiedByRemote -> "#FBBF24"
+                    else -> "#94A3B8"
+                }
+
+                val statusTv = TextView(this).apply {
+                    text = stateDesc
+                    textSize = 12f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.parseColor(stateColor))
+                    setPadding(0, 2, 0, 10)
+                }
+                itemCard.addView(statusTv)
+
+                if (!p.isMutuallyPaired) {
+                    val btnBg = if (p.remoteEnteredMyPinVerified) "#D97706" else "#2563EB"
+                    val pairBtn = createStyledButton("🔐 Bu Cihazın 6 Haneli Kodunu Gir", btnBg) {
+                        selectedPeer = p
+                        showEnterPinForPeerDialog(p)
+                    }
+                    itemCard.addView(pairBtn)
+                }
+
+                peersContainer.addView(itemCard)
+            }
+
+            if (selectedPeer != null) {
+                selectedPeerBadgeText.visibility = View.VISIBLE
+                selectedPeerBadgeText.text = "🎯 Seçili Hedef Cihaz: ${selectedPeer?.deviceName} (${selectedPeer?.ipAddress})"
+            } else {
+                val waitingPeer = peers.find { it.remoteEnteredMyPinVerified }
+                if (waitingPeer != null) {
+                    selectedPeerBadgeText.visibility = View.VISIBLE
+                    selectedPeerBadgeText.text = "🎯 Otomatik Hedef: ${waitingPeer.deviceName} (Kodunuzu bekliyor)"
+                } else {
+                    selectedPeerBadgeText.visibility = View.GONE
+                }
             }
         }
 
@@ -210,6 +315,46 @@ class MainActivity : AppCompatActivity() {
         }
 
         logViewText.text = ConnectMeService.telemetryLogs.take(15).joinToString("\n")
+    }
+
+    private fun showEnterPinForPeerDialog(peer: ConnectMeService.DiscoveredPcPeer) {
+        val input = EditText(this).apply {
+            hint = "6 Haneli Kod (Örn: 123456)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setTextColor(Color.parseColor("#38BDF8"))
+            setHintTextColor(Color.parseColor("#64748B"))
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setPadding(24, 28, 24, 28)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#0F172A"))
+                cornerRadius = 16f
+                setStroke(2, Color.parseColor("#38BDF8"))
+            }
+        }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 16)
+            addView(input)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("🔐 '${peer.deviceName}' Kodunu Gir")
+            .setMessage("Bu cihazın (${peer.ipAddress}) ekranında yazan 6 haneli kodu giriniz:")
+            .setView(container)
+            .setPositiveButton("Doğrula ve Bağlan") { _, _ ->
+                val entered = input.text.toString().trim()
+                if (entered.length == 6 && entered.all { it.isDigit() }) {
+                    ConnectMeService.instance?.submitRemotePinToPeer(peer, entered)
+                    Toast.makeText(this, "'${peer.deviceName}' cihazına kod gönderildi...", Toast.LENGTH_SHORT).show()
+                    refreshUiState()
+                } else {
+                    Toast.makeText(this, "Hata: Kod tam olarak 6 haneli rakam olmalıdır!", Toast.LENGTH_LONG).show()
+                }
+            }
+            .setNegativeButton("İptal", null)
+            .show()
     }
 
     private fun sendPickedUriToPc(uri: Uri) {
@@ -252,7 +397,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "🌐 Connect Me v1.6.5"
+            text = "🌐 Connect Me v1.6.6"
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
@@ -378,12 +523,32 @@ class MainActivity : AppCompatActivity() {
         val pcCard = createCardLayout()
         pcCard.addView(createSectionTitle("🔗 2. Çoklu Cihaz & Çift Taraflı 6 Haneli Kod Onayı"))
 
-        peersStatusText = TextView(this).apply {
-            textSize = 13f
-            setTextColor(Color.parseColor("#E5E7EB"))
-            setPadding(0, 12, 0, 16)
+        selectedPeerBadgeText = TextView(this).apply {
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#38BDF8"))
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 8, 0, 8)
+            visibility = View.GONE
         }
-        pcCard.addView(peersStatusText)
+        pcCard.addView(selectedPeerBadgeText)
+
+        peersContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            setPadding(0, 4, 0, 10)
+        }
+        pcCard.addView(peersContainer)
+
+        val manualHeader = TextView(this).apply {
+            text = "⌨️ Veya Karşı Cihaz Kodunu Manuel Girin:"
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, 10, 0, 6)
+        }
+        pcCard.addView(manualHeader)
 
         remotePinInput = EditText(this).apply {
             hint = "Karşı Cihazın 6 Haneli Kodu (Örn: 482910)"
@@ -397,9 +562,20 @@ class MainActivity : AppCompatActivity() {
 
         val verifyPinBtn = createStyledButton("✅ Karşı Cihazın 6 Haneli Kodunu Doğrula", "#059669") {
             val enteredPin = remotePinInput.text.toString().trim()
-            val firstPeer = ConnectMeService.discoveredPeers.firstOrNull()
-            if (firstPeer != null) {
-                ConnectMeService.instance?.submitRemotePinToPeer(firstPeer, enteredPin)
+            if (enteredPin.length != 6 || !enteredPin.all { it.isDigit() }) {
+                Toast.makeText(this, "Lütfen karşı cihazdaki 6 haneli kodu eksiksiz girin", Toast.LENGTH_SHORT).show()
+                return@createStyledButton
+            }
+            val peers = ConnectMeService.discoveredPeers
+            val targetPeer = selectedPeer
+                ?: peers.find { it.remoteEnteredMyPinVerified }
+                ?: (if (peers.size == 1) peers.first() else null)
+
+            if (targetPeer != null) {
+                ConnectMeService.instance?.submitRemotePinToPeer(targetPeer, enteredPin)
+                Toast.makeText(this, "'${targetPeer.deviceName}' cihazına kod gönderildi...", Toast.LENGTH_SHORT).show()
+            } else if (peers.size > 1) {
+                Toast.makeText(this, "Birden fazla cihaz bulundu! Lütfen listedeki cihaz kartının altındaki 'Kod Gir' butonuna dokunun.", Toast.LENGTH_LONG).show()
             } else {
                 val ip = pcIpInput.text.toString().trim()
                 if (ip.isNotEmpty()) {
@@ -719,7 +895,7 @@ class MainActivity : AppCompatActivity() {
         val report = buildString {
             appendLine("=== Connect Me Android Tanılama Günlüğü ===")
             appendLine("Tarih: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
-            appendLine("Uygulama Sürümü: v1.6.5")
+            appendLine("Uygulama Sürümü: v1.6.6")
             appendLine("Cihaz Modeli: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
             appendLine("Android Sürümü: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("Erişilebilirlik Hizmeti: ${if (CursorAccessibilityService.instance != null) "AÇIK ✅" else "KAPALI ❌"}")
@@ -738,7 +914,7 @@ class MainActivity : AppCompatActivity() {
 
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.6.5.txt")
+            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.6.6.txt")
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(sendIntent, "Connect Me Loglarını Dışa Aktar / Paylaş"))
@@ -748,7 +924,7 @@ class MainActivity : AppCompatActivity() {
         if (isManual) {
             Toast.makeText(this, "Güncellemeler denetleniyor...", Toast.LENGTH_SHORT).show()
         }
-        AppUpdateManager.checkForUpdates(this, "1.6.5") { updateInfo, errorMsg ->
+        AppUpdateManager.checkForUpdates(this, "1.6.6") { updateInfo, errorMsg ->
             if (updateInfo != null) {
                 updateCard.visibility = View.VISIBLE
                 updateTitleText.text = "🎉 Yeni Sürüm Mevcut: ${updateInfo.versionName}"
@@ -772,7 +948,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 updateCard.visibility = View.GONE
                 if (isManual) {
-                    Toast.makeText(this, "Connect Me güncel (v1.6.5)!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Connect Me güncel (v1.6.6)!", Toast.LENGTH_SHORT).show()
                 }
             }
         }

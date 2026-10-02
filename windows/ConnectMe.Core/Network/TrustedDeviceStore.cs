@@ -97,6 +97,37 @@ public sealed class TrustedDeviceStore
         return Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
     }
 
+    public static string GetOrCreatePersistentDeviceId()
+    {
+        try
+        {
+            string baseFolder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            if (string.IsNullOrWhiteSpace(baseFolder))
+            {
+                baseFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
+            }
+            string dir = Path.Combine(baseFolder, "ConnectMe");
+            Directory.CreateDirectory(dir);
+            string idFile = Path.Combine(dir, "device_id.txt");
+            if (File.Exists(idFile))
+            {
+                string id = File.ReadAllText(idFile).Trim();
+                if (!string.IsNullOrWhiteSpace(id) && id.Length >= 6)
+                    return id;
+            }
+            string cleanMachine = Environment.MachineName.ToLowerInvariant();
+            cleanMachine = System.Text.RegularExpressions.Regex.Replace(cleanMachine, @"[^a-z0-9]", "");
+            if (cleanMachine.Length > 8) cleanMachine = cleanMachine[..8];
+            string newId = $"win-{cleanMachine}-{Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant()}";
+            File.WriteAllText(idFile, newId);
+            return newId;
+        }
+        catch
+        {
+            return $"win-{Environment.MachineName.ToLowerInvariant()}";
+        }
+    }
+
     public void Load()
     {
         lock (_sync)

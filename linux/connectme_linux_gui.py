@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Connect Me — Linux (Nobara / KDE Plasma / Wayland & X11) Gelişmiş Kontrol Paneli (GUI)
-Korgan Games (v1.6.5 Yerinde Otomatik Güncelleyici, Sabit Android İmzası & Sürücü İyileştirmeleri)
+Korgan Games (v1.6.6 Kalıcı Cihaz Kimlikleri, Çoklu Cihaz PIN & Otomatik Reconnect)
 
 - 2D Ekran Konfigürasyonu Kanvası
 - Çift Yönlü UDP Cihaz Keşfi (Canlı Algılama)

@@ -1,3 +1,29 @@
+# Connect Me v1.6.6 (v1-6-6) — Kalıcı Cihaz Kimlikleri, Çoklu Cihaz PIN Seçimi & Otomatik Reconnect
+
+Bu sürüm; ağda birden fazla cihaz olduğunda Android'den girilen PIN kodunun yanlış cihaza gitmesi sorununu çözen bağımsız cihaz kartlarını ve PIN iletişim kutularını, Windows ve Android'in her yeniden başlatmada rastgele ID üretmesi nedeniyle sıfırlanan güvenilir cihaz (Trusted Reconnect) hafızasını kalıcı hale getiren persistent device ID motorunu ve Nobara Linux'un güvenilir cihazları görünce otomatik yeniden bağlanmasını sağlayan proaktif auto-reconnect mekanizmasını sunar.
+
+---
+
+### 🌟 v1.6.6 Yenilikleri ve Düzeltmeleri:
+
+* **📱 Android Çoklu Cihaz PIN Seçimi & Özel Kart Arayüzü:**
+  - Ağda hem Nobara hem Windows aynı anda açık olduğunda, Android'in her zaman listedeki ilk cihaza (Nobara) PIN göndermesi ve Windows'un PIN doğrulamasını alamaması sorunu giderildi.
+  - Artık keşfedilen her bilgisayar/cihaz için kendi adına ve IP'sine sahip bağımsız bir durum kartı ve doğrudan o cihaza ait `[ 🔐 Bu Cihazın 6 Haneli Kodunu Gir ]` butonu yer alır.
+  - Butona dokunulduğunda doğrudan o cihaz için 6 haneli kod girişi penceresi açılır ve girilen PIN kesinlikle yalnızca o cihaza iletilir.
+  - Manuel PIN alanı da seçili veya onay bekleyen cihazı akıllıca tespit eder; belirsizlik varsa kullanıcıyı kart butonuna dokunması için uyarır.
+
+* **🔑 Kalıcı Cihaz Kimlikleri (Persistent Device IDs):**
+  - Windows tarafında `ConnectMeNetworkNode` ve Android tarafında `ConnectMeService` her açılışta `Guid.NewGuid()` / `UUID.randomUUID()` ile rastgele yeni `deviceId` üretiyordu. Bu durum, cihaz bir kez kapatılıp açıldığında önceki eşleşme ve güven belirteçlerinin (Trusted Tokens) geçersiz kalmasına ve otomatik bağlanmanın devre dışı kalmasına neden oluyordu.
+  - Windows: Kalıcı kimlik `%APPDATA%\ConnectMe\device_id.txt` dosyasında saklanır; yeniden başlatmalarda korunur.
+  - Android: Kalıcı kimlik `SharedPreferences` (`persistent_local_device_id`) üzerinde saklanır.
+  - Böylece bir kez eşleşen cihazlar, uygulama kapatılıp açılsa bile birbirini kalıcı olarak tanır.
+
+* **🐧 Nobara Linux Proaktif Otomatik Yeniden Bağlantı (Proactive Auto-Reconnect):**
+  - Linux servisinin keşif anında güvenilir bir cihaz (Windows veya Android) gördüğünde bağlantıyı başlatmayıp pasif beklemesi durumu giderildi.
+  - Güvenilir bir cihazın UDP keşif paketi alındığında, arka planda güven belirteci ile `TRUSTED_RECONNECT` TCP isteği tetiklenir ve sıfır PIN ile anında otomatik bağlantı kurulur.
+
+---
+
 # Connect Me v1.6.5 (v1-6-5) — Nobara Yerinde Otomatik Güncelleme & Android Kalıcı İmza Entegrasyonu
 
 Bu sürüm; Nobara Linux üzerinde eksik modül hatasını gidererek doğrudan masaüstünden tek tıkla arşivi indirip mevcut klasöre ayıklayan ve kendini yeniden başlatan yerinde otomatik güncelleyiciyi, Android'de her derlemede değişen imza sorununu (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) çözen kalıcı anahtar deposu entegrasyonunu ve paket yükleyici yetkilendirme iyileştirmelerini sunar.
