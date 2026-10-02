@@ -92,6 +92,11 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         string peerName = peer?.DeviceName ?? senderIp;
         _activeSourceDescription = $"{peerName} ({packet.SampleRate} Hz {(packet.Channels == 2 ? "Stereo" : "Mono")})";
 
+        if (_totalAudioBytesReceived == packet.PcmData.Length)
+        {
+            _network.Log($"[Ses & Kulaklık Köprüsü] 🎧 '{peerName}' cihazından ses akışı başladı ({packet.SampleRate} Hz {(packet.Channels == 2 ? "Stereo" : "Mono")}). Kulaklığa aktarılıyor.");
+        }
+
         lock (_lock)
         {
             if (_disposed || !_isEnabled)
@@ -162,9 +167,11 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
             _currentSampleRate = sampleRate;
             _currentChannels = channels;
             _currentBitsPerSample = bitsPerSample;
+            _network.Log($"[Ses & Kulaklık Köprüsü] WinMM ses çıkışı başarıyla açıldı ({sampleRate} Hz, {channels} kanal, {bitsPerSample} bit).");
         }
         else
         {
+            _network.Log($"[Ses Hata] WinMM waveOut açılamadı (Hata: {res}). Varsayılan ses çıkış aygıtınızı kontrol edin.");
             _hWaveOut = IntPtr.Zero;
         }
     }

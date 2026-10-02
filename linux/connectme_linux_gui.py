@@ -72,6 +72,8 @@ class ConnectMeLinuxGui:
         self.root.configure(bg="#0B1120")
 
         self.selected_peer_id: str = ""
+        self.peer_canvas_coords = {}
+        self._drag_data = {"peer_id": None, "start_x": 0, "start_y": 0, "orig_x": 0, "orig_y": 0}
 
         # Daemon node başlat
         self.node = ConnectMeLinuxNode(on_log=self._log)
@@ -174,7 +176,7 @@ class ConnectMeLinuxGui:
             command=self._fix_uinput_permissions
         )
         self.uinput_fix_btn.pack(side=tk.RIGHT, padx=4)
-        if self.node.injector.mode == "none" or (os.path.exists("/dev/uinput") and not os.access("/dev/uinput", os.W_OK)):
+        if self.node.injector.mode in ("none", "xdotool") or (os.path.exists("/dev/uinput") and not os.access("/dev/uinput", os.W_OK)):
             self.uinput_banner.pack(fill=tk.X, padx=16, pady=(4, 0))
 
         # Çoklu Sekme (Notebook)
@@ -213,6 +215,9 @@ class ConnectMeLinuxGui:
         refresh_btn = ttk.Button(ctrl_bar, text="🔄 Ekranları Yeniden Tara", command=self._refresh_monitors)
         refresh_btn.pack(side=tk.RIGHT, padx=4)
 
+        reset_btn = ttk.Button(ctrl_bar, text="📐 Düzeni Sıfırla", command=self._reset_canvas_layout)
+        reset_btn.pack(side=tk.RIGHT, padx=4)
+
         self.canvas = tk.Canvas(tab, bg="#0F172A", highlightthickness=1, highlightbackground="#334155")
         self.canvas.pack(fill=tk.BOTH, expand=True, pady=6)
 
@@ -228,6 +233,8 @@ class ConnectMeLinuxGui:
         self.inbound_card = ttk.Frame(tab, style="Card.TFrame", padding=10)
         self.inbound_label = ttk.Label(self.inbound_card, text="", font=("Segoe UI", 10, "bold"), foreground="#F59E0B")
         self.inbound_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.inbound_btn = ttk.Button(self.inbound_card, text="🔐 Kodu Gir ve Bağlan", style="Accent.TButton", command=self._on_inbound_pair_click)
+        self.inbound_btn.pack(side=tk.RIGHT, padx=6)
         # Initially not packed, packed dynamically on request
 
         # 1. Manuel IP ile Doğrudan Bağlan Kartı (Manual IP Connect Card)
@@ -282,6 +289,7 @@ class ConnectMeLinuxGui:
                                     font=("Consolas", 10), height=6, bd=0, highlightthickness=1, highlightbackground="#334155")
         self.peer_list.pack(fill=tk.X, pady=4)
         self.peer_list.bind("<<ListboxSelect>>", self._on_peer_select)
+        self.peer_list.bind("<Double-Button-1>", self._on_peer_list_double_click)
 
         # PIN Doğrulama Giriş Çubuğu (Yüksek Kontrastlı tk.Entry)
         act_box = ttk.Frame(tab, style="Card.TFrame", padding=10)
@@ -474,12 +482,34 @@ class ConnectMeLinuxGui:
             self.pair_prompt_lbl.configure(text=f"'{peer.get('deviceName')}' 6 Haneli Kodu:")
             self.pin_entry.focus_set()
 
+    def _on_inbound_pair_click(self):
+        if self.selected_peer_id and self.selected_peer_id in self.node.peers:
+            self._show_enter_pin_dialog(self.node.peers[self.selected_peer_id])
+        else:
+            inbound = [p for p in self.node.peers.values() if p.get("in_ok")]
+            if inbound:
+                self._show_enter_pin_dialog(inbound[0])
+            elif self.node.peers:
+                self._show_enter_pin_dialog(list(self.node.peers.values())[0])
+
+    def _on_peer_list_double_click(self, event):
+        sel = self.peer_list.curselection()
+        if not sel:
+            return
+        keys = list(self.node.peers.keys())
+        if sel[0] < len(keys):
+            peer_id = keys[sel[0]]
+            peer = self.node.peers.get(peer_id)
+            if peer:
+                self._show_enter_pin_dialog(peer)
+
     def _on_pin_request_received(self, sender_id: str, sender_name: str):
         def _update():
             self.selected_peer_id = sender_id
             self.inbound_label.configure(
                 text=f"🔔 '{sender_name}' sizin 6 haneli kodunuzu girdi! Eşleşmeyi tamamlamak için siz de onun kodunu girin."
             )
+            self.inbound_btn.configure(text=f"🔐 '{sender_name}' Kodunu Gir")
             if not self.inbound_card.winfo_ismapped():
                 self.inbound_card.pack(fill=tk.X, pady=(0, 8), before=self.peer_list)
             self.pair_prompt_lbl.configure(text=f"'{sender_name}' Ekranındaki Kod:")
@@ -532,26 +562,134 @@ class ConnectMeLinuxGui:
         # 4. 2D Kanvas Çizimi
         self._draw_2d_canvas()
 
+    def _reset_canvas_layout(self):
+        self.peer_canvas_coords.clear()
+        self._draw_2d_canvas()
+
+    def _on_peer_drag_start(self, event, peer_id: str):
+        self.selected_peer_id = peer_id
+        coords = self.peer_canvas_coords.get(peer_id, (event.x - 90, event.y - 45))
+        self._drag_data["peer_id"] = peer_id
+        self._drag_data["start_x"] = event.x
+        self._drag_data["start_y"] = event.y
+        self._drag_data["orig_x"] = coords[0]
+        self._drag_data["orig_y"] = coords[1]
+
+    def _on_peer_drag_motion(self, event):
+        pid = self._drag_data.get("peer_id")
+        if not pid:
+            return
+        dx = event.x - self._drag_data["start_x"]
+        dy = event.y - self._drag_data["start_y"]
+        new_x = max(10, self._drag_data["orig_x"] + dx)
+        new_y = max(10, self._drag_data["orig_y"] + dy)
+        self.peer_canvas_coords[pid] = (new_x, new_y)
+        self._draw_2d_canvas()
+
+    def _on_peer_drag_release(self, event):
+        self._drag_data["peer_id"] = None
+
+    def _show_enter_pin_dialog(self, peer: dict):
+        """Modal dialog to enter the 6-digit PIN code for a specific discovered peer."""
+        dlg = tk.Toplevel(self.root)
+        dev_name = peer.get("deviceName", peer.get("deviceId", "Cihaz"))
+        dev_ip = peer.get("ipAddress", "")
+        platform = peer.get("platform", "").lower()
+        dev_icon = "🪟" if "win" in platform else ("📱" if "android" in platform else "💻")
+
+        dlg.title(f"🔐 {dev_name} ile Eşleş")
+        dlg.geometry("480x350")
+        dlg.minsize(440, 310)
+        dlg.configure(bg="#0B1120")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        frm = ttk.Frame(dlg, padding=18)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frm, text=f"{dev_icon} {dev_name} ({dev_ip})", font=("Segoe UI", 13, "bold"), foreground="#38BDF8").pack(anchor=tk.W, pady=(0, 4))
+
+        in_ok = peer.get("in_ok", False)
+        if in_ok:
+            info_txt = f"🔔 '{dev_name}' sizin kodunuzu ({self.node.local_pin}) doğru girdi!\nBağlantıyı tamamlamak için şimdi siz de onun ekranındaki 6 haneli kodu girin:"
+            info_fg = "#4ADE80"
+        else:
+            info_txt = f"'{dev_name}' ekranında görünen 6 haneli kodu (PIN) girin:"
+            info_fg = "#94A3B8"
+
+        ttk.Label(frm, text=info_txt, font=("Segoe UI", 9.5), foreground=info_fg, wraplength=430).pack(anchor=tk.W, pady=(0, 10))
+
+        pin_box = tk.Entry(
+            frm,
+            width=10,
+            font=("Consolas", 22, "bold"),
+            bg="#1E293B",
+            fg="#38BDF8",
+            insertbackground="#38BDF8",
+            justify="center",
+            relief="solid",
+            bd=1,
+            highlightthickness=2,
+            highlightbackground="#38BDF8",
+            highlightcolor="#38BDF8"
+        )
+        pin_box.pack(pady=10)
+
+        trust_var = tk.BooleanVar(value=True)
+        chk = tk.Checkbutton(frm, text="⭐ Bu cihaza güven ve hatırla (Bir sonraki sefer PIN sormadan bağlan)",
+                             variable=trust_var, bg="#0B1120", fg="#FBBF24", selectcolor="#0F172A",
+                             activebackground="#0B1120", activeforeground="#FBBF24", font=("Segoe UI", 9))
+        chk.pack(anchor=tk.W, pady=6)
+
+        btn_box = ttk.Frame(frm)
+        btn_box.pack(fill=tk.X, pady=(16, 0))
+
+        def _do_pair():
+            pin = pin_box.get().strip().replace(" ", "").replace("-", "")
+            if len(pin) != 6 or not pin.isdigit():
+                messagebox.showwarning("Geçersiz Kod", "Lütfen 6 haneli sayısal PIN kodunu girin.", parent=dlg)
+                pin_box.focus_set()
+                return
+
+            req_trust = trust_var.get()
+            token = f"trust-{self.node.device_id}-{os.urandom(8).hex()}" if req_trust else ""
+            self._log(f"'{dev_name}' ({dev_ip}) için PIN ({pin}) doğrulanıyor...")
+            threading.Thread(target=self._send_pair_request, args=(peer, pin, req_trust, token), daemon=True).start()
+            dlg.destroy()
+            self._refresh_state()
+
+        ttk.Button(btn_box, text="🔗 Doğrula ve Bağlan", style="Accent.TButton", command=_do_pair).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(btn_box, text="İptal", command=dlg.destroy).pack(side=tk.RIGHT, padx=4)
+
+        pin_box.focus_set()
+        pin_box.bind("<Return>", lambda e: _do_pair())
+
+    def _select_peer_and_focus_pin(self, peer_id: str):
+        self.selected_peer_id = peer_id
+        if peer_id in self.node.peers:
+            peer = self.node.peers[peer_id]
+            self._show_enter_pin_dialog(peer)
+
     def _draw_2d_canvas(self):
         self.canvas.delete("all")
-        cw = self.canvas.winfo_width()
-        ch = self.canvas.winfo_height()
+        cw = max(400, self.canvas.winfo_width())
+        ch = max(300, self.canvas.winfo_height())
         if cw < 60 or ch < 60:
             return
 
         min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
         all_peers = list(self.node.peers.values())
 
-        # Proportional layout: allocate left 58% to local multi-monitor, right 38% to remote devices
-        has_peers = len(all_peers) > 0
-        local_area_w = cw * 0.58 if has_peers else (cw - 80)
-        local_area_h = ch - 80
+        # Determine canvas scaling and centering
+        scale = min((cw - 180) / max(1, total_w * 1.35), (ch - 130) / max(1, total_h * 1.35), 0.13)
+        scale = max(0.045, min(scale, 0.12))
 
-        scale = min(local_area_w / max(1, total_w), local_area_h / max(1, total_h), 0.12)
-        offset_x = 35 + (local_area_w - total_w * scale) / 2
-        offset_y = 40 + (local_area_h - total_h * scale) / 2
+        loc_w = total_w * scale
+        loc_h = total_h * scale
+        offset_x = max(20, (cw - loc_w) / 2.0)
+        offset_y = max(20, (ch - loc_h) / 2.0)
 
-        # 1. Subtle Grid
+        # 1. Subtle Background Grid
         for gx in range(0, cw, 40):
             self.canvas.create_line(gx, 0, gx, ch, fill="#111C33", width=1)
         for gy in range(0, ch, 40):
@@ -582,27 +720,45 @@ class ConnectMeLinuxGui:
             for j in range(i + 1, len(local_mon_rects)):
                 ma, ax1, ay1, ax2, ay2 = local_mon_rects[i]
                 mb, bx1, by1, bx2, by2 = local_mon_rects[j]
-                if abs(ax2 - bx1) < 3.0 or abs(bx2 - ax1) < 3.0:
-                    seam_x = bx1 if abs(ax2 - bx1) < 3.0 else ax1
+                if abs(ax2 - bx1) < 4.0 or abs(bx2 - ax1) < 4.0:
+                    seam_x = bx1 if abs(ax2 - bx1) < 4.0 else ax1
                     s_top = max(ay1, by1) + 4
                     s_bot = min(ay2, by2) - 4
                     if s_bot > s_top:
                         self.canvas.create_line(seam_x, s_top, seam_x, s_bot, fill="#A855F7", dash=(3, 2), width=3)
 
-        # 3. All Discovered & Connected Peers
-        if has_peers:
-            remote_base_x = offset_x + total_w * scale + 45
-            peer_gap_y = max(85, (ch - 100) // max(1, len(all_peers)))
-
+        # 3. Discovered & Connected Peers
+        if all_peers:
             for idx, p in enumerate(all_peers):
-                py1 = 40 + idx * peer_gap_y
+                pid = p["deviceId"]
+                p_w = p.get("screenWidth", 1920)
+                p_h = p.get("screenHeight", 1080)
+                p_monitors = p.get("monitors", [])
                 is_mut = p.get("isMutuallyPaired", False)
                 is_pending = p.get("in_ok", False) or p.get("out_ok", False)
-                p_monitors = p.get("monitors", [])
 
-                card_w = 210 if len(p_monitors) > 1 else 170
-                card_h = 75
-                px1 = remote_base_x
+                card_w = max(180, min(240, int(p_w * scale + 24)))
+                card_h = max(88, min(125, int(p_h * scale + 34)))
+
+                # Determine card position
+                if pid in self.peer_canvas_coords:
+                    px1, py1 = self.peer_canvas_coords[pid]
+                else:
+                    is_win = "win" in p.get("platform", "").lower()
+                    if is_win:
+                        # Place to the right of local desktop
+                        px1 = offset_x + loc_w + 35
+                        py1 = offset_y + (loc_h - card_h) / 2.0
+                    elif idx == 0:
+                        # Place to the left of local desktop
+                        px1 = max(15, offset_x - card_w - 35)
+                        py1 = offset_y + (loc_h - card_h) / 2.0
+                    else:
+                        # Place above or stacked
+                        px1 = offset_x + (loc_w - card_w) / 2.0 + (idx - 1) * 30
+                        py1 = max(15, offset_y - card_h - 35)
+                    self.peer_canvas_coords[pid] = (px1, py1)
+
                 px2 = px1 + card_w
                 py2 = py1 + card_h
 
@@ -616,58 +772,97 @@ class ConnectMeLinuxGui:
                 elif is_pending:
                     card_fill = "#451A03"
                     card_outline = "#F59E0B"
-                    status_txt = "⏳ PIN Onayı Bekleniyor"
+                    status_txt = "🟠 Sizin Kodunuzu Bekliyor" if p.get("in_ok") else "🟡 Karşı Onay Bekliyor"
                     status_col = "#FCD34D"
                     line_col = "#F59E0B"
                     line_dash = (4, 3)
                 else:
                     card_fill = "#0F172A"
                     card_outline = "#38BDF8"
-                    status_txt = "🌐 Keşfedildi (Eşleşin)"
+                    status_txt = "⚪ Keşfedildi (Eşleşin)"
                     status_col = "#93C5FD"
                     line_col = "#38BDF8"
                     line_dash = (2, 2)
 
-                # Connecting portal line from local right edge to peer
-                conn_y = min(py1 + 35, offset_y + (total_h * scale) / 2)
-                self.canvas.create_line(offset_x + total_w * scale, conn_y, px1, py1 + 35, fill=line_col, dash=line_dash, width=2)
+                # Find closest local monitor point to connect cleanly
+                best_mx, best_my, best_px, best_py = offset_x + loc_w, offset_y + loc_h / 2, px1, py1 + card_h / 2
+                min_dist = 999999.0
+                for _, mx1, my1, mx2, my2 in local_mon_rects:
+                    if px1 >= mx2:
+                        # Peer is right of monitor
+                        d = px1 - mx2
+                        if d < min_dist:
+                            min_dist = d
+                            best_mx, best_my = mx2, (my1 + my2) / 2
+                            best_px, best_py = px1, py1 + card_h / 2
+                    elif px2 <= mx1:
+                        # Peer is left of monitor
+                        d = mx1 - px2
+                        if d < min_dist:
+                            min_dist = d
+                            best_mx, best_my = mx1, (my1 + my2) / 2
+                            best_px, best_py = px2, py1 + card_h / 2
+                    elif py1 >= my2:
+                        # Peer is below monitor
+                        d = py1 - my2
+                        if d < min_dist:
+                            min_dist = d
+                            best_mx, best_my = (mx1 + mx2) / 2, my2
+                            best_px, best_py = px1 + card_w / 2, py1
+                    elif py2 <= my1:
+                        # Peer is above monitor
+                        d = my1 - py2
+                        if d < min_dist:
+                            min_dist = d
+                            best_mx, best_my = (mx1 + mx2) / 2, my1
+                            best_px, best_py = px1 + card_w / 2, py2
+
+                # Draw clean connector line
+                self.canvas.create_line(best_mx, best_my, best_px, best_py, fill=line_col, dash=line_dash, width=2)
+                if is_mut:
+                    # Portal node circle
+                    mid_x = (best_mx + best_px) / 2
+                    mid_y = (best_my + best_py) / 2
+                    self.canvas.create_oval(mid_x - 4, mid_y - 4, mid_x + 4, mid_y + 4, fill="#10B981", outline="#FFFFFF")
 
                 # Peer Card Box
-                card_tag = f"peer_{p['deviceId']}"
-                rect_id = self.canvas.create_rectangle(px1, py1, px2, py2, fill=card_fill, outline=card_outline, width=2, tags=(card_tag, "peer_card"))
+                card_tag = f"peer_{pid}"
+                self.canvas.create_rectangle(px1, py1, px2, py2, fill=card_fill, outline=card_outline, width=2, tags=(card_tag, "peer_card"))
 
                 dev_icon = "🪟" if "win" in p.get("platform", "").lower() else ("📱" if "android" in p.get("platform", "").lower() else "💻")
-                dev_name = p.get("deviceName", p.get("deviceId", "Peer"))[:16]
-                self.canvas.create_text(px1 + 10, py1 + 14, anchor=tk.W, text=f"{dev_icon} {dev_name}", fill="#FFFFFF", font=("Segoe UI", 9, "bold"), tags=(card_tag,))
+                dev_name = p.get("deviceName", pid)[:18]
+                self.canvas.create_text(px1 + 10, py1 + 14, anchor=tk.W, text=f"{dev_icon} {dev_name}", fill="#FFFFFF", font=("Segoe UI", 9.5, "bold"), tags=(card_tag,))
                 self.canvas.create_text(px1 + 10, py1 + 32, anchor=tk.W, text=status_txt, fill=status_col, font=("Segoe UI", 8, "bold"), tags=(card_tag,))
 
-                # Multi-Monitor details
                 if p_monitors and len(p_monitors) > 1:
                     mon_str = " | ".join(f"{m.get('width', 1920)}x{m.get('height', 1080)}" for m in p_monitors[:2])
-                    self.canvas.create_text(px1 + 10, py1 + 50, anchor=tk.W, text=f"🖥️ {len(p_monitors)} Ekran: {mon_str}", fill="#CBD5E1", font=("Segoe UI", 7), tags=(card_tag,))
+                    self.canvas.create_text(px1 + 10, py1 + 48, anchor=tk.W, text=f"🖥️ {len(p_monitors)} Ekran: {mon_str}", fill="#CBD5E1", font=("Segoe UI", 7.5), tags=(card_tag,))
                 else:
-                    sw = p.get("screenWidth", 1920)
-                    sh = p.get("screenHeight", 1080)
-                    self.canvas.create_text(px1 + 10, py1 + 50, anchor=tk.W, text=f"🖥️ Çözünürlük: {sw}x{sh}", fill="#94A3B8", font=("Segoe UI", 8), tags=(card_tag,))
+                    self.canvas.create_text(px1 + 10, py1 + 48, anchor=tk.W, text=f"🖥️ Çözünürlük: {p_w}x{p_h}", fill="#94A3B8", font=("Segoe UI", 8), tags=(card_tag,))
 
-                # Bind click to select peer
-                pid = p["deviceId"]
-                self.canvas.tag_bind(card_tag, "<Button-1>", lambda e, p_id=pid: self._select_peer_and_focus_pin(p_id))
+                # Action button / status bar inside the card
+                if not is_mut:
+                    btn_x1 = px1 + 8
+                    btn_y1 = py2 - 24
+                    btn_x2 = px2 - 8
+                    btn_y2 = py2 - 6
+                    btn_tag = f"pin_btn_{pid}"
+                    self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(card_tag, btn_tag))
+                    self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 6 Haneli Kodu Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(card_tag, btn_tag))
+                    self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: self._show_enter_pin_dialog(peer_obj))
+                else:
+                    self.canvas.create_text(px1 + 10, py2 - 14, anchor=tk.W, text="🎯 Geçiş Kenarı Aktif", fill="#4ADE80", font=("Segoe UI", 8, "bold"), tags=(card_tag,))
+
+                # Bind dragging and clicking
+                self.canvas.tag_bind(card_tag, "<ButtonPress-1>", lambda e, p_id=pid: self._on_peer_drag_start(e, p_id))
+                self.canvas.tag_bind(card_tag, "<B1-Motion>", self._on_peer_drag_motion)
+                self.canvas.tag_bind(card_tag, "<ButtonRelease-1>", self._on_peer_drag_release)
+                self.canvas.tag_bind(card_tag, "<Double-Button-1>", lambda e, peer_obj=p: self._show_enter_pin_dialog(peer_obj))
         else:
-            # Empty state helper
-            empty_x = offset_x + total_w * scale + 30
+            empty_x = offset_x + loc_w + 30
             self.canvas.create_text(empty_x, ch / 2, anchor=tk.W,
                                     text="Ağda bağlı başka cihaz yok.\nWindows veya Android'de Connect Me'yi açın\nveya yukarıdaki '🌐 IP ile Cihaz Ekle' butonuna basın.",
                                     fill="#64748B", font=("Segoe UI", 9))
-
-    def _select_peer_and_focus_pin(self, peer_id: str):
-        self.selected_peer_id = peer_id
-        self.notebook.select(1)
-        self._refresh_state()
-        if peer_id in self.node.peers:
-            peer = self.node.peers[peer_id]
-            self.pair_prompt_lbl.configure(text=f"'{peer.get('deviceName')}' 6 Haneli Kodu:")
-            self.pin_entry.focus_set()
 
     def _show_manual_ip_dialog(self):
         """Opens a prominent modal dialog to directly connect to any device by IP address."""
@@ -813,7 +1008,7 @@ class ConnectMeLinuxGui:
             self._log(f"[Manuel IP] 🌐 '{target_ip}' listeye eklendi ve doğrudan keşif sinyali gönderildi. Karşı cihazın 6 haneli kodunu girip 'Doğrula ve Bağlan'a basın.")
 
     def _on_pair_click(self):
-        pin = self.pin_entry.get().strip()
+        pin = self.pin_entry.get().strip().replace(" ", "").replace("-", "")
         if len(pin) != 6 or not pin.isdigit():
             messagebox.showwarning("Geçersiz Kod", "Lütfen karşı cihazın ekranında görünen 6 haneli kodu girin.")
             return
@@ -821,18 +1016,29 @@ class ConnectMeLinuxGui:
         target_peer = None
         if self.selected_peer_id and self.selected_peer_id in self.node.peers:
             target_peer = self.node.peers[self.selected_peer_id]
-        elif self.node.peers:
+        elif len(self.node.peers) == 1:
             target_peer = list(self.node.peers.values())[0]
+            self.selected_peer_id = target_peer["deviceId"]
         else:
-            manual_ip = self.manual_ip_entry.get().strip()
-            import ipaddress
-            try:
-                ipaddress.ip_address(manual_ip)
-                target_peer = self.node.register_manual_peer(manual_ip)
+            inbound = [p for p in self.node.peers.values() if p.get("in_ok")]
+            if inbound:
+                target_peer = inbound[0]
                 self.selected_peer_id = target_peer["deviceId"]
-            except ValueError:
-                messagebox.showinfo("Cihaz Yok", "Ağda henüz eşleşilecek bir cihaz bulunamadı.\nLütfen yukarıdaki 'Hedef IP' alanına karşı cihazın IP adresini girip ekleyin.")
+            elif len(self.node.peers) > 1:
+                device_names = [f"• {p.get('deviceName')} ({p.get('ipAddress')})" for p in self.node.peers.values()]
+                msg = "Ağda birden fazla cihaz bulundu:\n\n" + "\n".join(device_names) + "\n\nLütfen bağlanmak istediğiniz cihazı yukarıdaki listeden çift tıklayın veya 2D Kanvas sekmesinden seçin."
+                messagebox.showinfo("Cihaz Seçin", msg)
                 return
+            else:
+                manual_ip = self.manual_ip_entry.get().strip()
+                import ipaddress
+                try:
+                    ipaddress.ip_address(manual_ip)
+                    target_peer = self.node.register_manual_peer(manual_ip)
+                    self.selected_peer_id = target_peer["deviceId"]
+                except ValueError:
+                    messagebox.showinfo("Cihaz Yok", "Ağda henüz eşleşilecek bir cihaz bulunamadı.\nLütfen yukarıdaki 'Hedef IP' alanına karşı cihazın IP adresini girip ekleyin.")
+                    return
 
         req_trust = self.trust_var.get()
         token = f"trust-{self.node.device_id}-{os.urandom(8).hex()}" if req_trust else ""

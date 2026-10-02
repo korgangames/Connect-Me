@@ -49,6 +49,8 @@ class AudioStreamEngine private constructor() {
 
     var onStatusChanged: ((Boolean, String) -> Unit)? = null
 
+    private var currentProjectionCallback: MediaProjection.Callback? = null
+
     @SuppressLint("MissingPermission")
     fun start(hostIp: String, mediaProjection: MediaProjection? = null): Boolean {
         if (isRunning.get()) {
@@ -71,29 +73,54 @@ class AudioStreamEngine private constructor() {
             .build()
 
         try {
-            audioRecord = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaProjection != null) {
-                // Android 10+ System Audio Playback Capture (Music, Videos, Games, System)
-                val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
-                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                    .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                    .build()
+            var record: AudioRecord? = null
 
-                AudioRecord.Builder()
-                    .setAudioPlaybackCaptureConfig(captureConfig)
-                    .setAudioFormat(format)
-                    .setBufferSizeInBytes(bufferSize)
-                    .build()
-            } else {
-                // Fallback to high-quality audio source
-                AudioRecord(
+            // In Android 10+ (API 29+), try AudioPlaybackCaptureConfiguration
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaProjection != null) {
+                try {
+                    // Android 14+ (API 34+) REQUIRES a callback registered before using MediaProjection
+                    val callback = object : MediaProjection.Callback() {
+                        override fun onStop() {
+                            Log.i(TAG, "MediaProjection stopped by system")
+                            stop()
+                        }
+                    }
+                    currentProjectionCallback = callback
+                    mediaProjection.registerCallback(callback, android.os.Handler(android.os.Looper.getMainLooper()))
+
+                    val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
+                        .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                        .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                        .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                        .build()
+
+                    record = AudioRecord.Builder()
+                        .setAudioPlaybackCaptureConfig(captureConfig)
+                        .setAudioFormat(format)
+                        .setBufferSizeInBytes(bufferSize)
+                        .build()
+
+                    Log.i(TAG, "Internal system audio playback capture initialized successfully")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "AudioPlaybackCapture failed (${e.message}), falling back to MIC source: ${e.message}")
+                    record = null
+                }
+            }
+
+            // Fallback to high-quality audio source if mediaProjection wasn't used or failed
+            if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
+                record?.release()
+                record = AudioRecord(
                     MediaRecorder.AudioSource.MIC,
                     SAMPLE_RATE,
                     channelConfig,
                     audioEncoding,
                     bufferSize
                 )
+                Log.i(TAG, "Initialized microphone audio source fallback")
             }
+
+            audioRecord = record
 
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                 Log.e(TAG, "AudioRecord initialization failed!")

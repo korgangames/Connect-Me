@@ -68,7 +68,8 @@ class MainActivity : AppCompatActivity() {
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val projection = mediaProjectionManager.getMediaProjection(result.resultCode, result.data!!)
-            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
+            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired && it.platform.contains("win", ignoreCase = true) }
+                ?: ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
             if (pairedPc != null) {
                 AudioStreamService.activeProjection = projection
                 val intent = Intent(this, AudioStreamService::class.java).apply {
@@ -81,14 +82,15 @@ class MainActivity : AppCompatActivity() {
                     startService(intent)
                 }
                 updateAudioUi()
-                Toast.makeText(this, "🎧 Sesler bilgisayardaki kulaklığınıza aktarılıyor!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "🎧 Sesler '${pairedPc.deviceName}' bilgisayarına aktarılıyor!", Toast.LENGTH_SHORT).show()
             }
         } else {
-            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
+            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired && it.platform.contains("win", ignoreCase = true) }
+                ?: ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
             if (pairedPc != null) {
                 AudioStreamEngine.instance.start(pairedPc.ipAddress, null)
                 updateAudioUi()
-                Toast.makeText(this, "Mikrofon ses aktarımı başlatıldı", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Mikrofon ses aktarımı başlatıldı -> ${pairedPc.deviceName}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1028,7 +1030,8 @@ class MainActivity : AppCompatActivity() {
             updateAudioUi()
             Toast.makeText(this, "Ses aktarımı durduruldu", Toast.LENGTH_SHORT).show()
         } else {
-            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
+            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired && it.platform.contains("win", ignoreCase = true) }
+                ?: ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
             if (pairedPc == null) {
                 Toast.makeText(this, "Önce bilgisayarla 6 haneli PIN eşleşmesini tamamlayın!", Toast.LENGTH_LONG).show()
                 return

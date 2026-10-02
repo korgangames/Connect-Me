@@ -70,7 +70,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"v1.6.6 (v1-6-6) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
+            $"v1.6.7 (v1-6-7) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -84,7 +84,7 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me v1.6.6 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
+        AppendLog($"[Sistem] Connect Me v1.6.7 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
 
         // Otomatik GitHub güncelleme denetimi (Arka planda)
         _ = CheckForUpdatesAsync(isManual: false);
@@ -477,13 +477,13 @@ public partial class MainWindow : Window
             int maxVy = peer.RemoteMonitors.Max(m => m.VirtualY + m.Height);
             double deskW = (maxVx - minVx) * scale;
             double deskH = (maxVy - minVy) * scale;
-            return (Math.Max(120, deskW + 16), Math.Max(76, deskH + 46));
+            return (Math.Max(160, deskW + 28), Math.Max(95, deskH + 58));
         }
 
         double rawW = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
         double rawH = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
-        double w = Math.Max(90, rawW * scale + 16);
-        double h = Math.Max(64, rawH * scale + 44);
+        double w = Math.Max(130, rawW * scale + 24);
+        double h = Math.Max(76, rawH * scale + 48);
         return (w, h);
     }
 
@@ -1957,7 +1957,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.6.6");
+            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.6.7");
             await Dispatcher.InvokeAsync(() =>
             {
                 if (result.HasUpdate && result.UpdateInfo != null)
@@ -1973,7 +1973,7 @@ public partial class MainWindow : Window
                         var res = MessageBox.Show(
                             this,
                             $"Yeni bir Connect Me sürümü mevcut!\n\n" +
-                            $"Mevcut Sürüm: v1.6.6\n" +
+                            $"Mevcut Sürüm: v1.6.7\n" +
                             $"Yeni Sürüm: {update.VersionTag}\n\n" +
                             $"{update.ReleaseTitle}\n\n" +
                             $"Şimdi otomatik olarak indirilip kurulsun mu?",
@@ -2008,7 +2008,7 @@ public partial class MainWindow : Window
                     {
                         MessageBox.Show(
                             this,
-                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.6).",
+                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.7).",
                             "Connect Me Güncel",
                             MessageBoxButton.OK,
                             MessageBoxImage.Information);

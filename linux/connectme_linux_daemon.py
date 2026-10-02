@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.6.6"
+VERSION = "1.6.7"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -137,6 +137,16 @@ class LinuxMultiMonitorTopology:
         max_x = max(m.right for m in self.monitors)
         max_y = max(m.bottom for m in self.monitors)
         return min_x, min_y, max(320, max_x - min_x), max(240, max_y - min_y)
+
+    @property
+    def total_width(self) -> int:
+        _, _, vw, _ = self.virtual_desktop_bounds()
+        return vw
+
+    @property
+    def total_height(self) -> int:
+        _, _, _, vh = self.virtual_desktop_bounds()
+        return vh
 
     def is_internal_seam(self, mon: PhysicalMonitor, edge: int, x: int, y: int) -> bool:
         """Returns True if stepping 4px across `edge` lands inside another local physical monitor."""
@@ -436,10 +446,15 @@ class LinuxInputInjector:
     def __init__(self, on_log: Optional[Callable[[str], None]] = None) -> None:
         self.mode = "none"
         self.on_log = on_log
-        self.evdev_device = None
+        self.evdev_mouse = None
+        self.evdev_kbd = None
         self.uinput_fd = None
         self._ensure_uinput_accessible()
         self._init_injector()
+
+    @property
+    def evdev_device(self):
+        return self.evdev_mouse
 
     def _ensure_uinput_accessible(self) -> None:
         """Attempts non-interactive chmod on /dev/uinput if available."""
@@ -450,14 +465,22 @@ class LinuxInputInjector:
                 pass
 
     def _init_injector(self) -> None:
-        # Tier 1: Try evdev module
+        # Tier 1: Try evdev module with separate dedicated mouse & keyboard devices
+        # This is critical for Wayland (KWin / libinput) so mouse movements create a real pointer seat
         try:
             import evdev
             from evdev import UInput, ecodes
 
-            keys = [
-                ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE,
-                ecodes.BTN_SIDE, ecodes.BTN_EXTRA,
+            mouse_cap = {
+                ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL, ecodes.REL_HWHEEL],
+                ecodes.EV_KEY: [
+                    ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE,
+                    ecodes.BTN_SIDE, ecodes.BTN_EXTRA
+                ]
+            }
+            self.evdev_mouse = UInput(mouse_cap, name="Connect-Me-Mouse", version=0x1)
+
+            kbd_keys = [
                 ecodes.KEY_ESC, ecodes.KEY_ENTER, ecodes.KEY_BACKSPACE, ecodes.KEY_TAB,
                 ecodes.KEY_SPACE, ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT,
                 ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL, ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT,
@@ -469,25 +492,29 @@ class LinuxInputInjector:
             for c in range(ord('A'), ord('Z') + 1):
                 attr = f"KEY_{chr(c)}"
                 if hasattr(ecodes, attr):
-                    keys.append(getattr(ecodes, attr))
+                    kbd_keys.append(getattr(ecodes, attr))
             for i in range(10):
                 attr = f"KEY_{i}"
                 if hasattr(ecodes, attr):
-                    keys.append(getattr(ecodes, attr))
+                    kbd_keys.append(getattr(ecodes, attr))
             for i in range(1, 13):
                 attr = f"KEY_F{i}"
                 if hasattr(ecodes, attr):
-                    keys.append(getattr(ecodes, attr))
+                    kbd_keys.append(getattr(ecodes, attr))
 
-            cap = {
-                ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL, ecodes.REL_HWHEEL],
-                ecodes.EV_KEY: list(set(keys))
+            kbd_cap = {
+                ecodes.EV_KEY: list(set(kbd_keys))
             }
-            self.evdev_device = UInput(cap, name="Connect-Me-Virtual-Mouse", version=0x1)
+            try:
+                self.evdev_kbd = UInput(kbd_cap, name="Connect-Me-Keyboard", version=0x1)
+            except Exception:
+                self.evdev_kbd = None
+
             self.mode = "evdev"
             return
         except Exception:
-            self.evdev_device = None
+            self.evdev_mouse = None
+            self.evdev_kbd = None
 
         # Tier 2: Try native /dev/uinput via fcntl
         try:
@@ -565,12 +592,13 @@ class LinuxInputInjector:
                     pass
 
     def move_relative(self, dx: int, dy: int) -> None:
-        if self.mode == "evdev" and self.evdev_device:
+        dev = self.evdev_mouse or self.evdev_device
+        if self.mode == "evdev" and dev:
             import evdev
             from evdev import ecodes
-            self.evdev_device.write(ecodes.EV_REL, ecodes.REL_X, dx)
-            self.evdev_device.write(ecodes.EV_REL, ecodes.REL_Y, dy)
-            self.evdev_device.syn()
+            dev.write(ecodes.EV_REL, ecodes.REL_X, dx)
+            dev.write(ecodes.EV_REL, ecodes.REL_Y, dy)
+            dev.syn()
         elif self.mode == "uinput_raw" and self.uinput_fd:
             self._write_raw_event(0x02, 0x00, dx)  # EV_REL, REL_X
             self._write_raw_event(0x02, 0x01, dy)  # EV_REL, REL_Y
@@ -582,12 +610,13 @@ class LinuxInputInjector:
 
     def mouse_button(self, btn: int, is_pressed: bool) -> None:
         # btn: 1=Left, 2=Right, 3=Middle
-        if self.mode == "evdev" and self.evdev_device:
+        dev = self.evdev_mouse or self.evdev_device
+        if self.mode == "evdev" and dev:
             import evdev
             from evdev import ecodes
             code = ecodes.BTN_LEFT if btn == BUTTON_LEFT else (ecodes.BTN_RIGHT if btn == BUTTON_RIGHT else ecodes.BTN_MIDDLE)
-            self.evdev_device.write(ecodes.EV_KEY, code, 1 if is_pressed else 0)
-            self.evdev_device.syn()
+            dev.write(ecodes.EV_KEY, code, 1 if is_pressed else 0)
+            dev.syn()
         elif self.mode == "uinput_raw" and self.uinput_fd:
             code = 0x110 if btn == BUTTON_LEFT else (0x111 if btn == BUTTON_RIGHT else 0x112)
             self._write_raw_event(0x01, code, 1 if is_pressed else 0)
@@ -600,13 +629,14 @@ class LinuxInputInjector:
             subprocess.run(["xdotool", subcmd, str(btn)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def mouse_scroll(self, sx: int, sy: int) -> None:
-        if self.mode == "evdev" and self.evdev_device:
+        dev = self.evdev_mouse or self.evdev_device
+        if self.mode == "evdev" and dev:
             import evdev
             from evdev import ecodes
             val = 1 if sy > 0 else (-1 if sy < 0 else 0)
             if val != 0:
-                self.evdev_device.write(ecodes.EV_REL, ecodes.REL_WHEEL, val)
-                self.evdev_device.syn()
+                dev.write(ecodes.EV_REL, ecodes.REL_WHEEL, val)
+                dev.syn()
         elif self.mode == "uinput_raw" and self.uinput_fd:
             val = 1 if sy > 0 else (-1 if sy < 0 else 0)
             if val != 0:
@@ -664,13 +694,14 @@ class LinuxInputInjector:
             return None
 
     def key_event(self, vk: int, is_pressed: bool, ch: str) -> None:
-        if self.mode == "evdev" and self.evdev_device:
+        dev = self.evdev_kbd or self.evdev_mouse or self.evdev_device
+        if self.mode == "evdev" and dev:
             import evdev
             from evdev import ecodes
             code = self._vk_to_evdev_code(vk)
             if code is not None:
-                self.evdev_device.write(ecodes.EV_KEY, code, 1 if is_pressed else 0)
-                self.evdev_device.syn()
+                dev.write(ecodes.EV_KEY, code, 1 if is_pressed else 0)
+                dev.syn()
                 return
 
         if not is_pressed:
@@ -724,6 +755,7 @@ class ConnectMeLinuxNode:
         self.entry_edge: int = EDGE_NONE
         self.cursor_x: float = 0.0
         self.cursor_y: float = 0.0
+        self.return_edge_push_accum: float = 0.0
 
         # UI & Telemetry Callbacks
         self.on_log = on_log
@@ -798,6 +830,32 @@ class ConnectMeLinuxNode:
                 self.peers[device_id]["out_ok"] = False
                 self.peers[device_id]["isMutuallyPaired"] = False
             self.log(f"[Güvenlik] 🗑️ '{device_id}' için güvenilirlik kaydı silindi.")
+
+    def fix_uinput_permissions(self) -> Tuple[bool, str]:
+        """Attempts to setup uinput permissions via pkexec or sudo."""
+        cmd = (
+            "echo 'KERNEL==\"uinput\", GROUP=\"input\", MODE=\"0660\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"' > /etc/udev/rules.d/99-connectme-uinput.rules "
+            "&& groupadd -f input "
+            "&& usermod -aG input \"$USER\" 2>/dev/null || true "
+            "&& chmod 666 /dev/uinput 2>/dev/null || true "
+            "&& udevadm control --reload-rules 2>/dev/null || true "
+            "&& udevadm trigger 2>/dev/null || true"
+        )
+        try:
+            if shutil.which("pkexec"):
+                res = subprocess.run(["pkexec", "bash", "-c", cmd], capture_output=True, text=True, timeout=30.0)
+                if res.returncode == 0:
+                    self.injector._init_injector()
+                    self.log(f"[Sürücü] ✅ /dev/uinput izinleri ayarlandı. Yeni mod: {self.injector.mode.upper()}")
+                    return True, "İzinler başarıyla ayarlandı! Sanal fare aktif."
+            res2 = subprocess.run(["sudo", "bash", "-c", cmd], capture_output=True, text=True, timeout=15.0)
+            if res2.returncode == 0:
+                self.injector._init_injector()
+                self.log(f"[Sürücü] ✅ /dev/uinput izinleri ayarlandı. Yeni mod: {self.injector.mode.upper()}")
+                return True, "İzinler başarıyla ayarlandı! Sanal fare aktif."
+        except Exception as e:
+            return False, f"İzin ayarlama hatası: {e}"
+        return False, "Süper kullanıcı izni (pkexec/sudo) verilemedi."
 
     def start(self) -> None:
         mons = self.topology.monitors
@@ -1225,22 +1283,28 @@ class ConnectMeLinuxNode:
                 self.active_remote_peer = peer
                 self.entry_edge = edge
 
-                # Calculate entrance coordinate on Linux
-                if edge == EDGE_RIGHT:
-                    self.cursor_x = min_x + 6
+                # Calculate entrance coordinate on Linux (edge is targetEntranceEdge)
+                if edge == EDGE_LEFT:
+                    # Cursor entered through Linux's LEFT edge
+                    self.cursor_x = min_x + 12
                     self.cursor_y = min_y + int(vh * norm_pos)
-                elif edge == EDGE_LEFT:
-                    self.cursor_x = min_x + vw - 6
+                elif edge == EDGE_RIGHT:
+                    # Cursor entered through Linux's RIGHT edge
+                    self.cursor_x = min_x + vw - 12
                     self.cursor_y = min_y + int(vh * norm_pos)
-                elif edge == EDGE_BOTTOM:
-                    self.cursor_x = min_x + int(vw * norm_pos)
-                    self.cursor_y = min_y + 6
                 elif edge == EDGE_TOP:
+                    # Cursor entered through Linux's TOP edge
                     self.cursor_x = min_x + int(vw * norm_pos)
-                    self.cursor_y = min_y + vh - 6
+                    self.cursor_y = min_y + 12
+                elif edge == EDGE_BOTTOM:
+                    # Cursor entered through Linux's BOTTOM edge
+                    self.cursor_x = min_x + int(vw * norm_pos)
+                    self.cursor_y = min_y + vh - 12
                 else:
                     self.cursor_x = min_x + int(vw * 0.5)
                     self.cursor_y = min_y + int(vh * 0.5)
+
+                self.return_edge_push_accum = 0.0
 
                 self.log(f"[Kenar Geçişi] ➡️ İmleç '{peer.get('deviceName')}' ekranından Linux'a geçti ({int(self.cursor_x)}, {int(self.cursor_y)}).")
                 # Nudge hardware cursor to wake up and display pointer immediately on Wayland
@@ -1266,32 +1330,60 @@ class ConnectMeLinuxNode:
                     except Exception:
                         pass
 
-                # Check if cursor hits boundary to return to Windows/remote
+                # Check if cursor hits boundary to return to Windows/remote with push resistance
                 if self.active_remote_peer is not None:
                     return_triggered = False
                     ret_edge = EDGE_NONE
                     ret_norm = 0.5
 
-                    if self.entry_edge == EDGE_RIGHT and self.cursor_x <= min_x:
-                        return_triggered = True
-                        ret_edge = EDGE_RIGHT
-                        ret_norm = (self.cursor_y - min_y) / float(max(1, vh))
-                    elif self.entry_edge == EDGE_LEFT and self.cursor_x >= min_x + vw:
-                        return_triggered = True
-                        ret_edge = EDGE_LEFT
-                        ret_norm = (self.cursor_y - min_y) / float(max(1, vh))
-                    elif self.entry_edge == EDGE_BOTTOM and self.cursor_y <= min_y:
-                        return_triggered = True
-                        ret_edge = EDGE_BOTTOM
-                        ret_norm = (self.cursor_x - min_x) / float(max(1, vw))
-                    elif self.entry_edge == EDGE_TOP and self.cursor_y >= min_y + vh:
-                        return_triggered = True
-                        ret_edge = EDGE_TOP
-                        ret_norm = (self.cursor_x - min_x) / float(max(1, vw))
+                    # If cursor entered through LEFT edge, pushing against LEFT edge returns to remote's RIGHT edge
+                    if self.entry_edge == EDGE_LEFT:
+                        if self.cursor_x <= min_x and dx < 0:
+                            self.return_edge_push_accum += abs(dx)
+                            if self.return_edge_push_accum >= 8.0:
+                                return_triggered = True
+                                ret_edge = EDGE_RIGHT
+                                ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
+                        elif dx > 2:
+                            self.return_edge_push_accum = 0.0
+
+                    # If cursor entered through RIGHT edge, pushing against RIGHT edge returns to remote's LEFT edge
+                    elif self.entry_edge == EDGE_RIGHT:
+                        if self.cursor_x >= min_x + vw and dx > 0:
+                            self.return_edge_push_accum += abs(dx)
+                            if self.return_edge_push_accum >= 8.0:
+                                return_triggered = True
+                                ret_edge = EDGE_LEFT
+                                ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
+                        elif dx < -2:
+                            self.return_edge_push_accum = 0.0
+
+                    # If cursor entered through TOP edge, pushing against TOP edge returns to remote's BOTTOM edge
+                    elif self.entry_edge == EDGE_TOP:
+                        if self.cursor_y <= min_y and dy < 0:
+                            self.return_edge_push_accum += abs(dy)
+                            if self.return_edge_push_accum >= 8.0:
+                                return_triggered = True
+                                ret_edge = EDGE_BOTTOM
+                                ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
+                        elif dy > 2:
+                            self.return_edge_push_accum = 0.0
+
+                    # If cursor entered through BOTTOM edge, pushing against BOTTOM edge returns to remote's TOP edge
+                    elif self.entry_edge == EDGE_BOTTOM:
+                        if self.cursor_y >= min_y + vh and dy > 0:
+                            self.return_edge_push_accum += abs(dy)
+                            if self.return_edge_push_accum >= 8.0:
+                                return_triggered = True
+                                ret_edge = EDGE_TOP
+                                ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
+                        elif dy < -2:
+                            self.return_edge_push_accum = 0.0
 
                     if return_triggered:
                         target = self.active_remote_peer
                         self.active_remote_peer = None
+                        self.return_edge_push_accum = 0.0
                         if self.on_cursor_update:
                             try:
                                 self.on_cursor_update(False, 0, 0)

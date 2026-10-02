@@ -953,6 +953,28 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         return existing;
                     });
 
+                // If a temporary manual placeholder existed for this IP under a synthetic ID, transfer state & clean up placeholder
+                var placeholder = _peers.Values.FirstOrDefault(p => p.IpAddress == senderIp && p.DeviceId != beacon.DeviceId);
+                if (placeholder != null)
+                {
+                    if (placeholder.MyEnteredPinVerifiedByRemote) peer.MyEnteredPinVerifiedByRemote = true;
+                    if (placeholder.RemoteEnteredMyPinVerified) peer.RemoteEnteredMyPinVerified = true;
+                    if (placeholder.IsTrusted) { peer.IsTrusted = true; peer.TrustToken = placeholder.TrustToken; }
+                    if (placeholder.HasCustomCanvasPosition)
+                    {
+                        peer.HasCustomCanvasPosition = true;
+                        peer.CanvasX = placeholder.CanvasX;
+                        peer.CanvasY = placeholder.CanvasY;
+                    }
+                    peer.AssignedEdgeOnLocal = placeholder.AssignedEdgeOnLocal;
+                    peer.EdgeOffsetStart = placeholder.EdgeOffsetStart;
+                    peer.EdgeOffsetEnd = placeholder.EdgeOffsetEnd;
+                    if (!string.IsNullOrEmpty(placeholder.AttachedLocalMonitorId))
+                        peer.AttachedLocalMonitorId = placeholder.AttachedLocalMonitorId;
+
+                    _peers.TryRemove(placeholder.DeviceId, out _);
+                }
+
                 if (TrustStore.IsDeviceTrusted(peer.DeviceId, out var trustedRec) && trustedRec != null)
                 {
                     peer.IsTrusted = true;
@@ -1603,7 +1625,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         _ => $"{bytes / (1024.0 * 1024.0):F2} MB"
     };
 
-    private void Log(string msg) => LogMessage?.Invoke($"{DateTime.Now:HH:mm:ss} {msg}");
+    public void Log(string msg) => LogMessage?.Invoke($"{DateTime.Now:HH:mm:ss} {msg}");
 
     public async ValueTask DisposeAsync()
     {
