@@ -53,7 +53,7 @@ object AppUpdateManager {
                     requestMethod = "GET"
                     connectTimeout = 8000
                     readTimeout = 8000
-                    setRequestProperty("User-Agent", "ConnectMe-Android/1.6.4")
+                    setRequestProperty("User-Agent", "ConnectMe-Android/1.6.5")
                     setRequestProperty("Accept", "application/vnd.github.v3+json")
                 }
 
@@ -170,7 +170,7 @@ object AppUpdateManager {
                 }
 
                 val totalLen = if (conn.contentLengthLong > 0) conn.contentLengthLong else updateInfo.fileSize
-                val targetDir = context.getExternalCacheDir() ?: context.cacheDir
+                val targetDir = File(context.cacheDir, "updates").apply { mkdirs() }
                 val targetFile = File(targetDir, updateInfo.apkFileName)
 
                 if (targetFile.exists()) {
@@ -206,6 +206,10 @@ object AppUpdateManager {
                     return@thread
                 }
 
+                try {
+                    targetFile.setReadable(true, false)
+                } catch (_: Exception) {}
+
                 mainHandler.post {
                     onProgress(100, targetFile.length(), targetFile.length())
                     onComplete(targetFile)
@@ -222,14 +226,30 @@ object AppUpdateManager {
      */
     fun installApk(activity: Activity, apkFile: File) {
         try {
+            if (!apkFile.exists() || apkFile.length() < 1024) {
+                android.widget.Toast.makeText(activity, "Hata: APK dosyası bulunamadı veya hasarlı.", android.widget.Toast.LENGTH_LONG).show()
+                return
+            }
+
+            try {
+                apkFile.setReadable(true, false)
+            } catch (_: Exception) {}
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!activity.packageManager.canRequestPackageInstalls()) {
                     pendingApkToInstall = apkFile
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${activity.packageName}")
-                    )
-                    activity.startActivity(intent)
+                    android.app.AlertDialog.Builder(activity)
+                        .setTitle("İzin Gerekli: Güncellemeyi Yükle")
+                        .setMessage("Connect Me'nin yeni sürümünü otomatik olarak kurabilmesi için açılacak ayarlar sayfasında 'Bu kaynaktan izin ver' seçeneğini açmanız gerekmektedir.")
+                        .setPositiveButton("Ayarları Aç") { _, _ ->
+                            val intent = Intent(
+                                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:${activity.packageName}")
+                            )
+                            activity.startActivity(intent)
+                        }
+                        .setNegativeButton("İptal", null)
+                        .show()
                     return
                 }
             }
@@ -244,11 +264,34 @@ object AppUpdateManager {
             val installIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(apkUri, "application/vnd.android.package-archive")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
+
+            // Paket yükleyici servislere doğrudan URI okuma yetkisi tanımla
+            val resInfoList = activity.packageManager.queryIntentActivities(
+                installIntent,
+                android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
+            )
+            for (resolveInfo in resInfoList) {
+                val pkgName = resolveInfo.activityInfo.packageName
+                activity.grantUriPermission(pkgName, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
             activity.startActivity(installIntent)
         } catch (e: Exception) {
             e.printStackTrace()
+            android.app.AlertDialog.Builder(activity)
+                .setTitle("Kurulum Başlatılamadı")
+                .setMessage("Paket yükleyici açılamadı:\n${e.message}\n\nİpucu: Eski sürüm farklı bir anahtarla imzalanmış olabilir. Güncelleme için mevcut Connect Me uygulamasını telefonunuzdan kaldırıp yeni sürümü kurabilirsiniz.")
+                .setPositiveButton("Tarayıcıda İndir") { _, _ ->
+                    try {
+                        activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_LATEST_RELEASE_URL)))
+                    } catch (_: Exception) {}
+                }
+                .setNegativeButton("Kapat", null)
+                .show()
         }
     }
 

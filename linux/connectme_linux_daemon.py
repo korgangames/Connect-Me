@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Connect Me — Nobara Linux (KDE Plasma Wayland / wlroots / X11) Tam Entegre Sistem Servisi & KVM Motoru
-Korgan Games (v1.6.4 Gerçek Ölçekli Çoklu Monitör, Manuel IP & Wayland Fare Desteği)
+Korgan Games (v1.6.5 Yerinde Otomatik Güncelleyici, Sabit Android İmzası & Sürücü İyileştirmeleri)
 
 Özellikler:
 1. Çoklu Monitör Otomatik Algılama & 2D Topoloji:
@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.6.4"
+VERSION = "1.6.5"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850

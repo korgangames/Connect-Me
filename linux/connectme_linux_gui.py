@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Connect Me — Linux (Nobara / KDE Plasma / Wayland & X11) Gelişmiş Kontrol Paneli (GUI)
-Korgan Games (v1.6.4 Gerçek Ölçekli Çoklu Monitör, Manuel IP & Wayland Fare Desteği)
+Korgan Games (v1.6.5 Yerinde Otomatik Güncelleyici, Sabit Android İmzası & Sürücü İyileştirmeleri)
 
 - 2D Ekran Konfigürasyonu Kanvası
 - Çift Yönlü UDP Cihaz Keşfi (Canlı Algılama)
@@ -14,11 +14,16 @@ Korgan Games (v1.6.4 Gerçek Ölçekli Çoklu Monitör, Manuel IP & Wayland Fare
 
 import os
 import sys
+import json
 import shutil
 import socket
 import datetime
 import threading
 import subprocess
+import tarfile
+import tempfile
+import urllib.request
+import urllib.error
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -1073,13 +1078,12 @@ X-GNOME-Autostart-enabled=true
 
     def _check_for_updates(self, is_manual: bool = False):
         try:
-            import urllib.request
-            import urllib.error
+            self._log("🔍 [Güncelleme] GitHub Releases üzerinden yeni sürüm denetleniyor...")
             req = urllib.request.Request(
                 "https://api.github.com/repos/korgangames/Connect-Me/releases/latest",
                 headers={"User-Agent": f"ConnectMe-Linux/{VERSION}", "Accept": "application/vnd.github.v3+json"}
             )
-            with urllib.request.urlopen(req, timeout=6) as response:
+            with urllib.request.urlopen(req, timeout=12) as response:
                 if response.status == 200:
                     data = json.loads(response.read().decode("utf-8"))
                     remote_tag = data.get("tag_name", "").strip()
@@ -1121,17 +1125,124 @@ X-GNOME-Autostart-enabled=true
 
     def _on_new_update_found(self, version_tag: str, download_url: str, title: str):
         self.update_badge_btn.configure(
-            text=f"🎉 {version_tag} Mevcut!",
+            text=f"🎉 {version_tag} Güncelle",
             command=lambda: self._prompt_linux_update(version_tag, download_url, title)
         )
-        self._log(f"[Güncelleme] ⭐ Yeni sürüm mevcut: {version_tag} ({title})")
+        self._log(f"[Güncelleme] ⭐ Yeni sürüm bulundu: {version_tag} ({title})")
 
     def _prompt_linux_update(self, version_tag: str, download_url: str, title: str):
-        if messagebox.askyesno("Yeni Sürüm", f"Connect Me {version_tag} sürümü yayınlandı!\n\n{title}\n\nİndirme sayfasını açmak ister misiniz?"):
+        res = messagebox.askyesno(
+            "Connect Me Otomatik Güncelleme",
+            f"Yeni bir Connect Me sürümü mevcut!\n\n"
+            f"Mevcut Sürüm: v{VERSION}\n"
+            f"Yeni Sürüm: {version_tag}\n\n"
+            f"{title}\n\n"
+            f"Connect Me doğrudan bu bilgisayara indirilip otomatik olarak güncellensin ve yeniden başlatılsın mı?\n\n"
+            f"(Hayır seçilirse GitHub indirme sayfası tarayıcınızda açılır)"
+        )
+        if res:
+            threading.Thread(target=self._start_linux_auto_update, args=(version_tag, download_url), daemon=True).start()
+        else:
             try:
                 subprocess.Popen(["xdg-open", download_url])
+            except Exception as ex:
+                self._log(f"[Güncelleme] Tarayıcı açılamadı: {ex}")
+
+    def _start_linux_auto_update(self, version_tag: str, download_url: str):
+        self._log(f"[Güncelleme] ⏳ Connect Me {version_tag} indiriliyor...")
+        self.root.after(0, lambda: self.update_badge_btn.configure(text="⏳ İndiriliyor...", state="disabled"))
+
+        try:
+            req = urllib.request.Request(
+                download_url,
+                headers={"User-Agent": f"ConnectMe-Linux/{VERSION}"}
+            )
+
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp_file:
+                tmp_path = Path(tmp_file.name)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    total_len = int(resp.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    last_pct = -1
+
+                    while True:
+                        chunk = resp.read(16384)
+                        if not chunk:
+                            break
+                        tmp_file.write(chunk)
+                        downloaded += len(chunk)
+                        if total_len > 0:
+                            pct = int((downloaded * 100) / total_len)
+                            if pct != last_pct and pct % 10 == 0:
+                                last_pct = pct
+                                self._log(f"[Güncelleme] ⬇️ İndiriliyor... %{pct}")
+                                self.root.after(0, lambda p=pct: self.update_badge_btn.configure(text=f"⏳ %{p} İndiriliyor..."))
+
+            if not tmp_path.exists() or tmp_path.stat().st_size < 1024:
+                raise RuntimeError("İndirilen güncelleme arşivi geçersiz veya boş.")
+
+            self._log("[Güncelleme] 📦 Arşiv ayıklanıyor ve dosyalar güncelleniyor...")
+            self.root.after(0, lambda: self.update_badge_btn.configure(text="📦 Kuruluyor..."))
+
+            app_dir = Path(__file__).resolve().parent
+            with tarfile.open(tmp_path, "r:gz") as tar:
+                for member in tar.getmembers():
+                    rel_name = member.name
+                    if rel_name.startswith("ConnectMe-Linux/"):
+                        rel_name = rel_name[len("ConnectMe-Linux/"):]
+                    elif rel_name == "ConnectMe-Linux":
+                        continue
+                    if not rel_name:
+                        continue
+                    dest = app_dir / rel_name
+                    if member.isdir():
+                        dest.mkdir(parents=True, exist_ok=True)
+                    elif member.isfile():
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        extracted = tar.extractfile(member)
+                        if extracted:
+                            with open(dest, "wb") as f_out:
+                                shutil.copyfileobj(extracted, f_out)
+                        if dest.suffix in [".sh", ".py"]:
+                            try:
+                                dest.chmod(0o755)
+                            except Exception:
+                                pass
+
+            try:
+                tmp_path.unlink()
             except Exception:
                 pass
+
+            self._log(f"[Güncelleme] ✅ Connect Me {version_tag} kurulumu tamamlandı! Yeniden başlatılıyor...")
+
+            def _notify_and_restart():
+                messagebox.showinfo(
+                    "Güncelleme Başarılı",
+                    f"Connect Me başarıyla {version_tag} sürümüne güncellendi!\n\nUygulama şimdi yeniden başlatılıyor."
+                )
+                try:
+                    self.node.stop()
+                except Exception:
+                    pass
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+
+            self.root.after(0, _notify_and_restart)
+
+        except Exception as ex:
+            self._log(f"[Güncelleme Hatası] Otomatik güncelleme başarısız: {ex}")
+            def _fail():
+                self.update_badge_btn.configure(text=f"⚠️ {version_tag} Tekrar Dene", state="normal")
+                res = messagebox.askyesno(
+                    "Güncelleme Hatası",
+                    f"Otomatik güncelleme tamamlanamadı:\n{ex}\n\nİndirme sayfasını tarayıcıda açmak ister misiniz?"
+                )
+                if res:
+                    try:
+                        subprocess.Popen(["xdg-open", download_url])
+                    except Exception:
+                        pass
+            self.root.after(0, _fail)
 
 
 def main():

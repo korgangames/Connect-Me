@@ -1,3 +1,25 @@
+# Connect Me v1.6.5 (v1-6-5) — Nobara Yerinde Otomatik Güncelleme & Android Kalıcı İmza Entegrasyonu
+
+Bu sürüm; Nobara Linux üzerinde eksik modül hatasını gidererek doğrudan masaüstünden tek tıkla arşivi indirip mevcut klasöre ayıklayan ve kendini yeniden başlatan yerinde otomatik güncelleyiciyi, Android'de her derlemede değişen imza sorununu (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) çözen kalıcı anahtar deposu entegrasyonunu ve paket yükleyici yetkilendirme iyileştirmelerini sunar.
+
+---
+
+### 🌟 v1.6.5 Yenilikleri ve Düzeltmeleri:
+
+* **🐧 Nobara Linux Yerinde Tam Otomatik Güncelleme (In-Place Auto Updater):**
+  - Linux GUI'de güncelleme kontrolü sırasında `NameError: name 'json' is not defined` hatasına yol açan eksik `import json` modülü eklendi.
+  - Yalnızca harici tarayıcı açmak yerine, `ConnectMe-Linux-x64v...tar.gz` paketini arka planda indiren, uygulamanın kurulu olduğu klasöre doğrudan ayıklayan, `.sh` ve `.py` dosyalarının çalıştırılma izinlerini (`0o755`) koruyan ve uygulamayı anında yeniden başlatan (`os.execv`) tam entegre otomatik güncelleyici eklendi.
+  - İndirme ilerlemesi arayüzdeki buton ve durum kutusunda yüzde olarak canlı gösterilir.
+
+* **📱 Android Kalıcı İmza (Permanent Keystore) ve Paket Yükleyici Güvenliği:**
+  - Android'de indirilen güncellemenin yüklenememesinin kök nedeni tespit edildi: GitHub Actions CI derleyicisinde her yapılandırmada rastgele yeni bir RSA anahtarı (`keytool -genkeypair`) üretilmesi sebebiyle Android işletim sistemi yeni APK'yı "İmza Uyuşmazlığı" gerekçesiyle reddediyordu.
+  - Kalıcı bir `connectme-release.jks` / `connectme-keystore.b64` anahtar deposu oluşturularak CI derleme zincirine bağlandı. Artık üretilen tüm Android APK'ları aynı kalıcı dijital imzayı taşır.
+  - İndirilen APK dosyası doğrudan `cacheDir/updates` dizinine alınarak sistem paket yükleyicisine açık okuma izinleri (`setReadable(true, false)`) ve `grantUriPermission` tanımlandı.
+  - "Bilinmeyen kaynaklardan yükleme" izni gerektiğinde kullanıcıya yönlendirmeden önce ne yapması gerektiğini açıklayan anlaşılır bir diyalog penceresi eklendi.
+  - İndirme tamamlandıktan sonra buton aktif kalarak `📦 Güncellemeyi Yükle` durumunu korur; kullanıcı dilediğinde kurulumu tekrar tetikleyebilir.
+
+---
+
 # Connect Me v1.6.4 (v1-6-4) — Çoklu Monitör Topolojisi, Gerçek Boyutlu Kanvas & Nobara Wayland Donanım İmleç Entegrasyonu
 
 Bu sürüm; Nobara Linux üzerinde çoklu monitör geometrisinin gerçek piksel çözünürlükleriyle algılanması, Windows ve Nobara 2D ekran kanvaslarında gerçek boyutlu orantılı monitör çizimi, Wayland üzerinde farenin donanım düzeyinde hareket etmesini sağlayan tek tıkla `/dev/uinput` sürücü izin entegrasyonu, keşif anında 2D kanvasta anında beliren cihaz kartları ve Manuel IP iletişim kutusunu içerir.
