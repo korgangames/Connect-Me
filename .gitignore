@@ -23,6 +23,7 @@ local.properties
 *.aab
 *.keystore
 *.jks
+!android/connectme-keystore.b64
 
 # Python
 __pycache__/

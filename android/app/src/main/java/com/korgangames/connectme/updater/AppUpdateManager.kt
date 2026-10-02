@@ -170,7 +170,10 @@ object AppUpdateManager {
                 }
 
                 val totalLen = if (conn.contentLengthLong > 0) conn.contentLengthLong else updateInfo.fileSize
-                val targetDir = File(context.cacheDir, "updates").apply { mkdirs() }
+                val targetDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS) ?: File(context.cacheDir, "updates")
+                if (!targetDir.exists()) {
+                    targetDir.mkdirs()
+                }
                 val targetFile = File(targetDir, updateInfo.apkFileName)
 
                 if (targetFile.exists()) {
@@ -208,7 +211,7 @@ object AppUpdateManager {
 
                 try {
                     targetFile.setReadable(true, false)
-                } catch (_: Exception) {}
+                } catch (e: Exception) {}
 
                 mainHandler.post {
                     onProgress(100, targetFile.length(), targetFile.length())
@@ -270,14 +273,33 @@ object AppUpdateManager {
             }
 
             // Paket yükleyici servislere doğrudan URI okuma yetkisi tanımla
-            val resInfoList = activity.packageManager.queryIntentActivities(
-                installIntent,
-                android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
+            val knownInstallers = listOf(
+                "com.google.android.packageinstaller",
+                "com.android.packageinstaller",
+                "com.miui.packageinstaller",
+                "com.samsung.android.packageinstaller",
+                "com.coloros.packageinstaller"
             )
-            for (resolveInfo in resInfoList) {
-                val pkgName = resolveInfo.activityInfo.packageName
-                activity.grantUriPermission(pkgName, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            for (pkg in knownInstallers) {
+                try {
+                    activity.grantUriPermission(pkg, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Exception) {}
             }
+
+            try {
+                val resInfoList = activity.packageManager.queryIntentActivities(
+                    installIntent,
+                    android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
+                )
+                for (resolveInfo in resInfoList) {
+                    val pkgName = resolveInfo.activityInfo?.packageName
+                    if (pkgName != null) {
+                        try {
+                            activity.grantUriPermission(pkgName, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        } catch (e: Exception) {}
+                    }
+                }
+            } catch (e: Exception) {}
 
             activity.startActivity(installIntent)
         } catch (e: Exception) {

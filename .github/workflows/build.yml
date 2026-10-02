@@ -47,6 +47,9 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Setup JDK 17
         uses: actions/setup-java@v5
@@ -59,13 +62,31 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build Android Release APK
+      - name: Ensure Permanent Keystore and Build Release APK
         working-directory: ./android
         run: |
-          keytool -genkeypair -v -keystore connectme-release.jks -alias connectme -keyalg RSA -keysize 2048 -validity 10000 -storepass connectmepassword123 -keypass connectmepassword123 -dname "CN=Korgan Games, OU=Connect Me, O=Korgan Games, C=TR"
+          if [ -f connectme-keystore.b64 ]; then
+            echo "Existing permanent release keystore found. Decoding..."
+            base64 -d connectme-keystore.b64 > connectme-release.jks
+          else
+            echo "Generating permanent release keystore..."
+            keytool -genkeypair -v -keystore connectme-release.jks -alias connectme -keyalg RSA -keysize 2048 -validity 10000 -storepass connectmepassword123 -keypass connectmepassword123 -dname "CN=Korgan Games, OU=Connect Me, O=Korgan Games, C=TR"
+            base64 -w 0 connectme-release.jks > connectme-keystore.b64
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add connectme-keystore.b64
+            git commit -m "chore(android): save permanent release keystore [skip ci]" || true
+            git push origin HEAD:main || true
+          fi
           gradle assembleRelease --no-daemon
           mkdir -p ../publish
           cp app/build/outputs/apk/release/*.apk ../publish/ConnectMeV1-6-5.apk
+
+      - name: Upload Keystore Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ConnectMe-Keystore
+          path: android/connectme-keystore.b64
 
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v7

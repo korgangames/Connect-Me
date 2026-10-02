@@ -800,8 +800,21 @@ class MainActivity : AppCompatActivity() {
                     AppUpdateManager.installApk(this, apkFile)
                 }
                 updateProgressBar.progress = 100
-                Toast.makeText(this, "İndirme tamamlandı! Kurulum penceresi açılıyor...", Toast.LENGTH_SHORT).show()
-                AppUpdateManager.installApk(this, apkFile)
+
+                // Kullanıcıya imza ve kurulum rehberi sunarak sistem yükleyicisini çağır
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Güncelleme Hazır: ${updateInfo.versionName}")
+                    .setMessage("Connect Me ${updateInfo.versionName} APK dosyası başarıyla indirildi.\n\n⚠️ ÖNEMLİ BİLGİ: Eğer telefonunuzda daha önceki sürümler (v1.6.4 veya altı) yüklüyse, eski sürümün anahtar imzası farklı olduğu için Android 'Uygulama yüklenemedi' uyarısı verebilir. Bu durumda mevcut eski Connect Me uygulamasını telefonunuzdan kaldırıp bu yeni APK'yı kurmanız gerekmektedir.\n\nYükleme ekranı açılsın mı?")
+                    .setPositiveButton("Yükleyiciyi Aç") { _, _ ->
+                        AppUpdateManager.installApk(this, apkFile)
+                    }
+                    .setNeutralButton("Tarayıcıda Aç") { _, _ ->
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateInfo.downloadUrl)))
+                        } catch (e: Exception) {}
+                    }
+                    .setNegativeButton("Kapat", null)
+                    .show()
             },
             onError = { error ->
                 updateActionBtn.isEnabled = true
