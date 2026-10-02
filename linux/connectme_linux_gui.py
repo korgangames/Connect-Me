@@ -1308,10 +1308,19 @@ X-GNOME-Autostart-enabled=true
 
                         if is_newer:
                             tar_url = data.get("html_url", "https://github.com/korgangames/Connect-Me/releases")
+                            clean_tag = remote_tag.lstrip("v").lstrip("V")
+                            fallback_url = None
                             for a in data.get("assets", []):
-                                if a.get("name", "").endswith(".tar.gz"):
-                                    tar_url = a.get("browser_download_url", tar_url)
-                                    break
+                                a_name = a.get("name", "")
+                                if a_name.endswith(".tar.gz"):
+                                    if clean_tag in a_name or remote_tag in a_name:
+                                        tar_url = a.get("browser_download_url", tar_url)
+                                        fallback_url = None
+                                        break
+                                    elif fallback_url is None:
+                                        fallback_url = a.get("browser_download_url", tar_url)
+                            if fallback_url and tar_url == data.get("html_url", "https://github.com/korgangames/Connect-Me/releases"):
+                                tar_url = fallback_url
                             self.root.after(0, lambda: self._on_new_update_found(remote_tag, tar_url, data.get("name", remote_tag)))
                             return
 

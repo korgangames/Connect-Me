@@ -73,16 +73,37 @@ public static class WindowsUpdateService
 
             if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
             {
+                string fallbackUrl = "";
+                string fallbackName = "";
+                long fallbackSize = 0;
+                string cleanTag = tag.TrimStart('v', 'V');
+
                 foreach (var asset in assets.EnumerateArray())
                 {
                     string name = asset.GetProperty("name").GetString() ?? "";
                     if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                     {
-                        downloadUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
-                        zipName = name;
-                        size = asset.TryGetProperty("size", out var sProp) ? sProp.GetInt64() : 0;
-                        break;
+                        if (name.Contains(cleanTag, StringComparison.OrdinalIgnoreCase) || name.Contains(tag, StringComparison.OrdinalIgnoreCase))
+                        {
+                            downloadUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
+                            zipName = name;
+                            size = asset.TryGetProperty("size", out var sProp) ? sProp.GetInt64() : 0;
+                            break;
+                        }
+                        else if (string.IsNullOrEmpty(fallbackUrl))
+                        {
+                            fallbackUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
+                            fallbackName = name;
+                            fallbackSize = asset.TryGetProperty("size", out var sProp) ? sProp.GetInt64() : 0;
+                        }
                     }
+                }
+
+                if (string.IsNullOrEmpty(downloadUrl) && !string.IsNullOrEmpty(fallbackUrl))
+                {
+                    downloadUrl = fallbackUrl;
+                    zipName = fallbackName;
+                    size = fallbackSize;
                 }
             }
 

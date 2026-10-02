@@ -92,15 +92,31 @@ object AppUpdateManager {
                 var fileSize = 0L
 
                 if (assets != null) {
+                    val cleanTag = remoteTag.removePrefix("v").removePrefix("V")
+                    var fallbackUrl = ""
+                    var fallbackName = ""
+                    var fallbackSize = 0L
+
                     for (i in 0 until assets.length()) {
                         val asset = assets.getJSONObject(i)
                         val name = asset.optString("name", "")
                         if (name.endsWith(".apk", ignoreCase = true)) {
-                            downloadUrl = asset.optString("browser_download_url", "")
-                            apkFileName = name
-                            fileSize = asset.optLong("size", 0L)
-                            break
+                            if (name.contains(cleanTag, ignoreCase = true) || name.contains(remoteTag, ignoreCase = true)) {
+                                downloadUrl = asset.optString("browser_download_url", "")
+                                apkFileName = name
+                                fileSize = asset.optLong("size", 0L)
+                                break
+                            } else if (fallbackUrl.isEmpty()) {
+                                fallbackUrl = asset.optString("browser_download_url", "")
+                                fallbackName = name
+                                fallbackSize = asset.optLong("size", 0L)
+                            }
                         }
+                    }
+                    if (downloadUrl.isEmpty() && fallbackUrl.isNotEmpty()) {
+                        downloadUrl = fallbackUrl
+                        apkFileName = fallbackName
+                        fileSize = fallbackSize
                     }
                 }
 
