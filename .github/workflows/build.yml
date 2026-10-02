@@ -62,21 +62,11 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Ensure Permanent Keystore and Build Release APK
+      - name: Build Android Release APK
         working-directory: ./android
         run: |
           if [ -f connectme-keystore.b64 ]; then
-            echo "Existing permanent release keystore found. Decoding..."
             base64 -d connectme-keystore.b64 > connectme-release.jks
-          else
-            echo "Generating permanent release keystore..."
-            keytool -genkeypair -v -keystore connectme-release.jks -alias connectme -keyalg RSA -keysize 2048 -validity 10000 -storepass connectmepassword123 -keypass connectmepassword123 -dname "CN=Korgan Games, OU=Connect Me, O=Korgan Games, C=TR"
-            base64 -w 0 connectme-release.jks > connectme-keystore.b64
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add connectme-keystore.b64
-            git commit -m "chore(android): save permanent release keystore [skip ci]" || true
-            git push origin HEAD:main || true
           fi
           gradle assembleRelease --no-daemon
           mkdir -p ../publish
