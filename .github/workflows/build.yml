@@ -31,15 +31,18 @@ jobs:
 
       - name: Publish Windows App (Self-Contained Standalone GUI)
         run: |
+          $ver = (Get-Content VERSION).Trim()
           dotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/windows
           Move-Item publish/windows/ConnectMe.Windows.exe publish/windows/ConnectMe.exe
-          Compress-Archive -Path publish/windows/ConnectMe.exe -DestinationPath publish/ConnectMe-Windows-x64v1-6-6.zip
+          New-Item -ItemType Directory -Force -Path publish/dist
+          Compress-Archive -Path publish/windows/ConnectMe.exe -DestinationPath "publish/dist/ConnectMe-Windows-x64-v$ver.zip"
+          Copy-Item "publish/dist/ConnectMe-Windows-x64-v$ver.zip" "publish/dist/ConnectMe-Windows-x64.zip"
 
       - name: Upload Windows Build Artifact
         uses: actions/upload-artifact@v7
         with:
           name: ConnectMe-Windows-x64
-          path: publish/ConnectMe-Windows-x64v1-6-6.zip
+          path: publish/dist/*
 
   build-android:
     name: 📱 Android APK (Kotlin 120Hz Overlay & KVM)
@@ -69,8 +72,11 @@ jobs:
             base64 -d connectme-keystore.b64 > connectme-release.jks
           fi
           gradle assembleRelease --no-daemon
-          mkdir -p ../publish
-          cp app/build/outputs/apk/release/*.apk ../publish/ConnectMeV1-6-6.apk
+          VER=$(tr -d '\r\n ' < ../VERSION)
+          mkdir -p ../publish/dist
+          cp app/build/outputs/apk/release/*.apk "../publish/dist/ConnectMe-v${VER}.apk"
+          cp app/build/outputs/apk/release/*.apk "../publish/dist/ConnectMe-Android.apk"
+          cp app/build/outputs/apk/release/*.apk "../publish/dist/ConnectMeV${VER//./-}.apk"
 
       - name: Upload Keystore Artifact
         uses: actions/upload-artifact@v7
@@ -82,7 +88,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ConnectMe-Android-APK
-          path: publish/ConnectMeV1-6-6.apk
+          path: publish/dist/*
 
   package-linux:
     name: 🐧 Linux Package (Nobara / KDE Plasma GUI & Launcher)
@@ -93,17 +99,20 @@ jobs:
 
       - name: Prepare Linux Standalone Package
         run: |
+          VER=$(tr -d '\r\n ' < VERSION)
           mkdir -p package/ConnectMe-Linux
           cp -r linux/* package/ConnectMe-Linux/
           chmod +x package/ConnectMe-Linux/*.sh package/ConnectMe-Linux/*.py
-          mkdir -p publish
-          tar -czvf publish/ConnectMe-Linux-x64v1-6-6.tar.gz -C package ConnectMe-Linux
+          mkdir -p publish/dist
+          tar -czvf "publish/dist/ConnectMe-Linux-x64-v${VER}.tar.gz" -C package ConnectMe-Linux
+          tar -czvf "publish/dist/ConnectMe-Linux-x64.tar.gz" -C package ConnectMe-Linux
+          tar -czvf "publish/dist/ConnectMe-Linux-x64v${VER//./-}.tar.gz" -C package ConnectMe-Linux
 
       - name: Upload Linux Package Artifact
         uses: actions/upload-artifact@v7
         with:
           name: ConnectMe-Linux-x64
-          path: publish/ConnectMe-Linux-x64v1-6-6.tar.gz
+          path: publish/dist/*
 
   release:
     name: 🚀 Publish GitHub Release Packages

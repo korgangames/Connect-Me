@@ -53,7 +53,7 @@ object AppUpdateManager {
                     requestMethod = "GET"
                     connectTimeout = 8000
                     readTimeout = 8000
-                    setRequestProperty("User-Agent", "ConnectMe-Android/1.6.6")
+                    setRequestProperty("User-Agent", "ConnectMe-Android/$currentVersionName")
                     setRequestProperty("Accept", "application/vnd.github.v3+json")
                 }
 

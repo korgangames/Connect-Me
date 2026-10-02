@@ -107,9 +107,16 @@ class MainActivity : AppCompatActivity() {
         refreshUiState()
     }
 
+    private val appVersionName: String
+        get() = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.6.7"
+        } catch (_: Exception) {
+            "1.6.7"
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "Connect Me v1.6.6"
+        title = "Connect Me v$appVersionName"
 
         try {
             val svcIntent = Intent(this, ConnectMeService::class.java)
@@ -168,7 +175,7 @@ class MainActivity : AppCompatActivity() {
         val svc = ConnectMeService.instance
         val localIp = svc?.getLocalIpv4Address() ?: "Bağlanıyor..."
         val pin = svc?.localPairingPin ?: "------"
-        statusIpText.text = "📱 Android IP: $localIp  |  v1.6.6 (v1-6-6)  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
+        statusIpText.text = "📱 Android IP: $localIp  |  v$appVersionName  |  UDP: 42850  |  TCP: 42851  |  Ses: 42852"
         localPinBadgeText.text = "🔐 BU CİHAZIN 6 HANELİ KODU: $pin"
 
         val hasOverlay = Settings.canDrawOverlays(this)
@@ -400,7 +407,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "🌐 Connect Me v1.6.6"
+            text = "🌐 Connect Me v$appVersionName"
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
@@ -898,7 +905,7 @@ class MainActivity : AppCompatActivity() {
         val report = buildString {
             appendLine("=== Connect Me Android Tanılama Günlüğü ===")
             appendLine("Tarih: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
-            appendLine("Uygulama Sürümü: v1.6.6")
+            appendLine("Uygulama Sürümü: v$appVersionName")
             appendLine("Cihaz Modeli: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
             appendLine("Android Sürümü: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("Erişilebilirlik Hizmeti: ${if (CursorAccessibilityService.instance != null) "AÇIK ✅" else "KAPALI ❌"}")
@@ -917,7 +924,7 @@ class MainActivity : AppCompatActivity() {
 
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v1.6.6.txt")
+            putExtra(Intent.EXTRA_SUBJECT, "ConnectMe-Android-Logs-v$appVersionName.txt")
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(sendIntent, "Connect Me Loglarını Dışa Aktar / Paylaş"))
@@ -927,7 +934,7 @@ class MainActivity : AppCompatActivity() {
         if (isManual) {
             Toast.makeText(this, "Güncellemeler denetleniyor...", Toast.LENGTH_SHORT).show()
         }
-        AppUpdateManager.checkForUpdates(this, "1.6.6") { updateInfo, errorMsg ->
+        AppUpdateManager.checkForUpdates(this, appVersionName) { updateInfo, errorMsg ->
             if (updateInfo != null) {
                 updateCard.visibility = View.VISIBLE
                 updateTitleText.text = "🎉 Yeni Sürüm Mevcut: ${updateInfo.versionName}"
@@ -951,7 +958,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 updateCard.visibility = View.GONE
                 if (isManual) {
-                    Toast.makeText(this, "Connect Me güncel (v1.6.6)!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Connect Me güncel (v$appVersionName)!", Toast.LENGTH_SHORT).show()
                 }
             }
         }
