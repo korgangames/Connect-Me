@@ -145,7 +145,7 @@ class ConnectMeService : Service() {
         val prefs = getSharedPreferences("connectme_prefs", Context.MODE_PRIVATE)
         var id = prefs.getString("persistent_local_device_id", null)
         if (id.isNullOrEmpty()) {
-            val model = Build.MODEL.replace("[^a-zA-Z0-9]".toRegex(), "").take(8).lowercase()
+            val model = Build.MODEL.replace("[^a-zA-Z0-9]".toRegex(), "").take(8).lowercase(java.util.Locale.US)
             id = "android-$model-${UUID.randomUUID().toString().take(6)}"
             prefs.edit().putString("persistent_local_device_id", id).apply()
         }

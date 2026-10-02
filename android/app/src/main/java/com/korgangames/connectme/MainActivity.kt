@@ -33,6 +33,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.korgangames.connectme.audio.AudioStreamEngine
 import com.korgangames.connectme.audio.AudioStreamService
 import com.korgangames.connectme.network.ConnectMeService
+import com.korgangames.connectme.network.DiscoveredPcPeer
 import com.korgangames.connectme.protocol.ProtocolConstants
 import com.korgangames.connectme.service.CursorAccessibilityService
 import com.korgangames.connectme.updater.AppUpdateManager
@@ -45,7 +46,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var accessibilityStatusText: TextView
     private lateinit var peersContainer: LinearLayout
     private lateinit var selectedPeerBadgeText: TextView
-    private var selectedPeer: ConnectMeService.DiscoveredPcPeer? = null
+    private var selectedPeer: DiscoveredPcPeer? = null
     private lateinit var pcIpInput: EditText
     private lateinit var remotePinInput: EditText
     private lateinit var shelfListText: TextView
@@ -317,7 +318,7 @@ class MainActivity : AppCompatActivity() {
         logViewText.text = ConnectMeService.telemetryLogs.take(15).joinToString("\n")
     }
 
-    private fun showEnterPinForPeerDialog(peer: ConnectMeService.DiscoveredPcPeer) {
+    private fun showEnterPinForPeerDialog(peer: DiscoveredPcPeer) {
         val input = EditText(this).apply {
             hint = "6 Haneli Kod (Örn: 123456)"
             inputType = InputType.TYPE_CLASS_NUMBER
@@ -347,10 +348,10 @@ class MainActivity : AppCompatActivity() {
                 val entered = input.text.toString().trim()
                 if (entered.length == 6 && entered.all { it.isDigit() }) {
                     ConnectMeService.instance?.submitRemotePinToPeer(peer, entered)
-                    Toast.makeText(this, "'${peer.deviceName}' cihazına kod gönderildi...", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "'${peer.deviceName}' cihazına kod gönderildi...", Toast.LENGTH_SHORT).show()
                     refreshUiState()
                 } else {
-                    Toast.makeText(this, "Hata: Kod tam olarak 6 haneli rakam olmalıdır!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Hata: Kod tam olarak 6 haneli rakam olmalıdır!", Toast.LENGTH_LONG).show()
                 }
             }
             .setNegativeButton("İptal", null)
@@ -563,25 +564,25 @@ class MainActivity : AppCompatActivity() {
         val verifyPinBtn = createStyledButton("✅ Karşı Cihazın 6 Haneli Kodunu Doğrula", "#059669") {
             val enteredPin = remotePinInput.text.toString().trim()
             if (enteredPin.length != 6 || !enteredPin.all { it.isDigit() }) {
-                Toast.makeText(this, "Lütfen karşı cihazdaki 6 haneli kodu eksiksiz girin", Toast.LENGTH_SHORT).show()
-                return@createStyledButton
-            }
-            val peers = ConnectMeService.discoveredPeers
-            val targetPeer = selectedPeer
-                ?: peers.find { it.remoteEnteredMyPinVerified }
-                ?: (if (peers.size == 1) peers.first() else null)
-
-            if (targetPeer != null) {
-                ConnectMeService.instance?.submitRemotePinToPeer(targetPeer, enteredPin)
-                Toast.makeText(this, "'${targetPeer.deviceName}' cihazına kod gönderildi...", Toast.LENGTH_SHORT).show()
-            } else if (peers.size > 1) {
-                Toast.makeText(this, "Birden fazla cihaz bulundu! Lütfen listedeki cihaz kartının altındaki 'Kod Gir' butonuna dokunun.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, "Lütfen karşı cihazdaki 6 haneli kodu eksiksiz girin", Toast.LENGTH_SHORT).show()
             } else {
-                val ip = pcIpInput.text.toString().trim()
-                if (ip.isNotEmpty()) {
-                    ConnectMeService.instance?.triggerManualConnectAndVerifyPin(ip, enteredPin)
+                val peers = ConnectMeService.discoveredPeers
+                val targetPeer = selectedPeer
+                    ?: peers.find { it.remoteEnteredMyPinVerified }
+                    ?: (if (peers.size == 1) peers.first() else null)
+
+                if (targetPeer != null) {
+                    ConnectMeService.instance?.submitRemotePinToPeer(targetPeer, enteredPin)
+                    Toast.makeText(this@MainActivity, "'${targetPeer.deviceName}' cihazına kod gönderildi...", Toast.LENGTH_SHORT).show()
+                } else if (peers.size > 1) {
+                    Toast.makeText(this@MainActivity, "Birden fazla cihaz bulundu! Lütfen listedeki cihaz kartının altındaki 'Kod Gir' butonuna dokunun.", Toast.LENGTH_LONG).show()
                 } else {
-                    Toast.makeText(this, "Önce cihazın keşfedilmesini bekleyin veya IP girin", Toast.LENGTH_SHORT).show()
+                    val ip = pcIpInput.text.toString().trim()
+                    if (ip.isNotEmpty()) {
+                        ConnectMeService.instance?.triggerManualConnectAndVerifyPin(ip, enteredPin)
+                    } else {
+                        Toast.makeText(this@MainActivity, "Önce cihazın keşfedilmesini bekleyin veya IP girin", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
