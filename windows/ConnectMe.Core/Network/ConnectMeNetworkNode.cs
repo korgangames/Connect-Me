@@ -112,6 +112,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public event Action<PeerDeviceNode>? PeerDiscoveredOrUpdated;
     public event Action<PeerDeviceNode>? PeerPairingStatusChanged;
     public event Action<PeerDeviceNode>? PeerDisconnected;
+    public event Action<PeerDeviceNode>? RemotePinVerifiedWaitingLocalPin;
+    public event Action<PeerDeviceNode, ScreenEdge>? RemoteEdgeConfigReceived;
     public event Action<EdgeHandOffPacket, IPEndPoint>? RemoteEdgeHandOffReceived;
     public event Action<MouseMovePacket>? RemoteMouseMoveReceived;
     public event Action<MouseButtonPacket>? RemoteMouseButtonReceived;
@@ -645,6 +647,10 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 AutoConnect = true
             });
         }
+        else if (!peer.IsMutuallyPaired)
+        {
+            RemotePinVerifiedWaitingLocalPin?.Invoke(peer);
+        }
         PeerPairingStatusChanged?.Invoke(peer);
         PeerDiscoveredOrUpdated?.Invoke(peer);
 
@@ -769,16 +775,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         return _subnetBoundUdpSockets.GetOrAdd(localIp, ip =>
         {
             var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             s.SendBufferSize = 256 * 1024;
-            try
-            {
-                s.Bind(new IPEndPoint(ip, InputUdpPort));
-            }
-            catch
-            {
-                s.Bind(new IPEndPoint(ip, 0));
-            }
+            s.Bind(new IPEndPoint(ip, 0));
             return s;
         });
     }
@@ -797,6 +795,42 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         SendUdpFireAndForget(peer, packet);
         SendUdpFireAndForget(peer, packet);
         Log($"[Kenar Geçişi UDP] '{peer.DeviceName}' ({peer.IpAddress}:{peer.UdpInputPort}) ekranına giriş paketi iletildi ({targetEntranceEdge}, %{(int)(normalizedPosition * 100)}).");
+    }
+
+    /// <summary>
+    /// Symmetrically hands cursor control back to a remote host peer via both fast UDP and framed TCP return packets.
+    /// </summary>
+    public void SendEdgeReturnToPeer(
+        PeerDeviceNode peer,
+        ScreenEdge returnEntranceEdge,
+        float normalizedPosition)
+    {
+        if (!peer.IsMutuallyPaired)
+            return;
+
+        // 1. Fast-path UDP packet
+        byte[] packet = WirePacketCodec.EncodeEdgeHandOff(
+            new EdgeHandOffPacket(returnEntranceEdge, false, normalizedPosition));
+        SendUdpFireAndForget(peer, packet);
+        SendUdpFireAndForget(peer, packet);
+
+        // 2. Reliable TCP packet
+        var header = new TcpControlHeader
+        {
+            Type = "EDGE_RETURN",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform,
+            ReturnEdge = (int)returnEntranceEdge,
+            NormalizedPosition = normalizedPosition
+        };
+
+        _ = Task.Run(async () =>
+        {
+            await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
+        });
+
+        Log($"[Kenar Dönüşü] '{peer.DeviceName}' ({peer.IpAddress}) cihazına dönüş sinyali iletildi ({returnEntranceEdge}, %{(int)(normalizedPosition * 100)}).");
     }
 
     private void SendUdpFireAndForget(PeerDeviceNode peer, byte[] packet)
@@ -1346,6 +1380,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         else
                         {
                             Log($"[PIN İsteği] 🔔 '{peer.DeviceName}' sizin 6 haneli kodunuzu ({PairingPin}) doğru girdi!{trustNote} Bağlantıyı tamamlamak için onun 6 haneli kodunu girip onaylayın.");
+                            RemotePinVerifiedWaitingLocalPin?.Invoke(peer);
                         }
 
                         PeerPairingStatusChanged?.Invoke(peer);
@@ -1503,6 +1538,20 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     RemoteEdgeHandOffReceived?.Invoke(
                         new EdgeHandOffPacket(returnEdge, false, returnPos),
                         new IPEndPoint(IPAddress.Parse(remoteIp), header.SenderUdpPort ?? InputUdpPort));
+                    break;
+                }
+
+                case "EDGE_CONFIG":
+                {
+                    var returnEdge = (ScreenEdge)(header.ReturnEdge ?? 0);
+                    var peer = _peers.Values.FirstOrDefault(p => p.DeviceId == header.SenderId || p.IpAddress == remoteIp);
+                    if (peer != null)
+                    {
+                        peer.AssignedEdgeOnLocal = returnEdge;
+                        Log($"[Ekran Konfigürasyonu] '{peer.DeviceName}' ({remoteIp}) karşılıklı kenar düzenini güncelledi -> {returnEdge}.");
+                        RemoteEdgeConfigReceived?.Invoke(peer, returnEdge);
+                        PeerDiscoveredOrUpdated?.Invoke(peer);
+                    }
                     break;
                 }
 

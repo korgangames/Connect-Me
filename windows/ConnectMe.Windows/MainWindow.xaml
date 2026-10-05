@@ -73,7 +73,7 @@
                 <WrapPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock Text="🌐 Connect Me" FontSize="18" FontWeight="Bold" Foreground="#38BDF8" VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <Border Background="#1E293B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="6,2" VerticalAlignment="Center" Margin="0,0,10,0">
-                        <TextBlock Text="v1.6.9" FontSize="11" FontWeight="Bold" Foreground="#38BDF8"/>
+                        <TextBlock Text="v1.7.0" FontSize="11" FontWeight="Bold" Foreground="#38BDF8"/>
                     </Border>
                     <Border x:Name="ActiveFocusBadge" Background="#1E3A2F" BorderBrush="#22C55E" BorderThickness="1" CornerRadius="6" Padding="8,2" Margin="0,2,8,2">
                         <TextBlock x:Name="ActiveFocusText" Text="🪟 Kontrol: Bu Bilgisayar (Yerel)" FontWeight="SemiBold" Foreground="#4ADE80" FontSize="12"/>
@@ -140,6 +140,7 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -160,9 +161,57 @@
                         </StackPanel>
                     </DockPanel>
 
+                    <!-- GELEN BAĞLANTI İSTEĞİ BİLDİRİM KARTI (TÜM PLATFORMLAR İÇİN) -->
+                    <Border x:Name="InboundPairingRequestCard"
+                            Grid.Row="1"
+                            Visibility="Collapsed"
+                            Background="#3A1700"
+                            BorderBrush="#F59E0B"
+                            BorderThickness="1.5"
+                            CornerRadius="7"
+                            Padding="8,6"
+                            Margin="0,0,0,8">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,3">
+                                <TextBlock Text="🔔 GELEN BAĞLANTI İSTEĞİ!" FontWeight="Bold" FontSize="11" Foreground="#FBBF24" VerticalAlignment="Center"/>
+                                <Button x:Name="DismissInboundRequestBtn"
+                                        Click="DismissInboundRequestBtn_Click"
+                                        HorizontalAlignment="Right"
+                                        Background="Transparent" Foreground="#9CA3AF" BorderThickness="0" Padding="3,0" Cursor="Hand"
+                                        ToolTip="Bildirimi kapat" Content="✕"/>
+                            </Grid>
+                            <TextBlock x:Name="InboundPairingRequestText"
+                                       Text="'Cihaz' sizin kodunuzu girdi ve bağlanmak istiyor!"
+                                       FontSize="10.5" Foreground="#FEF3C7" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="InboundQuickPinInputBox"
+                                         Grid.Column="0"
+                                         MaxLength="6"
+                                         Background="#161B22"
+                                         Foreground="#FBBF24"
+                                         BorderBrush="#F59E0B"
+                                         FontSize="13.5"
+                                         FontWeight="Bold"
+                                         Padding="6,3"
+                                         VerticalContentAlignment="Center"
+                                         KeyDown="InboundQuickPinInputBox_KeyDown"
+                                         ToolTip="Karşı cihazın ekranındaki 6 haneli kod"/>
+                                <Button x:Name="InboundQuickVerifyBtn"
+                                        Grid.Column="1"
+                                        Click="InboundQuickVerifyBtn_Click"
+                                        Background="#D97706" Foreground="White" FontWeight="Bold" FontSize="11" BorderThickness="0" Padding="10,4" Margin="5,0,0,0" Cursor="Hand"
+                                        Content="🔐 Onayla"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
                     <!-- CİHAZ LİSTESİ (YATAY KAYDIRMA OLMADAN METİN SARMA İLE FERAH GÖRÜNÜM) -->
                     <ListBox x:Name="PeersListBox"
-                             Grid.Row="1"
+                             Grid.Row="2"
                              Background="#0D1117"
                              BorderBrush="#21262D"
                              Foreground="{StaticResource TextPrimaryBrush}"
@@ -171,7 +220,7 @@
                              Margin="0,0,0,8"/>
 
                     <!-- ÇİFT TARAFLI 6 HANELİ PIN ONAY KUTUSU -->
-                    <Border Grid.Row="2"
+                    <Border Grid.Row="3"
                             Background="#0D1117"
                             BorderBrush="#1E3A8A"
                             BorderThickness="1.5"
@@ -201,6 +250,7 @@
                                          FontWeight="Bold"
                                          Padding="6,4"
                                          VerticalContentAlignment="Center"
+                                         KeyDown="RemotePinInputBox_KeyDown"
                                          ToolTip="Karşı cihazın 6 haneli kodu"/>
                                 <Button x:Name="VerifyRemotePinBtn"
                                         Grid.Column="1"
@@ -239,7 +289,7 @@
                     </Border>
 
                     <!-- MANUEL IP EKLEME -->
-                    <Grid Grid.Row="3">
+                    <Grid Grid.Row="4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>

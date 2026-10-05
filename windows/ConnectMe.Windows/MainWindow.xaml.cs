@@ -30,6 +30,7 @@ public partial class MainWindow : Window
 
     private UpdateReleaseInfo? _latestAvailableUpdate;
     private PeerDeviceNode? _selectedPeer;
+    private PeerDeviceNode? _inboundRequestPeer;
     private int _simDeviceCounter;
     private int _simLocalMonitorStep;
 
@@ -55,6 +56,8 @@ public partial class MainWindow : Window
         _network.LogMessage += AppendLog;
         _network.PeerDiscoveredOrUpdated += OnPeerDiscoveredOrUpdated;
         _network.PeerPairingStatusChanged += OnPeerPairingStatusChanged;
+        _network.RemotePinVerifiedWaitingLocalPin += OnRemotePinVerifiedWaitingLocalPin;
+        _network.RemoteEdgeConfigReceived += OnRemoteEdgeConfigReceived;
         _network.ShelfItemReceived += OnShelfItemReceived;
         _audioPlayback.AudioStatusChanged += OnAudioStatusChanged;
 
@@ -70,7 +73,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"v1.6.9 (v1-6-9) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
+            $"v1.7.0 (v1-7-0) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -84,7 +87,7 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me v1.6.9 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
+        AppendLog($"[Sistem] Connect Me v1.7.0 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
 
         // Otomatik GitHub güncelleme denetimi (Arka planda)
         _ = CheckForUpdatesAsync(isManual: false);
@@ -179,6 +182,21 @@ public partial class MainWindow : Window
             .OrderByDescending(p => p.IsMutuallyPaired)
             .ThenByDescending(p => p.LastSeen)
             .ToList();
+
+        var waitingPeer = peers.FirstOrDefault(p => p.RemoteEnteredMyPinVerified && !p.IsMutuallyPaired);
+        if (waitingPeer != null)
+        {
+            if (InboundPairingRequestCard.Visibility != Visibility.Visible || _inboundRequestPeer?.DeviceId != waitingPeer.DeviceId)
+            {
+                _inboundRequestPeer = waitingPeer;
+                ShowInboundRequestBanner(waitingPeer);
+            }
+        }
+        else if (InboundPairingRequestCard.Visibility == Visibility.Visible && _inboundRequestPeer != null && !peers.Any(p => p.DeviceId == _inboundRequestPeer.DeviceId && p.RemoteEnteredMyPinVerified && !p.IsMutuallyPaired))
+        {
+            InboundPairingRequestCard.Visibility = Visibility.Collapsed;
+            _inboundRequestPeer = null;
+        }
 
         string? selectedId = _selectedPeer?.DeviceId;
 
@@ -1132,6 +1150,124 @@ public partial class MainWindow : Window
     // Mutual 6-Digit PIN & Multi-Device Simulator Handlers
     // =========================================================================
 
+    private void OnRemotePinVerifiedWaitingLocalPin(PeerDeviceNode peer)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _inboundRequestPeer = peer;
+            _selectedPeer = peer;
+
+            ShowInboundRequestBanner(peer);
+            RefreshPeersList();
+            UpdateSelectedPeerPairingPanel();
+
+            if (WindowState == WindowState.Minimized)
+            {
+                WindowState = WindowState.Normal;
+            }
+            Activate();
+
+            InboundQuickPinInputBox.Focus();
+            InboundQuickPinInputBox.SelectAll();
+
+            try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+        });
+    }
+
+    private void ShowInboundRequestBanner(PeerDeviceNode peer)
+    {
+        InboundPairingRequestCard.Visibility = Visibility.Visible;
+        string simHint = !string.IsNullOrEmpty(peer.SimulatedLocalPin)
+            ? $" (Simüle Kod: {peer.SimulatedLocalPin})"
+            : string.Empty;
+        InboundPairingRequestText.Text = $"'{peer.DeviceName}' ({peer.IpAddress}) sizin güvenlik kodunuzu ({_network.PairingPin}) doğruladı ve bağlanmak istiyor! Karşı cihazın 6 haneli kodunu{simHint} girip onaylayın:";
+    }
+
+    private void DismissInboundRequestBtn_Click(object sender, RoutedEventArgs e)
+    {
+        InboundPairingRequestCard.Visibility = Visibility.Collapsed;
+    }
+
+    private async void InboundQuickVerifyBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var targetPeer = _inboundRequestPeer ?? _selectedPeer;
+        if (targetPeer == null)
+        {
+            MessageBox.Show("Lütfen bağlanılacak cihazı seçin.", "Connect Me", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        string pin = InboundQuickPinInputBox.Text.Trim();
+        if (pin.Length != 6 || !pin.All(char.IsDigit))
+        {
+            MessageBox.Show("Lütfen 6 haneli sayısal bir güvenlik kodu girin.", "Geçersiz Kod", MessageBoxButton.OK, MessageBoxImage.Warning);
+            InboundQuickPinInputBox.Focus();
+            return;
+        }
+
+        InboundQuickVerifyBtn.IsEnabled = false;
+        try
+        {
+            bool remember = RememberDeviceCheckBox.IsChecked ?? true;
+            var (ok, _, msg) = await _network.SubmitRemotePinForPairingAsync(targetPeer, pin, remember);
+
+            AppendLog(msg);
+            if (ok)
+            {
+                InboundPairingRequestCard.Visibility = Visibility.Collapsed;
+                InboundQuickPinInputBox.Clear();
+                _inboundRequestPeer = null;
+
+                if (targetPeer.IsMutuallyPaired)
+                {
+                    EnsurePeerPlacedOnTopology(targetPeer);
+                    if (remember)
+                    {
+                        _network.SavePeerTopologyToTrustedStore(targetPeer);
+                    }
+                    _network.SendEdgeConfigToPeer(targetPeer);
+                }
+            }
+            RefreshPeersList();
+            UpdateSelectedPeerPairingPanel();
+            RedrawDisplayArrangementCanvas();
+        }
+        finally
+        {
+            InboundQuickVerifyBtn.IsEnabled = true;
+        }
+    }
+
+    private void InboundQuickPinInputBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            InboundQuickVerifyBtn_Click(sender, e);
+        }
+    }
+
+    private void RemotePinInputBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            VerifyRemotePinBtn_Click(sender, e);
+        }
+    }
+
+    private void OnRemoteEdgeConfigReceived(PeerDeviceNode peer, ScreenEdge newEdge)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            peer.AssignedEdgeOnLocal = newEdge;
+            var outermost = _topology.GetOutermostMonitorForEdge(newEdge);
+            peer.AttachedLocalMonitorId = outermost.MonitorId;
+            _topology.AssignPeerToEdgeSegment(peer, newEdge, 0.0f, 1.0f, outermost.MonitorId);
+            RefreshPeersList();
+            UpdateSelectedPeerPairingPanel();
+            RedrawDisplayArrangementCanvas();
+        });
+    }
+
     private void RegeneratePinBtn_Click(object sender, RoutedEventArgs e)
     {
         string newPin = _network.RegenerateLocalPin();
@@ -1149,10 +1285,14 @@ public partial class MainWindow : Window
 
         string enteredPin = RemotePinInputBox.Text;
         bool remember = RememberDeviceCheckBox.IsChecked ?? true;
-        var (_, _, message) = await _network.SubmitRemotePinForPairingAsync(_selectedPeer, enteredPin, remember);
+        var (ok, _, message) = await _network.SubmitRemotePinForPairingAsync(_selectedPeer, enteredPin, remember);
         CanvasSelectionInfoText.Text = message;
         if (_selectedPeer.IsMutuallyPaired)
         {
+            InboundPairingRequestCard.Visibility = Visibility.Collapsed;
+            InboundQuickPinInputBox.Clear();
+            _inboundRequestPeer = null;
+
             EnsurePeerPlacedOnTopology(_selectedPeer);
             if (remember)
             {
@@ -1976,7 +2116,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.6.9");
+            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.7.0");
             await Dispatcher.InvokeAsync(() =>
             {
                 if (result.HasUpdate && result.UpdateInfo != null)
@@ -1992,7 +2132,7 @@ public partial class MainWindow : Window
                         var res = MessageBox.Show(
                             this,
                             $"Yeni bir Connect Me sürümü mevcut!\n\n" +
-                            $"Mevcut Sürüm: v1.6.9\n" +
+                            $"Mevcut Sürüm: v1.7.0\n" +
                             $"Yeni Sürüm: {update.VersionTag}\n\n" +
                             $"{update.ReleaseTitle}\n\n" +
                             $"Şimdi otomatik olarak indirilip kurulsun mu?",
@@ -2027,7 +2167,7 @@ public partial class MainWindow : Window
                     {
                         MessageBox.Show(
                             this,
-                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.9).",
+                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.7.0).",
                             "Connect Me Güncel",
                             MessageBoxButton.OK,
                             MessageBoxImage.Information);

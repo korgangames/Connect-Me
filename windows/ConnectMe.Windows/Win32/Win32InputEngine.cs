@@ -63,6 +63,11 @@ public sealed class Win32InputEngine : IDisposable
     private bool _altDown;
     private bool _winDown;
 
+    private PeerDeviceNode? _controllingRemotePeer;
+    private ScreenEdge _incomingEntryEdge = ScreenEdge.None;
+    private double _incomingPushAccum;
+    private DateTimeOffset _lastReturnToLocalTime;
+
     public PeerDeviceNode? ActiveRemotePeer { get; private set; }
     public bool IsHooksInstalled => _mouseHookId != IntPtr.Zero && _keyboardHookId != IntPtr.Zero;
 
@@ -82,6 +87,7 @@ public sealed class Win32InputEngine : IDisposable
         _network.RemoteMouseMoveReceived += OnRemoteMouseMoveReceived;
         _network.RemoteMouseButtonReceived += OnRemoteMouseButtonReceived;
         _network.RemoteMouseScrollReceived += OnRemoteMouseScrollReceived;
+        _network.RemoteKeyEventReceived += OnRemoteKeyEventReceived;
         _network.PeerDisconnected += OnPeerDisconnected;
     }
 
@@ -170,16 +176,22 @@ public sealed class Win32InputEngine : IDisposable
     /// <summary>
     /// Returns control back to the local Windows screen at the specified entrance edge and normalized coordinate.
     /// </summary>
-    public void ReturnControlToLocal(ScreenEdge localEntranceEdge, float normalizedPosition)
+    public void ReturnControlToLocal(ScreenEdge localEntranceEdge, float normalizedPosition, bool notifyPeer = false)
     {
         var returningPeer = ActiveRemotePeer;
         if (returningPeer == null)
             return;
 
         ActiveRemotePeer = null;
+        _lastReturnToLocalTime = DateTimeOffset.UtcNow;
 
         // Release any held modifiers to ensure Windows host doesn't retain stuck keys
         ReleaseHeldModifiers();
+
+        if (notifyPeer)
+        {
+            _network.SendEdgeReturnToPeer(returningPeer, localEntranceEdge, normalizedPosition);
+        }
 
         if (localEntranceEdge != ScreenEdge.None)
         {
@@ -200,7 +212,31 @@ public sealed class Win32InputEngine : IDisposable
 
     private void OnRemoteEdgeHandOffReceived(EdgeHandOffPacket packet, System.Net.IPEndPoint sender)
     {
-        ReturnControlToLocal(packet.TargetEntranceEdge, packet.NormalizedPosition);
+        if (ActiveRemotePeer != null)
+        {
+            ReturnControlToLocal(packet.TargetEntranceEdge, packet.NormalizedPosition, notifyPeer: false);
+            return;
+        }
+
+        if (DateTimeOffset.UtcNow - _lastReturnToLocalTime < TimeSpan.FromMilliseconds(500))
+            return;
+
+        // Receiving secondary mode: remote peer is handing cursor control over to this machine
+        string senderIp = sender.Address.ToString();
+        var peer = _network.DiscoveredPeers.FirstOrDefault(p => p.IpAddress == senderIp)
+                   ?? _network.DiscoveredPeers.FirstOrDefault(p => p.IsMutuallyPaired);
+
+        _controllingRemotePeer = peer;
+        _incomingEntryEdge = packet.TargetEntranceEdge;
+        _incomingPushAccum = 0;
+
+        if (packet.TargetEntranceEdge != ScreenEdge.None)
+        {
+            var (entryX, entryY) = _topology.ComputeLocalEntryPoint(packet.TargetEntranceEdge, packet.NormalizedPosition, peer);
+            _lastCursorX = entryX;
+            _lastCursorY = entryY;
+            SetCursorPos(entryX, entryY);
+        }
     }
 
     private void OnRemoteMouseMoveReceived(MouseMovePacket packet)
@@ -208,10 +244,94 @@ public sealed class Win32InputEngine : IDisposable
         if (ActiveRemotePeer != null)
             return;
 
-        if (GetCursorPos(out POINT pt))
+        if (!GetCursorPos(out POINT pt))
+            return;
+
+        int newX = pt.X + packet.DeltaX;
+        int newY = pt.Y + packet.DeltaY;
+
+        // Check if pushing against the entrance edge to return control to the remote host
+        if (_controllingRemotePeer != null && _incomingEntryEdge != ScreenEdge.None)
         {
-            SetCursorPos(pt.X + packet.DeltaX, pt.Y + packet.DeltaY);
+            var mon = _topology.FindMonitorContainingPoint(pt.X, pt.Y) ?? _topology.FindMonitorNearestPoint(pt.X, pt.Y);
+            bool pushHit = false;
+
+            switch (_incomingEntryEdge)
+            {
+                case ScreenEdge.Left:
+                    if (pt.X <= mon.VirtualX + 2 && packet.DeltaX < 0)
+                    {
+                        _incomingPushAccum += -packet.DeltaX;
+                        pushHit = true;
+                    }
+                    else if (packet.DeltaX > 2)
+                    {
+                        _incomingPushAccum = 0;
+                    }
+                    break;
+
+                case ScreenEdge.Right:
+                    if (pt.X >= mon.Right - 3 && packet.DeltaX > 0)
+                    {
+                        _incomingPushAccum += packet.DeltaX;
+                        pushHit = true;
+                    }
+                    else if (packet.DeltaX < -2)
+                    {
+                        _incomingPushAccum = 0;
+                    }
+                    break;
+
+                case ScreenEdge.Top:
+                    if (pt.Y <= mon.VirtualY + 2 && packet.DeltaY < 0)
+                    {
+                        _incomingPushAccum += -packet.DeltaY;
+                        pushHit = true;
+                    }
+                    else if (packet.DeltaY > 2)
+                    {
+                        _incomingPushAccum = 0;
+                    }
+                    break;
+
+                case ScreenEdge.Bottom:
+                    if (pt.Y >= mon.Bottom - 3 && packet.DeltaY > 0)
+                    {
+                        _incomingPushAccum += packet.DeltaY;
+                        pushHit = true;
+                    }
+                    else if (packet.DeltaY < -2)
+                    {
+                        _incomingPushAccum = 0;
+                    }
+                    break;
+            }
+
+            if (pushHit && _incomingPushAccum >= 8)
+            {
+                var targetPeer = _controllingRemotePeer;
+                var entranceOnHost = SpatialTopologyEngine.GetOppositeEdge(_incomingEntryEdge);
+                float norm = _incomingEntryEdge switch
+                {
+                    ScreenEdge.Left or ScreenEdge.Right => Math.Clamp((float)(pt.Y - mon.VirtualY) / Math.Max(1, mon.Height), 0f, 1f),
+                    ScreenEdge.Top or ScreenEdge.Bottom => Math.Clamp((float)(pt.X - mon.VirtualX) / Math.Max(1, mon.Width), 0f, 1f),
+                    _ => 0.5f
+                };
+
+                _controllingRemotePeer = null;
+                _incomingEntryEdge = ScreenEdge.None;
+                _incomingPushAccum = 0;
+
+                _network.SendEdgeReturnToPeer(targetPeer, entranceOnHost, norm);
+                return;
+            }
         }
+
+        var (clampedX, clampedY) = _topology.ClampToVirtualDesktop(newX, newY);
+        _lastCursorX = clampedX;
+        _lastCursorY = clampedY;
+        SetCursorPos(clampedX, clampedY);
+        mouse_event(0x0001u, packet.DeltaX, packet.DeltaY, 0, (UIntPtr)0xFFFFFF);
     }
 
     private void OnRemoteMouseButtonReceived(MouseButtonPacket packet)
@@ -219,19 +339,49 @@ public sealed class Win32InputEngine : IDisposable
         if (ActiveRemotePeer != null)
             return;
 
-        uint flag = (packet.Button, packet.IsPressed) switch
+        uint flag = 0;
+        uint data = 0;
+
+        switch (packet.Button, packet.IsPressed)
         {
-            (MouseButtonCode.Left, true) => 0x0002u,   // MOUSEEVENTF_LEFTDOWN
-            (MouseButtonCode.Left, false) => 0x0004u,  // MOUSEEVENTF_LEFTUP
-            (MouseButtonCode.Right, true) => 0x0008u,  // MOUSEEVENTF_RIGHTDOWN
-            (MouseButtonCode.Right, false) => 0x0010u, // MOUSEEVENTF_RIGHTUP
-            (MouseButtonCode.Middle, true) => 0x0020u, // MOUSEEVENTF_MIDDLEDOWN
-            (MouseButtonCode.Middle, false) => 0x0040u,// MOUSEEVENTF_MIDDLEUP
-            _ => 0u
-        };
+            case (MouseButtonCode.Left, true):
+                flag = 0x0002u; // MOUSEEVENTF_LEFTDOWN
+                break;
+            case (MouseButtonCode.Left, false):
+                flag = 0x0004u; // MOUSEEVENTF_LEFTUP
+                break;
+            case (MouseButtonCode.Right, true):
+                flag = 0x0008u; // MOUSEEVENTF_RIGHTDOWN
+                break;
+            case (MouseButtonCode.Right, false):
+                flag = 0x0010u; // MOUSEEVENTF_RIGHTUP
+                break;
+            case (MouseButtonCode.Middle, true):
+                flag = 0x0020u; // MOUSEEVENTF_MIDDLEDOWN
+                break;
+            case (MouseButtonCode.Middle, false):
+                flag = 0x0040u; // MOUSEEVENTF_MIDDLEUP
+                break;
+            case (MouseButtonCode.XButton1, true):
+                flag = 0x0080u; // MOUSEEVENTF_XDOWN
+                data = 1;
+                break;
+            case (MouseButtonCode.XButton1, false):
+                flag = 0x0100u; // MOUSEEVENTF_XUP
+                data = 1;
+                break;
+            case (MouseButtonCode.XButton2, true):
+                flag = 0x0080u; // MOUSEEVENTF_XDOWN
+                data = 2;
+                break;
+            case (MouseButtonCode.XButton2, false):
+                flag = 0x0100u; // MOUSEEVENTF_XUP
+                data = 2;
+                break;
+        }
 
         if (flag != 0)
-            mouse_event(flag, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(flag, 0, 0, data, UIntPtr.Zero);
     }
 
     private void OnRemoteMouseScrollReceived(MouseScrollPacket packet)
@@ -241,6 +391,25 @@ public sealed class Win32InputEngine : IDisposable
 
         if (packet.ScrollY != 0)
             mouse_event(0x0800u, 0, 0, unchecked((uint)packet.ScrollY), UIntPtr.Zero); // MOUSEEVENTF_WHEEL
+        if (packet.ScrollX != 0)
+            mouse_event(0x1000u, 0, 0, unchecked((uint)packet.ScrollX), UIntPtr.Zero); // MOUSEEVENTF_HWHEEL
+    }
+
+    private void OnRemoteKeyEventReceived(KeyEventPacket packet)
+    {
+        if (ActiveRemotePeer != null)
+            return;
+
+        uint dwFlags = packet.IsPressed ? 0u : KEYEVENTF_KEYUP;
+        byte vk = (byte)packet.VirtualKey;
+        byte scan = (byte)packet.ScanCode;
+
+        if (vk is 0x21 or 0x22 or 0x23 or 0x24 or 0x25 or 0x26 or 0x27 or 0x28 or 0x2D or 0x2E or 0x5B or 0x5C or 0x5D or 0x6F or 0x90 or 0xA3 or 0xA5)
+        {
+            dwFlags |= 0x0001; // KEYEVENTF_EXTENDEDKEY
+        }
+
+        keybd_event(vk, scan, dwFlags, UIntPtr.Zero);
     }
 
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -252,6 +421,12 @@ public sealed class Win32InputEngine : IDisposable
             // Ignore self-injected events
             if ((info.flags & LLMHF_INJECTED) == 0)
             {
+                if (_controllingRemotePeer != null)
+                {
+                    _controllingRemotePeer = null;
+                    _incomingPushAccum = 0;
+                }
+
                 int msg = wParam.ToInt32();
                 var remote = ActiveRemotePeer;
 
@@ -378,7 +553,7 @@ public sealed class Win32InputEngine : IDisposable
 
                     if (isEmergencyEsc || ((isScrollLock || isCtrlAltL) && ActiveRemotePeer != null))
                     {
-                        ReturnControlToLocal(ScreenEdge.None, 0.5f);
+                        ReturnControlToLocal(ScreenEdge.None, 0.5f, notifyPeer: true);
                         return (IntPtr)1;
                     }
 
@@ -480,13 +655,24 @@ public sealed class Win32InputEngine : IDisposable
     {
         if (ActiveRemotePeer == peer || (peer != null && ActiveRemotePeer?.DeviceId == peer.DeviceId))
         {
-            ReturnControlToLocal(ScreenEdge.None, 0.5f);
+            ReturnControlToLocal(ScreenEdge.None, 0.5f, notifyPeer: false);
+        }
+
+        if (_controllingRemotePeer == peer || (peer != null && _controllingRemotePeer?.DeviceId == peer.DeviceId))
+        {
+            _controllingRemotePeer = null;
+            _incomingPushAccum = 0;
         }
     }
 
     public void Dispose()
     {
         StopHooks();
+        _network.RemoteEdgeHandOffReceived -= OnRemoteEdgeHandOffReceived;
+        _network.RemoteMouseMoveReceived -= OnRemoteMouseMoveReceived;
+        _network.RemoteMouseButtonReceived -= OnRemoteMouseButtonReceived;
+        _network.RemoteMouseScrollReceived -= OnRemoteMouseScrollReceived;
+        _network.RemoteKeyEventReceived -= OnRemoteKeyEventReceived;
         _network.PeerDisconnected -= OnPeerDisconnected;
     }
 

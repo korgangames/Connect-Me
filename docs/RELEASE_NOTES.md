@@ -1,3 +1,32 @@
+# Connect Me v1.7.0 — Çift Yönlü Windows-Windows KVM, Gelen Bağlantı İstek Kartı, Port 42850 İyileştirmesi & Klavye/Fare Enjeksiyonu
+
+Bu sürüm; iki Windows bilgisayar arasında kesintisiz çift yönlü KVM kontrolü (fare ve klavye enjeksiyonu), karşı cihaz kodunuzu girdiğinde anında beliren canlı gelen bağlantı isteği kartı (`🔔 GELEN BAĞLANTI İSTEĞİ`), Windows UDP soket port çakışmasını gideren dinamik port bağlama mimarisi ve karşılıklı kenar geçiş-dönüş senkronizasyonunu sunar.
+
+---
+
+### 🌟 v1.7.0 Yenilikleri ve Düzeltmeleri:
+
+* **🔔 Canlı Gelen Bağlantı İstek Bildirimi & Hızlı PIN Onay Kartı:**
+  - Karşıdaki herhangi bir cihaz (Windows, Android, Linux) sizin 6 haneli kodunuzu girdiğinde, Windows arayüzünde canlı altın/amber renkli **`🔔 GELEN BAĞLANTI İSTEĞİ!`** bildirim kartı belirir.
+  - Kart üzerinde istek atan cihazın adı, IP adresi ve hızlı PIN giriş kutusu (`InboundQuickPinInputBox`) otomatik olarak odaklanır.
+  - Uygulama simge durumundaysa veya arka plandaysa pencere otomatik olarak öne çıkar ve nazik bir sistem ses tonuyla kullanıcıyı bilgilendirir.
+  - Karşı cihazın 6 haneli kodunu girip `Enter` veya `🔐 Onayla` butonuna basarak tek adımda çift taraflı eşleşme tamamlanır.
+
+* **🚀 Windows-Windows Çift Yönlü Donanımsal KVM Enjeksiyonu:**
+  - İkincil Windows bilgisayara fare imleci geçtiğinde donma sorunu tamamen giderildi.
+  - **Klavye Enjeksiyonu:** Uzak bilgisayardan gelen tüm klavye vuruşları (harfler, sayılar, yön tuşları, fonksiyon tuşları, kısayollar, Türkçe Unicode karakterler) Win32 `keybd_event` ile ikincil bilgisayarın aktif penceresine anında aktarılır.
+  - **Fare Enjeksiyonu:** Fare hareketleri `SetCursorPos` ve donanımsal `mouse_event` ile çift katmanlı enjekte edilir (tüm pencereler, masaüstü ögeleri ve oyunlar fareyi tam hisseder).
+  - Sol, sağ, orta butonlar, ileri/geri yan butonlar (XButton1, XButton2) ve dikey/yatay fare tekerleği kaydırmaları desteklenir.
+
+* **🛡️ Windows UDP Port 42850 Soket İyileştirmesi (Winsock Conflict Fix):**
+  - Giden UDP girdi paketlerini gönderen soketlerin `InputUdpPort` (42850) portuna bağlanması nedeniyle gelen paketlerin engellenmesi sorunu giderildi; giden soketler artık güvenli dinamik kaynak portuna (`new IPEndPoint(ip, 0)`) bağlanarak port 42850'yi sadece gelen girdilere tahsis eder.
+
+* **🔄 İkincil Windows Ekranından Ana Ekrana Sorunsuz Geri Dönüş (`EDGE_RETURN`):**
+  - Fare ikincil Windows ekranındayken giriş yapılan kenara (örneğin sol kenara) doğru geri itildiğinde 8 piksellik bilinçli direnç eşiği aşıldığında imleç ve klavye kontrolü otomatik olarak ana bilgisayara geri aktarılır.
+  - İki Windows bilgisayar arasında `EDGE_CONFIG` ile 2D Kanvas yerleşimi otomatik ve dinamik olarak eşitlenir.
+
+---
+
 # Connect Me v1.6.9 — Tek Tıkla Bağlantı Kesme (Disconnect / Unpair), İmleç İadesi & Akıllı Otomatik Bağlantı Bastırma
 
 Bu sürüm; Windows, Android ve Nobara Linux arasında aktif bağlantıları tek tıkla kesebilme (`🔌 Bağlantıyı Kes`), imleci anında yerel ana ekrana geri çekme, TCP üzerinden karşı cihazı senkronize bilgilendirme ve kullanıcı bilerek bağlantıyı kestiğinde güvenilir cihazların hemen tekrar otomatik bağlanmasını önleyen akıllı bastırma mekanizmasını sunar.

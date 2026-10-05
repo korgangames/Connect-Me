@@ -33,6 +33,7 @@ public static class Program
         await TestTcpFrameCodecAsync();
         await TestEndToEndMutualSixDigitPinAndLoopbackAsync();
         await TestTrustedDeviceZeroPinAutoReconnectFlowAsync();
+        await TestInboundPairingRequestAndEdgeConfigAsync();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -638,5 +639,67 @@ public static class Program
         {
             try { Directory.Delete(tempDir, true); } catch { }
         }
+    }
+
+    private static async Task TestInboundPairingRequestAndEdgeConfigAsync()
+    {
+        string tempShelf = Path.Combine(Path.GetTempPath(), "ConnectMeReqTest_" + Guid.NewGuid().ToString("N")[..6]);
+        await using var nodeA = new ConnectMeNetworkNode("win-pc-1", "Windows-Host", "windows", tempShelf, fixedPin: "112233");
+        await using var nodeB = new ConnectMeNetworkNode("win-pc-2", "Windows-Secondary", "windows", tempShelf, fixedPin: "445566");
+
+        nodeA.Start(discoveryPort: 43049, inputUdpPort: 43050, controlTcpPort: 43051);
+        nodeB.Start(discoveryPort: 43059, inputUdpPort: 43060, controlTcpPort: 43061);
+
+        var peerBOnA = nodeA.RegisterManualPeer("127.0.0.1", "Windows-Secondary", "windows", udpPort: 43060, tcpPort: 43061, customDeviceId: "win-pc-2");
+        var peerAOnB = nodeB.RegisterManualPeer("127.0.0.1", "Windows-Host", "windows", udpPort: 43050, tcpPort: 43051, customDeviceId: "win-pc-1");
+
+        // 1. Inbound Connection Request Event
+        PeerDeviceNode? inboundRequestedPeerOnB = null;
+        nodeB.RemotePinVerifiedWaitingLocalPin += p => inboundRequestedPeerOnB = p;
+
+        // Node A submits Node B's PIN ("445566")
+        var resA = await nodeA.SubmitRemotePinForPairingAsync(peerBOnA, "445566", rememberDevice: false);
+        AssertTrue(resA.Accepted && !resA.IsNowMutuallyPaired, "Gelen İstek: Node A kodu girdiğinde Node B PIN'i kabul etti");
+
+        // Wait a brief moment for TCP ACK & events
+        await Task.Delay(150);
+        AssertTrue(
+            inboundRequestedPeerOnB != null &&
+            inboundRequestedPeerOnB.DeviceId == "win-pc-1" &&
+            inboundRequestedPeerOnB.RemoteEnteredMyPinVerified &&
+            !inboundRequestedPeerOnB.IsMutuallyPaired,
+            "Gelen İstek: Node B'de RemotePinVerifiedWaitingLocalPin olayı tetiklendi ve bağlantı isteği kartı için hazırlandı");
+
+        // 2. Node B enters Node A's PIN ("112233")
+        var resB = await nodeB.SubmitRemotePinForPairingAsync(peerAOnB, "112233", rememberDevice: false);
+        await nodeA.SubmitRemotePinForPairingAsync(peerBOnA, "445566", rememberDevice: false);
+        AssertTrue(resB.Accepted && peerAOnB.IsMutuallyPaired && peerBOnA.IsMutuallyPaired,
+            "Gelen İstek: Node B kodu girdi ve çift taraflı eşleşme başarıyla tamamlandı");
+
+        // 3. Test EDGE_CONFIG synchronization between 2 Windows PCs
+        ScreenEdge configEdgeReceivedOnB = ScreenEdge.None;
+        nodeB.RemoteEdgeConfigReceived += (p, e) => configEdgeReceivedOnB = e;
+
+        peerBOnA.AssignedEdgeOnLocal = ScreenEdge.Right;
+        nodeA.SendEdgeConfigToPeer(peerBOnA);
+
+        await Task.Delay(200);
+        AssertTrue(configEdgeReceivedOnB == ScreenEdge.Left && peerAOnB.AssignedEdgeOnLocal == ScreenEdge.Left,
+            "Ekran Konfigürasyonu: Node A sağ kenara atayınca Node B karşılıklı sol kenar konfigürasyonunu (EDGE_CONFIG) aldı");
+
+        // 4. Test SendEdgeReturnToPeer
+        EdgeHandOffPacket? returnPkt = null;
+        nodeA.RemoteEdgeHandOffReceived += (pkt, _) => returnPkt = pkt;
+
+        nodeB.SendEdgeReturnToPeer(peerAOnB, ScreenEdge.Right, 0.75f);
+        await Task.Delay(200);
+
+        AssertTrue(
+            returnPkt != null &&
+            returnPkt.Value.TargetEntranceEdge == ScreenEdge.Right &&
+            Math.Abs(returnPkt.Value.NormalizedPosition - 0.75f) < 0.01f,
+            "Kenar Dönüşü (EDGE_RETURN): İkincil Windows bilgisayar imleç dönüş paketini ana bilgisayara başarıyla aktardı");
+
+        try { Directory.Delete(tempShelf, true); } catch { }
     }
 }
