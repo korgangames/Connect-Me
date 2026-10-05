@@ -42,6 +42,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.util.Collections
+import java.util.HashSet
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -156,6 +158,8 @@ class ConnectMeService : Service() {
     @Volatile
     var localPairingPin: String = generateSixDigitPin()
         private set
+
+    val suppressedAutoConnectDeviceIds: MutableSet<String> = Collections.synchronizedSet(HashSet())
 
     @Volatile
     var activePcAddress: InetAddress? = null
@@ -389,6 +393,8 @@ class ConnectMeService : Service() {
             return
         }
 
+        suppressedAutoConnectDeviceIds.remove(peer.deviceId)
+
         try {
             val cursorSvc = CursorAccessibilityService.instance
             Socket().use { socket ->
@@ -424,6 +430,34 @@ class ConnectMeService : Service() {
         } catch (e: Exception) {
             log("[PIN Hata] '${peer.deviceName}' (${peer.ipAddress}) ulaşılamadı: ${e.message}")
         }
+    }
+
+    fun disconnectPeer(peer: DiscoveredPcPeer) {
+        suppressedAutoConnectDeviceIds.add(peer.deviceId)
+        peer.myEnteredPinVerifiedByRemote = false
+        peer.remoteEnteredMyPinVerified = false
+        if (activePcAddress?.hostAddress == peer.ipAddress) {
+            activePcAddress = null
+        }
+        CursorAccessibilityService.instance?.deactivateCursor()
+
+        scope.launch {
+            try {
+                Socket().use { sock ->
+                    sock.connect(InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 2500)
+                    val header = JSONObject().apply {
+                        put("type", "DISCONNECT")
+                        put("senderId", localDeviceId)
+                        put("senderName", localDeviceName)
+                        put("senderPlatform", "android")
+                    }
+                    TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
+                }
+            } catch (_: Exception) {}
+        }
+
+        log("[Bağlantı] 🔌 '${peer.deviceName}' ile olan bağlantı sonlandırıldı.")
+        onStateUpdated?.invoke()
     }
 
     private fun sendDiscoveryBeacon(sock: DatagramSocket, targetAddr: InetAddress) {
@@ -473,7 +507,7 @@ class ConnectMeService : Service() {
                     existing.udpInputPort = udpPort
                     existing.tcpControlPort = tcpPort
                     existing.lastSeenMs = System.currentTimeMillis()
-                    if (savedToken != null && !existing.isMutuallyPaired) {
+                    if (savedToken != null && !existing.isMutuallyPaired && !suppressedAutoConnectDeviceIds.contains(deviceId)) {
                         triggerTrustedReconnect(existing, savedToken)
                     }
                 } else {
@@ -482,7 +516,7 @@ class ConnectMeService : Service() {
                     val trustMsg = if (savedToken != null) " [⭐ Güvenilir - Otomatik Bağlanıyor...]" else " — Çift taraflı 6 haneli PIN ile eşleşebilirsiniz."
                     log("[Keşif] Cihaz bulundu: $deviceName ($senderIp)$trustMsg")
                     sendDiscoveryBeacon(sock, pkt.address)
-                    if (savedToken != null) {
+                    if (savedToken != null && !suppressedAutoConnectDeviceIds.contains(deviceId)) {
                         triggerTrustedReconnect(peer, savedToken)
                     }
                 }
@@ -835,6 +869,23 @@ class ConnectMeService : Service() {
                     onStateUpdated?.invoke()
                 }
 
+                "DISCONNECT" -> {
+                    val peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
+                    if (peer != null) {
+                        suppressedAutoConnectDeviceIds.add(peer.deviceId)
+                        peer.myEnteredPinVerifiedByRemote = false
+                        peer.remoteEnteredMyPinVerified = false
+                    } else if (senderId.isNotEmpty()) {
+                        suppressedAutoConnectDeviceIds.add(senderId)
+                    }
+                    if (activePcAddress?.hostAddress == remoteIp) {
+                        activePcAddress = null
+                    }
+                    CursorAccessibilityService.instance?.deactivateCursor()
+                    log("[Bağlantı] 🔌 '$senderName' ($remoteIp) bağlantıyı sonlandırdı.")
+                    onStateUpdated?.invoke()
+                }
+
                 "EDGE_CONFIG" -> {
                     val returnEdge = header.optInt("returnEdge", ProtocolConstants.EDGE_LEFT.toInt()).toByte()
                     if (returnEdge != ProtocolConstants.EDGE_NONE) {
@@ -926,10 +977,19 @@ class ConnectMeService : Service() {
     fun revokeTrustForDevice(deviceId: String) {
         val prefs = getSharedPreferences("connect_me_trust", Context.MODE_PRIVATE)
         prefs.edit().remove("token_$deviceId").apply()
+        val peer = discoveredPeers.find { it.deviceId == deviceId }
+        if (peer != null) {
+            disconnectPeer(peer)
+        } else {
+            suppressedAutoConnectDeviceIds.add(deviceId)
+        }
+        log("[Güvenlik] 🗑️ Cihaz ($deviceId) güvenilenler listesinden kaldırıldı.")
+        onStateUpdated?.invoke()
     }
 
     fun triggerTrustedReconnect(peer: DiscoveredPcPeer, token: String) {
         if (peer.isMutuallyPaired) return
+        if (suppressedAutoConnectDeviceIds.contains(peer.deviceId)) return
         scope.launch {
             try {
                 Socket().use { socket ->

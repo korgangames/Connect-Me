@@ -295,6 +295,22 @@ class MainActivity : AppCompatActivity() {
                         showEnterPinForPeerDialog(p)
                     }
                     itemCard.addView(pairBtn)
+                } else {
+                    val disconnectBtn = createStyledButton("🔌 Bağlantıyı Kes (Kopar)", "#DC2626") {
+                        val svc = ConnectMeService.instance
+                        svc?.disconnectPeer(p)
+                        updateUi()
+                    }
+                    itemCard.addView(disconnectBtn)
+                }
+
+                if (isTrusted) {
+                    val revokeBtn = createStyledButton("🗑️ Bu Cihazı Unut (Güveni Kaldır)", "#475569") {
+                        val svc = ConnectMeService.instance
+                        svc?.revokeTrustForDevice(p.deviceId)
+                        updateUi()
+                    }
+                    itemCard.addView(revokeBtn)
                 }
 
                 peersContainer.addView(itemCard)

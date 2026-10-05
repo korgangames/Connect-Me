@@ -230,6 +230,7 @@ public partial class MainWindow : Window
             SelectedPeerStatusText.Text = "Listeden bir cihaz seçip ekrandaki 6 haneli kodunu girin.";
             SimConfirmOurPinBtn.Visibility = Visibility.Collapsed;
             RevokeTrustBtn.Visibility = Visibility.Collapsed;
+            DisconnectPeerBtn.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -244,6 +245,7 @@ public partial class MainWindow : Window
 
         RememberDeviceCheckBox.IsChecked = p.IsTrusted || true;
         RevokeTrustBtn.Visibility = p.IsTrusted ? Visibility.Visible : Visibility.Collapsed;
+        DisconnectPeerBtn.Visibility = p.IsMutuallyPaired ? Visibility.Visible : Visibility.Collapsed;
 
         SelectedPeerStatusText.Text = p.PairingState switch
         {
@@ -1158,6 +1160,19 @@ public partial class MainWindow : Window
             }
             _network.SendEdgeConfigToPeer(_selectedPeer);
         }
+        UpdateSelectedPeerPairingPanel();
+        RefreshPeersList();
+        RedrawDisplayArrangementCanvas();
+    }
+
+    private void DisconnectPeerBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedPeer == null)
+            return;
+
+        var p = _selectedPeer;
+        _network.DisconnectPeer(p);
+        CanvasSelectionInfoText.Text = $"🔌 '{p.DeviceName}' ile olan bağlantı sonlandırıldı.";
         UpdateSelectedPeerPairingPanel();
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();

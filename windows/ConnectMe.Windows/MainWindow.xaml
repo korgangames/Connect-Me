@@ -218,6 +218,12 @@
                                       Margin="0,6,0,3"
                                       ToolTip="İşaretlendiğinde, iki cihazda da program açık olduğu sürece bir daha PIN sormadan arka planda otomatik bağlanır."/>
 
+                            <Button x:Name="DisconnectPeerBtn"
+                                    Click="DisconnectPeerBtn_Click"
+                                    Visibility="Collapsed"
+                                    Background="#DC2626" Foreground="White" FontWeight="Bold" FontSize="11" BorderThickness="0" Padding="8,5" Margin="0,6,0,0" Cursor="Hand"
+                                    Content="🔌 Bağlantıyı Kes (Kopar)"/>
+
                             <Button x:Name="RevokeTrustBtn"
                                     Click="RevokeTrustBtn_Click"
                                     Visibility="Collapsed"

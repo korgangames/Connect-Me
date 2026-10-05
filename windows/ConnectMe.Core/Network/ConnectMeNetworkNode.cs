@@ -111,6 +111,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     // Events
     public event Action<PeerDeviceNode>? PeerDiscoveredOrUpdated;
     public event Action<PeerDeviceNode>? PeerPairingStatusChanged;
+    public event Action<PeerDeviceNode>? PeerDisconnected;
     public event Action<EdgeHandOffPacket, IPEndPoint>? RemoteEdgeHandOffReceived;
     public event Action<MouseMovePacket>? RemoteMouseMoveReceived;
     public event Action<MouseButtonPacket>? RemoteMouseButtonReceived;
@@ -377,6 +378,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             }
         }
 
+        _suppressedAutoConnectPeers.TryRemove(peer.DeviceId, out _);
+
         // Real network peer over TCP 42851
         try
         {
@@ -472,11 +475,42 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         }
     }
 
+    public bool DisconnectPeer(PeerDeviceNode peer)
+    {
+        if (peer == null) return false;
+
+        _suppressedAutoConnectPeers[peer.DeviceId] = true;
+
+        peer.MyEnteredPinVerifiedByRemote = false;
+        peer.RemoteEnteredMyPinVerified = false;
+
+        PeerDisconnected?.Invoke(peer);
+
+        var header = new TcpControlHeader
+        {
+            Type = "DISCONNECT",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform
+        };
+
+        _ = Task.Run(async () =>
+        {
+            await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
+        });
+
+        Log($"[Bağlantı] 🔌 '{peer.DeviceName}' ile olan bağlantı sonlandırıldı.");
+        PeerPairingStatusChanged?.Invoke(peer);
+        PeerDiscoveredOrUpdated?.Invoke(peer);
+        return true;
+    }
+
     public bool RevokeTrustForPeer(PeerDeviceNode peer)
     {
         bool revoked = TrustStore.RevokeTrust(peer.DeviceId);
         peer.IsTrusted = false;
         peer.TrustToken = string.Empty;
+        DisconnectPeer(peer);
         Log($"[Güvenlik] 🗑️ '{peer.DeviceName}' için cihaz güveni kaldırıldı. Artık tekrar 6 haneli kod gerekecektir.");
         PeerDiscoveredOrUpdated?.Invoke(peer);
         PeerPairingStatusChanged?.Invoke(peer);
@@ -502,11 +536,15 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     }
 
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastAutoConnectAttempt = new();
+    private readonly ConcurrentDictionary<string, bool> _suppressedAutoConnectPeers = new();
 
     public async Task<bool> TryAutoReconnectTrustedPeerAsync(PeerDeviceNode peer, string trustToken)
     {
         if (peer.IsMutuallyPaired)
             return true;
+
+        if (_suppressedAutoConnectPeers.ContainsKey(peer.DeviceId))
+            return false;
 
         if (_lastAutoConnectAttempt.TryGetValue(peer.DeviceId, out var lastAttempt) &&
             DateTimeOffset.UtcNow - lastAttempt < TimeSpan.FromSeconds(5))
@@ -1422,6 +1460,22 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         await TcpFrameCodec.WriteFrameAsync(stream, rej, null, 0, ct).ConfigureAwait(false);
                         Log($"[Güvenlik] ⚠️ '{header.SenderName}' ({remoteIp}) geçersiz güven belirteci ile otomatik bağlanmaya çalıştı.");
                     }
+                    break;
+                }
+
+                case "DISCONNECT":
+                {
+                    var peer = _peers.Values.FirstOrDefault(p => p.DeviceId == header.SenderId || p.IpAddress == remoteIp);
+                    if (peer != null)
+                    {
+                        _suppressedAutoConnectPeers[peer.DeviceId] = true;
+                        peer.MyEnteredPinVerifiedByRemote = false;
+                        peer.RemoteEnteredMyPinVerified = false;
+                        PeerDisconnected?.Invoke(peer);
+                        PeerPairingStatusChanged?.Invoke(peer);
+                        PeerDiscoveredOrUpdated?.Invoke(peer);
+                    }
+                    Log($"[Bağlantı] 🔌 '{header.SenderName}' ({remoteIp}) bağlantıyı sonlandırdı.");
                     break;
                 }
 

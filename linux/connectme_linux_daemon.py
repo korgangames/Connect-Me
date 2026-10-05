@@ -36,7 +36,7 @@ import threading
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
@@ -764,6 +764,7 @@ class ConnectMeLinuxNode:
         self.on_peer_discovered: Optional[Callable[[dict], None]] = None
         self.on_peer_updated: Optional[Callable[[dict], None]] = None
         self._last_auto_connect_attempt: Dict[str, float] = {}
+        self.suppressed_autoconnect: Set[str] = set()
 
         self.running = True
         self.last_copied_clipboard = ""
@@ -820,16 +821,63 @@ class ConnectMeLinuxNode:
         except Exception:
             pass
 
+    def disconnect_peer(self, device_id: str) -> bool:
+        """Disconnects an active peer, returns mouse locally if active, suppresses auto-reconnect, and sends TCP DISCONNECT."""
+        peer = self.peers.get(device_id)
+        if not peer:
+            for p in self.peers.values():
+                if p.get("ipAddress") == device_id or p.get("deviceId") == device_id:
+                    peer = p
+                    break
+        if not peer:
+            return False
+
+        dev_id = peer.get("deviceId", device_id)
+        self.suppressed_autoconnect.add(dev_id)
+
+        peer["in_ok"] = False
+        peer["out_ok"] = False
+        peer["isMutuallyPaired"] = False
+
+        if self.active_remote_peer and (self.active_remote_peer.get("deviceId") == dev_id or self.active_remote_peer.get("ipAddress") == peer.get("ipAddress")):
+            self.return_control_to_local(0, 0.5)
+
+        remote_ip = peer.get("ipAddress")
+        tcp_port = peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)
+
+        def _send_disconnect():
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2.5)
+                sock.connect((remote_ip, tcp_port))
+                header = {
+                    "type": "DISCONNECT",
+                    "senderId": self.device_id,
+                    "senderName": self.device_name,
+                    "senderPlatform": "linux-nobara"
+                }
+                self._send_tcp_frame(sock, header)
+                sock.close()
+            except Exception:
+                pass
+
+        if remote_ip:
+            threading.Thread(target=_send_disconnect, daemon=True).start()
+
+        self.log(f"[Bağlantı] 🔌 '{peer.get('deviceName', dev_id)}' ile olan bağlantı sonlandırıldı.")
+        if self.on_peer_updated:
+            try:
+                self.on_peer_updated(peer)
+            except Exception:
+                pass
+        return True
+
     def revoke_trust(self, device_id: str) -> None:
         if device_id in self.trusted_devices:
             del self.trusted_devices[device_id]
             self._save_trusted_devices()
-            if device_id in self.peers:
-                self.peers[device_id]["is_trusted"] = False
-                self.peers[device_id]["in_ok"] = False
-                self.peers[device_id]["out_ok"] = False
-                self.peers[device_id]["isMutuallyPaired"] = False
-            self.log(f"[Güvenlik] 🗑️ '{device_id}' için güvenilirlik kaydı silindi.")
+        self.disconnect_peer(device_id)
+        self.log(f"[Güvenlik] 🗑️ '{device_id}' için güvenilirlik kaydı silindi.")
 
     def fix_uinput_permissions(self) -> Tuple[bool, str]:
         """Attempts to setup uinput permissions via pkexec or sudo."""
@@ -971,7 +1019,7 @@ class ConnectMeLinuxNode:
                 is_trusted = dev_id in self.trusted_devices
                 peer["is_trusted"] = is_trusted
 
-                if is_trusted and not peer.get("isMutuallyPaired", False):
+                if is_trusted and not peer.get("isMutuallyPaired", False) and dev_id not in self.suppressed_autoconnect:
                     threading.Thread(target=self.try_auto_reconnect, args=(peer,), daemon=True).start()
 
                 if is_new:
@@ -995,6 +1043,8 @@ class ConnectMeLinuxNode:
         if peer.get("isMutuallyPaired"):
             return True
         dev_id = peer.get("deviceId", "")
+        if dev_id in self.suppressed_autoconnect:
+            return False
         saved_rec = self.trusted_devices.get(dev_id)
         if not saved_rec or not saved_rec.get("autoConnect", True):
             return False
@@ -1076,6 +1126,8 @@ class ConnectMeLinuxNode:
             if p.get("ipAddress") == ip:
                 dev_id = existing_id
                 break
+
+        self.suppressed_autoconnect.discard(dev_id)
 
         peer = self.peers.setdefault(dev_id, {
             "deviceId": dev_id,
@@ -1226,6 +1278,29 @@ class ConnectMeLinuxNode:
                 norm_pos = float(header.get("normalizedPosition", 0.5))
                 self.log(f"[Kenar Dönüşü] '{header.get('senderName')}' ({remote_ip}) TCP sinyaliyle yerel masaüstüne dönüş yaptı.")
                 self.return_control_to_local(edge, norm_pos)
+
+            elif msg_type == "DISCONNECT":
+                sender_id = header.get("senderId", remote_ip)
+                sender_name = header.get("senderName", remote_ip)
+                self.suppressed_autoconnect.add(sender_id)
+                peer = self.peers.get(sender_id)
+                if not peer:
+                    for p in self.peers.values():
+                        if p.get("ipAddress") == remote_ip:
+                            peer = p
+                            break
+                if peer:
+                    peer["in_ok"] = False
+                    peer["out_ok"] = False
+                    peer["isMutuallyPaired"] = False
+                    if self.active_remote_peer and (self.active_remote_peer.get("deviceId") == peer.get("deviceId") or self.active_remote_peer.get("ipAddress") == remote_ip):
+                        self.return_control_to_local(0, 0.5)
+                    if self.on_peer_updated:
+                        try:
+                            self.on_peer_updated(peer)
+                        except Exception:
+                            pass
+                self.log(f"[Bağlantı] 🔌 '{sender_name}' ({remote_ip}) bağlantıyı sonlandırdı.")
 
             elif msg_type == "CLIPBOARD_TEXT":
                 text = header.get("text", "")

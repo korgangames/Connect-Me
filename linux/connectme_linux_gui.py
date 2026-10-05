@@ -326,6 +326,9 @@ class ConnectMeLinuxGui:
         pair_btn = ttk.Button(act_box, text="🔗 Doğrula ve Bağlan", style="Accent.TButton", command=self._on_pair_click)
         pair_btn.pack(side=tk.RIGHT, padx=6)
 
+        disc_btn = ttk.Button(act_box, text="🔌 Bağlantıyı Kes", style="Danger.TButton", command=self._on_disconnect_click)
+        disc_btn.pack(side=tk.RIGHT, padx=6)
+
         # Kayıtlı Güvenilir Cihazlar
         ttk.Label(tab, text="Kayıtlı Güvenilir Cihazlar (Otomatik Bağlananlar):", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(12, 4))
         self.trusted_list = tk.Listbox(tab, bg="#1E293B", fg="#4ADE80", selectbackground="#0284C7",
@@ -657,6 +660,13 @@ class ConnectMeLinuxGui:
             threading.Thread(target=self._send_pair_request, args=(peer, pin, req_trust, token), daemon=True).start()
             dlg.destroy()
             self._refresh_state()
+
+        if peer.get("isMutuallyPaired"):
+            def _do_disconnect():
+                self.node.disconnect_peer(peer.get("deviceId", ""))
+                dlg.destroy()
+                self._refresh_state()
+            ttk.Button(btn_box, text="🔌 Bağlantıyı Kes", style="Danger.TButton", command=_do_disconnect).pack(side=tk.LEFT, padx=4)
 
         ttk.Button(btn_box, text="🔗 Doğrula ve Bağlan", style="Accent.TButton", command=_do_pair).pack(side=tk.RIGHT, padx=4)
         ttk.Button(btn_box, text="İptal", command=dlg.destroy).pack(side=tk.RIGHT, padx=4)
@@ -1046,7 +1056,42 @@ class ConnectMeLinuxGui:
         self._log(f"'{target_peer.get('deviceName')}' için PIN ({pin}) doğrulanıyor...")
         threading.Thread(target=self._send_pair_request, args=(target_peer, pin, req_trust, token), daemon=True).start()
 
+    def _on_disconnect_click(self):
+        target_peer = None
+        if self.selected_peer_id and self.selected_peer_id in self.node.peers:
+            target_peer = self.node.peers[self.selected_peer_id]
+        else:
+            paired = [p for p in self.node.peers.values() if p.get("isMutuallyPaired")]
+            if len(paired) == 1:
+                target_peer = paired[0]
+            elif len(paired) > 1:
+                sel = self.peer_list.curselection()
+                if sel:
+                    keys = list(self.node.peers.keys())
+                    if sel[0] < len(keys):
+                        target_peer = self.node.peers[keys[sel[0]]]
+                if not target_peer:
+                    messagebox.showinfo("Cihaz Seçin", "Lütfen bağlantısını kesmek istediğiniz cihazı listeden seçin.")
+                    return
+
+        if not target_peer:
+            sel = self.peer_list.curselection()
+            if sel:
+                keys = list(self.node.peers.keys())
+                if sel[0] < len(keys):
+                    target_peer = self.node.peers[keys[sel[0]]]
+
+        if not target_peer:
+            messagebox.showinfo("Cihaz Yok", "Bağlantısı kesilecek aktif bir cihaz seçilmedi.")
+            return
+
+        dev_id = target_peer.get("deviceId", "")
+        self.node.disconnect_peer(dev_id)
+        self.status_lbl.config(text=f"🔌 '{target_peer.get('deviceName')}' ile bağlantı kesildi.", fg="#EF4444")
+        self._refresh_state()
+
     def _send_pair_request(self, peer: dict, pin: str, req_trust: bool, token: str):
+        self.node.suppressed_autoconnect.discard(peer.get("deviceId", ""))
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(5.0)

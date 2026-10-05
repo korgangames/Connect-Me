@@ -82,6 +82,7 @@ public sealed class Win32InputEngine : IDisposable
         _network.RemoteMouseMoveReceived += OnRemoteMouseMoveReceived;
         _network.RemoteMouseButtonReceived += OnRemoteMouseButtonReceived;
         _network.RemoteMouseScrollReceived += OnRemoteMouseScrollReceived;
+        _network.PeerDisconnected += OnPeerDisconnected;
     }
 
     public void StartHooks()
@@ -475,9 +476,18 @@ public sealed class Win32InputEngine : IDisposable
         return res == 1 && sb.Length > 0 ? sb[0] : '\0';
     }
 
+    private void OnPeerDisconnected(PeerDeviceNode peer)
+    {
+        if (ActiveRemotePeer == peer || (peer != null && ActiveRemotePeer?.DeviceId == peer.DeviceId))
+        {
+            ReturnControlToLocal(ScreenEdge.None, 0.5f);
+        }
+    }
+
     public void Dispose()
     {
         StopHooks();
+        _network.PeerDisconnected -= OnPeerDisconnected;
     }
 
     // =========================================================================

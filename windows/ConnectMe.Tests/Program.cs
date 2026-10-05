@@ -617,6 +617,22 @@ public static class Program
             // Verify edge layout was preserved
             AssertTrue(peerBOnA.AssignedEdgeOnLocal == ScreenEdge.Left && Math.Abs(peerBOnA.EdgeOffsetStart - 0.25f) < 0.001f,
                 "Sıfır-PIN: Otomatik bağlanan cihazın ekran konfigürasyonu ve kenar konumu aynen korundu");
+
+            // Test DisconnectPeer
+            bool disconnectedEventFired = false;
+            nodeA.PeerDisconnected += p => { if (p.DeviceId == peerBOnA.DeviceId) disconnectedEventFired = true; };
+
+            bool discResult = nodeA.DisconnectPeer(peerBOnA);
+            AssertTrue(discResult && !peerBOnA.IsMutuallyPaired, "Bağlantıyı Kes: Node A yerel eşleşme durumunu sıfırladı");
+            AssertTrue(disconnectedEventFired, "Bağlantıyı Kes: Node A PeerDisconnected olayını tetikledi");
+
+            // Give TCP DISCONNECT a moment to reach nodeB
+            await Task.Delay(200);
+            AssertTrue(!peerAOnB.IsMutuallyPaired, "Bağlantıyı Kes: Node B TCP DISCONNECT alarak eşleşme durumunu sıfırladı");
+
+            // Verify auto-reconnect is suppressed until user manually reconnects
+            bool suppressedReconnect = await nodeA.TryAutoReconnectTrustedPeerAsync(peerBOnA, peerBOnA.TrustToken);
+            AssertTrue(!suppressedReconnect && !peerBOnA.IsMutuallyPaired, "Bağlantıyı Kes: Otomatik yeniden bağlanma kullanıcı manuel bağlanana kadar engellendi");
         }
         finally
         {
