@@ -299,7 +299,7 @@ class MainActivity : AppCompatActivity() {
                     val disconnectBtn = createStyledButton("🔌 Bağlantıyı Kes (Kopar)", "#DC2626") {
                         val svc = ConnectMeService.instance
                         svc?.disconnectPeer(p)
-                        updateUi()
+                        refreshUiState()
                     }
                     itemCard.addView(disconnectBtn)
                 }
@@ -308,7 +308,7 @@ class MainActivity : AppCompatActivity() {
                     val revokeBtn = createStyledButton("🗑️ Bu Cihazı Unut (Güveni Kaldır)", "#475569") {
                         val svc = ConnectMeService.instance
                         svc?.revokeTrustForDevice(p.deviceId)
-                        updateUi()
+                        refreshUiState()
                     }
                     itemCard.addView(revokeBtn)
                 }

@@ -453,7 +453,7 @@ class ConnectMeService : Service() {
                     }
                     TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {}
         }
 
         log("[Bağlantı] 🔌 '${peer.deviceName}' ile olan bağlantı sonlandırıldı.")
