@@ -34,6 +34,7 @@ public static class Program
         await TestEndToEndMutualSixDigitPinAndLoopbackAsync();
         await TestTrustedDeviceZeroPinAutoReconnectFlowAsync();
         await TestInboundPairingRequestAndEdgeConfigAsync();
+        await TestColonyBeaconAndSinglePinColonyMeshAsync();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -705,6 +706,89 @@ public static class Program
             returnPkt.Value.TargetEntranceEdge == ScreenEdge.Right &&
             Math.Abs(returnPkt.Value.NormalizedPosition - 0.75f) < 0.01f,
             "Kenar Dönüşü (EDGE_RETURN): İkincil Windows bilgisayar imleç dönüş paketini ana bilgisayara başarıyla aktardı");
+
+        try { Directory.Delete(tempShelf, true); } catch { }
+    }
+
+    private static async Task TestColonyBeaconAndSinglePinColonyMeshAsync()
+    {
+        string tempShelf = Path.Combine(Path.GetTempPath(), "ConnectMeColonyTest_" + Guid.NewGuid().ToString("N")[..6]);
+        await using var nodeA = new ConnectMeNetworkNode("win-pc-A", "PC-A", "windows", tempShelf, fixedPin: "111222");
+        await using var nodeB = new ConnectMeNetworkNode("win-pc-B", "PC-B", "windows", tempShelf, fixedPin: "333444");
+        await using var nodeC = new ConnectMeNetworkNode("win-pc-C", "PC-C", "windows", tempShelf, fixedPin: "555666");
+
+        nodeA.Start(discoveryPort: 43149, inputUdpPort: 43150, controlTcpPort: 43151);
+        nodeB.Start(discoveryPort: 43159, inputUdpPort: 43160, controlTcpPort: 43161);
+        nodeC.Start(discoveryPort: 43169, inputUdpPort: 43170, controlTcpPort: 43171);
+
+        var peerBOnA = nodeA.RegisterManualPeer("127.0.0.1", "PC-B", "windows", udpPort: 43160, tcpPort: 43161, customDeviceId: "win-pc-B");
+        var peerAOnB = nodeB.RegisterManualPeer("127.0.0.1", "PC-A", "windows", udpPort: 43150, tcpPort: 43151, customDeviceId: "win-pc-A");
+
+        // 1. Node A and Node B mutually pair with each other
+        await nodeA.SubmitRemotePinForPairingAsync(peerBOnA, "333444", rememberDevice: false);
+        await nodeB.SubmitRemotePinForPairingAsync(peerAOnB, "111222", rememberDevice: false);
+        await nodeA.SubmitRemotePinForPairingAsync(peerBOnA, "333444", rememberDevice: false);
+
+        AssertTrue(peerBOnA.IsMutuallyPaired && peerAOnB.IsMutuallyPaired, "Koloni Hazırlık: Node A ve Node B karşılıklı eşleşti");
+
+        // Verify ColonyId is generated
+        string? colonyIdA = nodeA.GetCurrentColonyId();
+        string? colonyIdB = nodeB.GetCurrentColonyId();
+        AssertTrue(!string.IsNullOrEmpty(colonyIdA) && colonyIdA == colonyIdB, "Koloni Oluşumu: Ortak SHA256 bazlı ColonyId üretildi");
+
+        var membersA = nodeA.GetColonyMembers();
+        AssertTrue(membersA.Count == 2 && membersA.Any(m => m.DeviceId == "win-pc-A") && membersA.Any(m => m.DeviceId == "win-pc-B"),
+            "Koloni Üyeleri: Koloni üye listesi doğru cihazları içeriyor");
+
+        // 2. Node C discovers/registers Node A and connects to the entire colony with only Node A's PIN
+        var peerAOnC = nodeC.RegisterManualPeer("127.0.0.1", "PC-A", "windows", udpPort: 43150, tcpPort: 43151, customDeviceId: "win-pc-A");
+        peerAOnC.ColonyId = colonyIdA;
+        peerAOnC.ColonyMembers = membersA;
+
+        var colonyConnectRes = await nodeC.ConnectToColonyViaPeerAsync(peerAOnC, "111222", rememberDevice: false);
+        AssertTrue(colonyConnectRes.Success, "Koloni Bağlantısı: Node C tek PIN ile koloniye bağlanma isteği gönderdi");
+
+        // Accept connection from C on A
+        var peerCOnA = nodeA.DiscoveredPeers.FirstOrDefault(p => p.DeviceId == "win-pc-C");
+        if (peerCOnA != null)
+        {
+            await nodeA.AcceptInboundPairingAsync(peerCOnA, rememberDevice: false);
+        }
+
+        // Wait briefly for COLONY_INTRODUCE and sync propagation
+        await Task.Delay(300);
+
+        AssertTrue(peerAOnC.IsMutuallyPaired, "Koloni Ağı: Node C ve Node A karşılıklı eşleşti");
+
+        // Node C should have automatically connected to Node B without needing Node B's PIN!
+        var peerBOnC = nodeC.DiscoveredPeers.FirstOrDefault(p => p.DeviceId == "win-pc-B");
+        AssertTrue(peerBOnC != null && peerBOnC.IsMutuallyPaired,
+            "Koloni Otomatik Bağlantı: Node C, Node B'nin şifresini girmeden tek şifre ile Node B'ye bağlandı!");
+
+        // Node B should also have Node C introduced automatically
+        var peerCOnB = nodeB.DiscoveredPeers.FirstOrDefault(p => p.DeviceId == "win-pc-C");
+        AssertTrue(peerCOnB != null && peerCOnB.IsMutuallyPaired,
+            "Koloni Otomatik Tanıtım (COLONY_INTRODUCE): Node B, Node C'yi koloni aracılığıyla otomatik tanıdı ve bağlandı!");
+
+        // 3. 1-Click Fast Inbound Pairing Acceptance
+        await using var nodeD = new ConnectMeNetworkNode("win-pc-D", "PC-D", "windows", tempShelf, fixedPin: "777888");
+        nodeD.Start(discoveryPort: 43179, inputUdpPort: 43180, controlTcpPort: 43181);
+
+        var peerCOnD = nodeD.RegisterManualPeer("127.0.0.1", "PC-C", "windows", udpPort: 43170, tcpPort: 43171, customDeviceId: "win-pc-C");
+        // Node D submits Node C's PIN
+        await nodeD.SubmitRemotePinForPairingAsync(peerCOnD, "555666", rememberDevice: false);
+
+        await Task.Delay(150);
+        var peerDOnC = nodeC.DiscoveredPeers.FirstOrDefault(p => p.DeviceId == "win-pc-D");
+        AssertTrue(peerDOnC != null && peerDOnC.RemoteEnteredMyPinVerified && !peerDOnC.IsMutuallyPaired,
+            "1-Tık Kabul Öncesi: Node C'de gelen bağlantı isteği onay bekliyor durumuna geçti");
+
+        // Node C accepts with 1-click (no need to type Node D's PIN)
+        bool accepted = await nodeC.AcceptInboundPairingAsync(peerDOnC!, rememberDevice: false);
+        await Task.Delay(150);
+
+        AssertTrue(accepted && peerDOnC!.IsMutuallyPaired && peerCOnD.IsMutuallyPaired,
+            "1-Tık Kabul (PAIR_ACCEPT): Tek tıkla kabul butonu karşılıklı bağlantıyı anında tamamladı!");
 
         try { Directory.Delete(tempShelf, true); } catch { }
     }

@@ -53,6 +53,14 @@ data class EdgeHandOffPacket(
     val isDraggingShelfItem: Boolean,
     val normalizedPosition: Float
 )
+data class ColonyMember(
+    val deviceId: String,
+    val deviceName: String,
+    val platform: String,
+    val ipAddress: String,
+    val tcpPort: Int,
+    val udpPort: Int
+)
 
 object WirePacketCodec {
 

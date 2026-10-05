@@ -112,9 +112,9 @@ class MainActivity : AppCompatActivity() {
 
     private val appVersionName: String
         get() = try {
-            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.7.2"
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.7.3"
         } catch (_: Exception) {
-            "1.7.2"
+            "1.7.3"
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -214,10 +214,56 @@ class MainActivity : AppCompatActivity() {
                 selectedPeer = null
             }
 
+            val colonyPeers = peers.filter { !it.colonyId.isNullOrEmpty() || it.colonyMembers.isNotEmpty() }
+            if (colonyPeers.isNotEmpty()) {
+                val sample = colonyPeers.first()
+                val colName = sample.colonyName ?: "Ekosistem Kolonisi"
+                val memberCount = maxOf(sample.colonyMembers.size, colonyPeers.size)
+                val colonyCard = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor("#172554"))
+                        cornerRadius = 16f
+                        setStroke(2, Color.parseColor("#60A5FA"))
+                    }
+                    setPadding(24, 20, 24, 20)
+                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    lp.setMargins(0, 0, 0, 16)
+                    layoutParams = lp
+                }
+
+                val colTitle = TextView(this).apply {
+                    text = "🪐 KOLONİ: $colName ($memberCount Cihaz)"
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.parseColor("#93C5FD"))
+                }
+                colonyCard.addView(colTitle)
+
+                val colDesc = TextView(this).apply {
+                    text = "Bu gruptaki cihazlar birbirine bağlı. Kolonideki tek bir cihazın kodunu girerek tüm sisteme tek seferde bağlanabilirsiniz."
+                    textSize = 11.5f
+                    setTextColor(Color.parseColor("#BFDBFE"))
+                    setPadding(0, 4, 0, 10)
+                }
+                colonyCard.addView(colDesc)
+
+                val unlinkedColonyPeer = colonyPeers.firstOrNull { !it.isMutuallyPaired }
+                if (unlinkedColonyPeer != null) {
+                    val colConnectBtn = createStyledButton("🪐 Koloniye Tek Kod ile Bağlan", "#2563EB") {
+                        showEnterPinForPeerDialog(unlinkedColonyPeer)
+                    }
+                    colonyCard.addView(colConnectBtn)
+                }
+
+                peersContainer.addView(colonyCard)
+            }
+
             for (p in peers) {
                 val isTrusted = svc?.getTrustTokenForDevice(p.deviceId) != null
                 val trustTag = if (isTrusted) "⭐ " else ""
                 val isSelected = selectedPeer?.deviceId == p.deviceId
+                val isColonyMember = !p.colonyId.isNullOrEmpty() || p.colonyMembers.isNotEmpty()
 
                 val itemCard = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
@@ -247,6 +293,23 @@ class MainActivity : AppCompatActivity() {
                 }
                 headerRow.addView(titleTv)
 
+                if (isColonyMember) {
+                    val colBadge = TextView(this).apply {
+                        text = "🪐 KOLONİ"
+                        textSize = 10f
+                        setTextColor(Color.parseColor("#93C5FD"))
+                        background = GradientDrawable().apply {
+                            setColor(Color.parseColor("#1E3A8A"))
+                            cornerRadius = 8f
+                        }
+                        setPadding(12, 4, 12, 4)
+                        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        lp.setMargins(0, 0, 8, 0)
+                        layoutParams = lp
+                    }
+                    headerRow.addView(colBadge)
+                }
+
                 val platBadge = TextView(this).apply {
                     text = p.platform.uppercase()
                     textSize = 10f
@@ -271,13 +334,16 @@ class MainActivity : AppCompatActivity() {
                 val isConnected = p.isMutuallyPaired || p.remoteEnteredMyPinVerified || p.myEnteredPinVerifiedByRemote
                 val stateDesc = when {
                     p.isMutuallyPaired -> "🟢 ÇİFT TARAFLI EŞLEŞTİ (Aktif)"
+                    p.remoteEnteredMyPinVerified && !p.myEnteredPinVerifiedByRemote -> "🔔 GELEN BAĞLANTI İSTEĞİ (Kodunuzu Onayladı - Kabul Edin)"
                     p.remoteEnteredMyPinVerified -> "🟢 BAĞLANDI (Bilgisayar Kodunuzu Onayladı)"
                     p.myEnteredPinVerifiedByRemote -> "🟡 SİZ ONAYLADINIZ (Karşı ekranda $pin kodunu onaylayın)"
                     isTrusted -> "⭐ GÜVENİLİR (Otomatik Bağlanıyor...)"
                     else -> "⚪ Eşleşmedi (6 Haneli Kod Gerekli)"
                 }
                 val stateColor = when {
-                    p.isMutuallyPaired || p.remoteEnteredMyPinVerified -> "#4ADE80"
+                    p.isMutuallyPaired -> "#4ADE80"
+                    p.remoteEnteredMyPinVerified && !p.myEnteredPinVerifiedByRemote -> "#38BDF8"
+                    p.remoteEnteredMyPinVerified -> "#4ADE80"
                     p.myEnteredPinVerifiedByRemote -> "#FBBF24"
                     else -> "#94A3B8"
                 }
@@ -291,6 +357,16 @@ class MainActivity : AppCompatActivity() {
                 }
                 itemCard.addView(statusTv)
 
+                // 1-Click Fast Inbound Pairing Acceptance
+                if (p.remoteEnteredMyPinVerified && !p.myEnteredPinVerifiedByRemote) {
+                    val quickAcceptBtn = createStyledButton("✅ Hemen Kabul Et (1-Tıkla Bağlan)", "#059669") {
+                        val svc = ConnectMeService.instance
+                        svc?.acceptInboundPairing(p, rememberDevice = true)
+                        refreshUiState()
+                    }
+                    itemCard.addView(quickAcceptBtn)
+                }
+
                 if (isConnected) {
                     val disconnectBtn = createStyledButton("🔌 Bağlantıyı Kes (Kopar)", "#DC2626") {
                         val svc = ConnectMeService.instance
@@ -301,8 +377,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (!p.isMutuallyPaired) {
-                    val btnBg = if (p.remoteEnteredMyPinVerified) "#0284C7" else "#2563EB"
-                    val btnText = if (p.remoteEnteredMyPinVerified) "🔐 Çift Taraflı PIN Tamamla" else "🔐 Bu Cihazın 6 Haneli Kodunu Gir"
+                    val btnBg = if (p.remoteEnteredMyPinVerified) "#0284C7" else if (isColonyMember) "#1D4ED8" else "#2563EB"
+                    val btnText = when {
+                        p.remoteEnteredMyPinVerified -> "🔐 PIN Doğrulayarak Tamamla"
+                        isColonyMember -> "🪐 Tüm Koloniye Bağlan (Tek Kod)"
+                        else -> "🔐 Bu Cihazın 6 Haneli Kodunu Gir"
+                    }
                     val pairBtn = createStyledButton(btnText, btnBg) {
                         selectedPeer = p
                         showEnterPinForPeerDialog(p)
@@ -350,6 +430,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showEnterPinForPeerDialog(peer: DiscoveredPcPeer) {
+        val isColony = !peer.colonyId.isNullOrEmpty() || peer.colonyMembers.isNotEmpty()
         val input = EditText(this).apply {
             hint = "6 Haneli Kod (Örn: 123456)"
             inputType = InputType.TYPE_CLASS_NUMBER
@@ -371,15 +452,26 @@ class MainActivity : AppCompatActivity() {
             addView(input)
         }
 
+        val dialogTitle = if (isColony) "🪐 '${peer.deviceName}' Üzerinden Koloniye Bağlan" else "🔐 '${peer.deviceName}' Kodunu Gir"
+        val dialogMsg = if (isColony)
+            "Bu cihazın (${peer.ipAddress}) ekranındaki 6 haneli kodu girerek bu koloniye bağlı TÜM cihazlara tek seferde bağlanabilirsiniz:"
+        else
+            "Bu cihazın (${peer.ipAddress}) ekranında yazan 6 haneli kodu giriniz:"
+
         AlertDialog.Builder(this)
-            .setTitle("🔐 '${peer.deviceName}' Kodunu Gir")
-            .setMessage("Bu cihazın (${peer.ipAddress}) ekranında yazan 6 haneli kodu giriniz:")
+            .setTitle(dialogTitle)
+            .setMessage(dialogMsg)
             .setView(container)
             .setPositiveButton("Doğrula ve Bağlan") { _, _ ->
                 val entered = input.text.toString().trim()
                 if (entered.length == 6 && entered.all { it.isDigit() }) {
-                    ConnectMeService.instance?.submitRemotePinToPeer(peer, entered)
-                    Toast.makeText(this@MainActivity, "'${peer.deviceName}' cihazına kod gönderildi...", Toast.LENGTH_SHORT).show()
+                    if (isColony) {
+                        ConnectMeService.instance?.connectToColonyViaPeer(peer, entered)
+                        Toast.makeText(this@MainActivity, "🪐 '${peer.deviceName}' üzerinden tüm koloniye bağlanılıyor...", Toast.LENGTH_SHORT).show()
+                    } else {
+                        ConnectMeService.instance?.submitRemotePinToPeer(peer, entered)
+                        Toast.makeText(this@MainActivity, "'${peer.deviceName}' cihazına kod gönderildi...", Toast.LENGTH_SHORT).show()
+                    }
                     refreshUiState()
                 } else {
                     Toast.makeText(this@MainActivity, "Hata: Kod tam olarak 6 haneli rakam olmalıdır!", Toast.LENGTH_LONG).show()

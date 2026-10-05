@@ -47,6 +47,8 @@ import java.util.HashSet
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
+import com.korgangames.connectme.protocol.ColonyMember
+
 data class DiscoveredPcPeer(
     val deviceId: String,
     var deviceName: String,
@@ -56,6 +58,9 @@ data class DiscoveredPcPeer(
     var tcpControlPort: Int,
     var myEnteredPinVerifiedByRemote: Boolean = false,
     var remoteEnteredMyPinVerified: Boolean = false,
+    var colonyId: String? = null,
+    var colonyName: String? = null,
+    var colonyMembers: MutableList<ColonyMember> = mutableListOf(),
     var lastSeenMs: Long = System.currentTimeMillis()
 ) {
     val isMutuallyPaired: Boolean
@@ -418,6 +423,26 @@ class ConnectMeService : Service() {
                     if (resp.first.optBoolean("isMutualComplete", false)) {
                         peer.remoteEnteredMyPinVerified = true
                     }
+                    val respColId = resp.first.optString("colonyId", "").takeIf { it.isNotEmpty() }
+                    if (respColId != null) peer.colonyId = respColId
+                    val respColMembers = resp.first.optJSONArray("colonyMembers")
+                    if (respColMembers != null) {
+                        val membersList = mutableListOf<ColonyMember>()
+                        for (i in 0 until respColMembers.length()) {
+                            val mo = respColMembers.getJSONObject(i)
+                            membersList.add(
+                                ColonyMember(
+                                    deviceId = mo.optString("deviceId"),
+                                    deviceName = mo.optString("deviceName"),
+                                    platform = mo.optString("platform", "windows"),
+                                    ipAddress = mo.optString("ipAddress"),
+                                    tcpPort = mo.optInt("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT),
+                                    udpPort = mo.optInt("udpInputPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                                )
+                            )
+                        }
+                        if (membersList.isNotEmpty()) peer.colonyMembers = membersList
+                    }
                     try {
                         activePcAddress = InetAddress.getByName(peer.ipAddress)
                     } catch (_: Exception) {}
@@ -425,6 +450,7 @@ class ConnectMeService : Service() {
                     activePcTcpPort = peer.tcpControlPort
 
                     if (peer.isMutuallyPaired) {
+                        introduceNewMemberToColony(peer)
                         log("[Çift Taraflı Eşleşme] ✅ '${peer.deviceName}' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!")
                     } else {
                         log("[PIN Doğrulama] ✅ '${peer.deviceName}' kodu doğrulandı! Şimdi karşı cihazda da sizin kodunuzu ($localPairingPin) girin.")
@@ -467,9 +493,206 @@ class ConnectMeService : Service() {
         onStateUpdated?.invoke()
     }
 
+    fun acceptInboundPairing(peer: DiscoveredPcPeer, rememberDevice: Boolean = true) {
+        peer.myEnteredPinVerifiedByRemote = true
+        peer.remoteEnteredMyPinVerified = true
+        val token = if (rememberDevice) UUID.randomUUID().toString() else null
+        if (token != null) {
+            saveTrustTokenForDevice(peer.deviceId, token)
+        }
+
+        scope.launch {
+            try {
+                Socket().use { sock ->
+                    sock.connect(InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 4000)
+                    val header = JSONObject().apply {
+                        put("type", "PAIR_ACCEPT")
+                        put("senderId", localDeviceId)
+                        put("senderName", localDeviceName)
+                        put("senderPlatform", "android")
+                        put("senderUdpPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                        put("senderTcpPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
+                        val colId = getCurrentColonyId()
+                        if (colId != null) {
+                            put("colonyId", colId)
+                            val arr = org.json.JSONArray()
+                            getColonyMembers().forEach { m ->
+                                arr.put(JSONObject().apply {
+                                    put("deviceId", m.deviceId)
+                                    put("deviceName", m.deviceName)
+                                    put("platform", m.platform)
+                                    put("ipAddress", m.ipAddress)
+                                    put("tcpControlPort", m.tcpPort)
+                                    put("udpInputPort", m.udpPort)
+                                })
+                            }
+                            put("colonyMembers", arr)
+                        }
+                        if (rememberDevice && token != null) {
+                            put("requestTrust", true)
+                            put("trustToken", token)
+                        }
+                        put("isMutualComplete", true)
+                    }
+                    TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
+                }
+            } catch (e: Exception) {
+                log("[Bağlantı Uyarı] PAIR_ACCEPT iletimi: ${e.message}")
+            }
+
+            introduceNewMemberToColony(peer)
+            log("[Çift Taraflı Eşleşme] ✅ '${peer.deviceName}' bağlantı isteği onaylandı ve karşılıklı eşleşme sağlandı!")
+            onStateUpdated?.invoke()
+        }
+    }
+
+    fun connectToColonyViaPeer(colonyPeer: DiscoveredPcPeer, pin: String) {
+        scope.launch {
+            val cleanPin = pin.trim().replace(" ", "").replace("-", "")
+            submitRemotePinToPeerInternal(colonyPeer, cleanPin)
+            if (colonyPeer.myEnteredPinVerifiedByRemote && colonyPeer.colonyMembers.isNotEmpty()) {
+                for (m in colonyPeer.colonyMembers) {
+                    if (m.deviceId == localDeviceId || m.deviceId == colonyPeer.deviceId) continue
+                    var p = discoveredPeers.find { it.deviceId == m.deviceId || it.ipAddress == m.ipAddress }
+                    if (p == null) {
+                        p = DiscoveredPcPeer(
+                            deviceId = m.deviceId,
+                            deviceName = m.deviceName,
+                            platform = m.platform,
+                            ipAddress = m.ipAddress,
+                            udpInputPort = m.udpPort,
+                            tcpControlPort = m.tcpPort,
+                            myEnteredPinVerifiedByRemote = true,
+                            remoteEnteredMyPinVerified = true,
+                            colonyId = colonyPeer.colonyId
+                        )
+                        discoveredPeers.add(0, p)
+                    } else {
+                        p.deviceName = m.deviceName
+                        p.platform = m.platform
+                        p.ipAddress = m.ipAddress
+                        p.udpInputPort = m.udpPort
+                        p.tcpControlPort = m.tcpPort
+                        p.myEnteredPinVerifiedByRemote = true
+                        p.remoteEnteredMyPinVerified = true
+                        p.colonyId = colonyPeer.colonyId
+                    }
+                }
+                log("[Koloni] 🪐 '${colonyPeer.deviceName}' üzerinden tüm koloniye (${colonyPeer.colonyMembers.size} cihaz) tek PIN ile bağlanıldı!")
+                onStateUpdated?.invoke()
+            }
+        }
+    }
+
+    fun getCurrentColonyId(): String? {
+        val paired = discoveredPeers.filter { it.isMutuallyPaired }
+        if (paired.isEmpty()) return null
+        val allIds = (paired.map { it.deviceId } + localDeviceId).sorted()
+        val combined = allIds.joinToString("|")
+        return try {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(combined.toByteArray(StandardCharsets.UTF_8))
+            val hex = digest.joinToString("") { "%02x".format(it) }
+            "colony-${hex.take(12)}"
+        } catch (_: Exception) {
+            "colony-${combined.hashCode().toUInt().toString(16)}"
+        }
+    }
+
+    fun getColonyMembers(): List<ColonyMember> {
+        val list = mutableListOf(
+            ColonyMember(
+                deviceId = localDeviceId,
+                deviceName = localDeviceName,
+                platform = "android",
+                ipAddress = getLocalIpv4Address(),
+                tcpPort = ProtocolConstants.DATA_CONTROL_TCP_PORT,
+                udpPort = ProtocolConstants.FAST_INPUT_UDP_PORT
+            )
+        )
+        for (p in discoveredPeers.filter { it.isMutuallyPaired }) {
+            list.add(
+                ColonyMember(
+                    deviceId = p.deviceId,
+                    deviceName = p.deviceName,
+                    platform = p.platform,
+                    ipAddress = p.ipAddress,
+                    tcpPort = p.tcpControlPort,
+                    udpPort = p.udpInputPort
+                )
+            )
+        }
+        return list
+    }
+
+    fun introduceNewMemberToColony(newMember: DiscoveredPcPeer) {
+        scope.launch {
+            val otherPaired = discoveredPeers.filter { it.isMutuallyPaired && it.deviceId != newMember.deviceId }
+            if (otherPaired.isEmpty()) return@launch
+
+            val colId = getCurrentColonyId()
+            val allMembers = getColonyMembers()
+            val membersArray = org.json.JSONArray().apply {
+                allMembers.forEach { m ->
+                    put(JSONObject().apply {
+                        put("deviceId", m.deviceId)
+                        put("deviceName", m.deviceName)
+                        put("platform", m.platform)
+                        put("ipAddress", m.ipAddress)
+                        put("tcpControlPort", m.tcpPort)
+                        put("udpInputPort", m.udpPort)
+                    })
+                }
+            }
+            val newMemberObj = JSONObject().apply {
+                put("deviceId", newMember.deviceId)
+                put("deviceName", newMember.deviceName)
+                put("platform", newMember.platform)
+                put("ipAddress", newMember.ipAddress)
+                put("tcpControlPort", newMember.tcpControlPort)
+                put("udpInputPort", newMember.udpInputPort)
+            }
+
+            for (existingPeer in otherPaired) {
+                try {
+                    Socket().use { sock ->
+                        sock.connect(InetSocketAddress(existingPeer.ipAddress, existingPeer.tcpControlPort), 3000)
+                        val header = JSONObject().apply {
+                            put("type", "COLONY_INTRODUCE")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                            if (colId != null) put("colonyId", colId)
+                            put("colonyMembers", membersArray)
+                            put("newMember", newMemberObj)
+                        }
+                        TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
+                    }
+                } catch (_: Exception) {}
+            }
+
+            try {
+                Socket().use { sock ->
+                    sock.connect(InetSocketAddress(newMember.ipAddress, newMember.tcpControlPort), 3000)
+                    val header = JSONObject().apply {
+                        put("type", "COLONY_MEMBERS_SYNC")
+                        put("senderId", localDeviceId)
+                        put("senderName", localDeviceName)
+                        if (colId != null) put("colonyId", colId)
+                        put("colonyMembers", membersArray)
+                    }
+                    TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
+                }
+            } catch (_: Exception) {}
+
+            log("[Koloni] 🪐 '${newMember.deviceName}' tüm koloni üyelerine (${otherPaired.size} cihaz) başarıyla tanıtıldı!")
+        }
+    }
+
     private fun sendDiscoveryBeacon(sock: DatagramSocket, targetAddr: InetAddress) {
         try {
             val cursorSvc = CursorAccessibilityService.instance
+            val colId = getCurrentColonyId()
+            val colMembers = if (colId != null) getColonyMembers() else emptyList()
             val json = JSONObject().apply {
                 put("type", "DISCOVER_BEACON")
                 put("deviceId", localDeviceId)
@@ -479,6 +702,21 @@ class ConnectMeService : Service() {
                 put("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
                 put("screenWidth", cursorSvc?.screenWidth ?: 1080)
                 put("screenHeight", cursorSvc?.screenHeight ?: 2400)
+                if (colId != null) {
+                    put("colonyId", colId)
+                    val arr = org.json.JSONArray()
+                    colMembers.forEach { m ->
+                        arr.put(JSONObject().apply {
+                            put("deviceId", m.deviceId)
+                            put("deviceName", m.deviceName)
+                            put("platform", m.platform)
+                            put("ipAddress", m.ipAddress)
+                            put("tcpControlPort", m.tcpPort)
+                            put("udpInputPort", m.udpPort)
+                        })
+                    }
+                    put("colonyMembers", arr)
+                }
                 put("timestamp", System.currentTimeMillis())
             }
             val bytes = json.toString().toByteArray(StandardCharsets.UTF_8)
@@ -505,6 +743,26 @@ class ConnectMeService : Service() {
                 val udpPort = json.optInt("udpInputPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
                 val tcpPort = json.optInt("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
 
+                val colId = json.optString("colonyId", "").takeIf { it.isNotEmpty() }
+                val colName = json.optString("colonyName", "").takeIf { it.isNotEmpty() }
+                val membersArray = json.optJSONArray("colonyMembers")
+                val membersList = mutableListOf<ColonyMember>()
+                if (membersArray != null) {
+                    for (i in 0 until membersArray.length()) {
+                        val mo = membersArray.getJSONObject(i)
+                        membersList.add(
+                            ColonyMember(
+                                deviceId = mo.optString("deviceId"),
+                                deviceName = mo.optString("deviceName"),
+                                platform = mo.optString("platform", "windows"),
+                                ipAddress = mo.optString("ipAddress"),
+                                tcpPort = mo.optInt("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT),
+                                udpPort = mo.optInt("udpInputPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                            )
+                        )
+                    }
+                }
+
                 val existing = discoveredPeers.find { it.deviceId == deviceId || it.ipAddress == senderIp }
                 val savedToken = getTrustTokenForDevice(deviceId)
                 if (existing != null) {
@@ -513,12 +771,19 @@ class ConnectMeService : Service() {
                     existing.ipAddress = senderIp
                     existing.udpInputPort = udpPort
                     existing.tcpControlPort = tcpPort
+                    if (colId != null) existing.colonyId = colId
+                    if (colName != null) existing.colonyName = colName
+                    if (membersList.isNotEmpty()) existing.colonyMembers = membersList
                     existing.lastSeenMs = System.currentTimeMillis()
                     if (savedToken != null && !existing.isMutuallyPaired && !suppressedAutoConnectDeviceIds.contains(deviceId)) {
                         triggerTrustedReconnect(existing, savedToken)
                     }
                 } else {
-                    val peer = DiscoveredPcPeer(deviceId, deviceName, platform, senderIp, udpPort, tcpPort)
+                    val peer = DiscoveredPcPeer(deviceId, deviceName, platform, senderIp, udpPort, tcpPort).apply {
+                        this.colonyId = colId
+                        this.colonyName = colName
+                        if (membersList.isNotEmpty()) this.colonyMembers = membersList
+                    }
                     discoveredPeers.add(0, peer)
                     val trustMsg = if (savedToken != null) " [⭐ Güvenilir - Otomatik Bağlanıyor...]" else " — Çift taraflı 6 haneli PIN ile eşleşebilirsiniz."
                     log("[Keşif] Cihaz bulundu: $deviceName ($senderIp)$trustMsg")
@@ -804,6 +1069,22 @@ class ConnectMeService : Service() {
                             put("type", "PAIR_VERIFY_ACK")
                             put("senderId", localDeviceId)
                             put("senderName", localDeviceName)
+                            val colId = getCurrentColonyId()
+                            if (colId != null) {
+                                put("colonyId", colId)
+                                val arr = org.json.JSONArray()
+                                getColonyMembers().forEach { m ->
+                                    arr.put(JSONObject().apply {
+                                        put("deviceId", m.deviceId)
+                                        put("deviceName", m.deviceName)
+                                        put("platform", m.platform)
+                                        put("ipAddress", m.ipAddress)
+                                        put("tcpControlPort", m.tcpPort)
+                                        put("udpInputPort", m.udpPort)
+                                    })
+                                }
+                                put("colonyMembers", arr)
+                            }
                             if (reqTrust && trustToken.isNotEmpty()) {
                                 put("trustToken", trustToken)
                                 put("requestTrust", true)
@@ -814,9 +1095,10 @@ class ConnectMeService : Service() {
 
                         val trustTag = if (reqTrust) " (⭐ Cihaz hatırlandı)" else ""
                         if (peer.isMutuallyPaired) {
+                            introduceNewMemberToColony(peer)
                             log("[Çift Taraflı Eşleşme] ✅ '$senderName' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!$trustTag")
                         } else {
-                            log("[PIN İsteği] 🔔 '$senderName' sizin kodunuzu ($localPairingPin) doğruladı!$trustTag Bağlantıyı tamamlamak için siz de onun 6 haneli kodunu girin.")
+                            log("[PIN İsteği] 🔔 '$senderName' sizin kodunuzu ($localPairingPin) doğruladı!$trustTag Bağlantıyı tamamlamak için siz de onun 6 haneli kodunu girin veya 'Kabul Et'e basın.")
                         }
                     } else {
                         val rej = JSONObject().apply {
@@ -828,6 +1110,178 @@ class ConnectMeService : Service() {
                         log("[Güvenlik] ⚠️ '$senderName' hatalı 6 haneli kod denedi (Girilen: $submittedPin, Beklenen: $localPairingPin).")
                     }
                     onStateUpdated?.invoke()
+                }
+
+                "PAIR_ACCEPT" -> {
+                    val udpPort = header.optInt("senderUdpPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                    val tcpPort = header.optInt("senderTcpPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
+                    val platform = header.optString("senderPlatform", "windows")
+                    val reqTrust = header.optBoolean("requestTrust", false)
+                    val trustToken = header.optString("trustToken", "")
+
+                    val peer = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
+                        ?: DiscoveredPcPeer(
+                            deviceId = if (senderId.isNotEmpty()) senderId else "peer-$remoteIp",
+                            deviceName = senderName,
+                            platform = platform,
+                            ipAddress = remoteIp,
+                            udpInputPort = udpPort,
+                            tcpControlPort = tcpPort
+                        ).also { discoveredPeers.add(0, it) }
+
+                    peer.deviceName = senderName
+                    peer.ipAddress = remoteIp
+                    peer.udpInputPort = udpPort
+                    peer.tcpControlPort = tcpPort
+                    peer.myEnteredPinVerifiedByRemote = true
+                    peer.remoteEnteredMyPinVerified = true
+                    activePcAddress = sock.inetAddress
+                    activePcUdpPort = udpPort
+                    activePcTcpPort = tcpPort
+
+                    val colId = header.optString("colonyId", "").takeIf { it.isNotEmpty() }
+                    if (colId != null) peer.colonyId = colId
+                    val membersArray = header.optJSONArray("colonyMembers")
+                    if (membersArray != null) {
+                        val membersList = mutableListOf<ColonyMember>()
+                        for (i in 0 until membersArray.length()) {
+                            val mo = membersArray.getJSONObject(i)
+                            membersList.add(ColonyMember(
+                                deviceId = mo.optString("deviceId"),
+                                deviceName = mo.optString("deviceName"),
+                                platform = mo.optString("platform", "windows"),
+                                ipAddress = mo.optString("ipAddress"),
+                                tcpPort = mo.optInt("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT),
+                                udpPort = mo.optInt("udpInputPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                            ))
+                        }
+                        if (membersList.isNotEmpty()) peer.colonyMembers = membersList
+                    }
+
+                    if (reqTrust && trustToken.isNotEmpty()) {
+                        saveTrustTokenForDevice(peer.deviceId, trustToken)
+                    }
+
+                    val ack = JSONObject().apply {
+                        put("type", "PAIR_ACCEPT_ACK")
+                        put("senderId", localDeviceId)
+                        put("senderName", localDeviceName)
+                        val cId = getCurrentColonyId()
+                        if (cId != null) {
+                            put("colonyId", cId)
+                            val arr = org.json.JSONArray()
+                            getColonyMembers().forEach { m ->
+                                arr.put(JSONObject().apply {
+                                    put("deviceId", m.deviceId)
+                                    put("deviceName", m.deviceName)
+                                    put("platform", m.platform)
+                                    put("ipAddress", m.ipAddress)
+                                    put("tcpControlPort", m.tcpPort)
+                                    put("udpInputPort", m.udpPort)
+                                })
+                            }
+                            put("colonyMembers", arr)
+                        }
+                        put("isMutualComplete", true)
+                    }
+                    TcpFrameCodec.writeFrame(output, ack)
+
+                    log("[Çift Taraflı Eşleşme] ✅ '$senderName' ($remoteIp) doğrudan kabul ile eşleşti!")
+                    introduceNewMemberToColony(peer)
+                    onStateUpdated?.invoke()
+                }
+
+                "COLONY_INTRODUCE" -> {
+                    val nm = header.optJSONObject("newMember")
+                    if (nm != null) {
+                        val nmId = nm.optString("deviceId", "")
+                        if (nmId.isNotEmpty() && nmId != localDeviceId) {
+                            val nmName = nm.optString("deviceName", "Cihaz")
+                            val nmPlatform = nm.optString("platform", "windows")
+                            val nmIp = nm.optString("ipAddress", remoteIp)
+                            val nmUdp = nm.optInt("udpInputPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                            val nmTcp = nm.optInt("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
+                            val colId = header.optString("colonyId", "").takeIf { it.isNotEmpty() }
+
+                            var peer = discoveredPeers.find { it.deviceId == nmId || it.ipAddress == nmIp }
+                            if (peer == null) {
+                                peer = DiscoveredPcPeer(
+                                    deviceId = nmId,
+                                    deviceName = nmName,
+                                    platform = nmPlatform,
+                                    ipAddress = nmIp,
+                                    udpInputPort = nmUdp,
+                                    tcpControlPort = nmTcp,
+                                    myEnteredPinVerifiedByRemote = true,
+                                    remoteEnteredMyPinVerified = true,
+                                    colonyId = colId
+                                )
+                                discoveredPeers.add(0, peer)
+                            } else {
+                                peer.deviceName = nmName
+                                peer.platform = nmPlatform
+                                peer.ipAddress = nmIp
+                                peer.udpInputPort = nmUdp
+                                peer.tcpControlPort = nmTcp
+                                peer.myEnteredPinVerifiedByRemote = true
+                                peer.remoteEnteredMyPinVerified = true
+                                peer.colonyId = colId
+                            }
+                            log("[Koloni Eşleşmesi] 🪐 '$senderName' yeni koloni üyesi '$nmName' ($nmIp) tanıttı ve otomatik bağlandı!")
+                            onStateUpdated?.invoke()
+                        }
+                    }
+                }
+
+                "COLONY_MEMBERS_SYNC" -> {
+                    val colId = header.optString("colonyId", "").takeIf { it.isNotEmpty() }
+                    val membersArray = header.optJSONArray("colonyMembers")
+                    if (membersArray != null) {
+                        for (i in 0 until membersArray.length()) {
+                            val mo = membersArray.getJSONObject(i)
+                            val mId = mo.optString("deviceId", "")
+                            if (mId.isEmpty() || mId == localDeviceId) continue
+                            val mName = mo.optString("deviceName", "Cihaz")
+                            val mPlatform = mo.optString("platform", "windows")
+                            val mIp = mo.optString("ipAddress", "")
+                            val mUdp = mo.optInt("udpInputPort", ProtocolConstants.FAST_INPUT_UDP_PORT)
+                            val mTcp = mo.optInt("tcpControlPort", ProtocolConstants.DATA_CONTROL_TCP_PORT)
+
+                            var peer = discoveredPeers.find { it.deviceId == mId || (mIp.isNotEmpty() && it.ipAddress == mIp) }
+                            if (peer == null) {
+                                peer = DiscoveredPcPeer(
+                                    deviceId = mId,
+                                    deviceName = mName,
+                                    platform = mPlatform,
+                                    ipAddress = mIp,
+                                    udpInputPort = mUdp,
+                                    tcpControlPort = mTcp,
+                                    myEnteredPinVerifiedByRemote = true,
+                                    remoteEnteredMyPinVerified = true,
+                                    colonyId = colId
+                                )
+                                discoveredPeers.add(0, peer)
+                            } else {
+                                peer.deviceName = mName
+                                peer.platform = mPlatform
+                                if (mIp.isNotEmpty()) peer.ipAddress = mIp
+                                peer.udpInputPort = mUdp
+                                peer.tcpControlPort = mTcp
+                                peer.myEnteredPinVerifiedByRemote = true
+                                peer.remoteEnteredMyPinVerified = true
+                                peer.colonyId = colId
+                            }
+                        }
+                        log("[Koloni Eşleşmesi] 🪐 '$senderName' üzerinden ${membersArray.length()} cihazlık koloni ağına dahil olundu!")
+                        onStateUpdated?.invoke()
+                    }
+                }
+
+                "EDGE_HANDOFF" -> {
+                    val edge = header.optInt("returnEdge", ProtocolConstants.EDGE_NONE.toInt()).toByte()
+                    val normPos = header.optDouble("normalizedPosition", 0.5).toFloat()
+                    CursorAccessibilityService.instance?.onEdgeHandOffEnter(edge, normPos)
+                    log("[Kenar Geçişi TCP] İmleç Android ekranına TCP üzerinden girdi (Kenar: $edge, %${(normPos * 100).toInt()}).")
                 }
 
                 "TRUSTED_RECONNECT" -> {

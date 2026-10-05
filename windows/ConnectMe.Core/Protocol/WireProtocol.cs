@@ -366,8 +366,44 @@ public sealed class DiscoveryBeacon
     [JsonPropertyName("monitors")]
     public List<PhysicalMonitorDescriptor>? Monitors { get; set; }
 
+    [JsonPropertyName("colonyId")]
+    public string? ColonyId { get; set; }
+
+    [JsonPropertyName("colonyName")]
+    public string? ColonyName { get; set; }
+
+    [JsonPropertyName("colonyMembers")]
+    public List<ColonyMemberDescriptor>? ColonyMembers { get; set; }
+
     [JsonPropertyName("timestamp")]
     public long Timestamp { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+}
+
+public sealed class ColonyMemberDescriptor
+{
+    [JsonPropertyName("deviceId")]
+    public string DeviceId { get; set; } = string.Empty;
+
+    [JsonPropertyName("deviceName")]
+    public string DeviceName { get; set; } = string.Empty;
+
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = "windows";
+
+    [JsonPropertyName("ipAddress")]
+    public string IpAddress { get; set; } = string.Empty;
+
+    [JsonPropertyName("tcpControlPort")]
+    public int TcpControlPort { get; set; } = ProtocolConstants.DataControlTcpPort;
+
+    [JsonPropertyName("udpInputPort")]
+    public int UdpInputPort { get; set; } = ProtocolConstants.FastInputUdpPort;
+
+    [JsonPropertyName("screenWidth")]
+    public int ScreenWidth { get; set; } = 1920;
+
+    [JsonPropertyName("screenHeight")]
+    public int ScreenHeight { get; set; } = 1080;
 }
 
 /// <summary>
@@ -381,9 +417,14 @@ public sealed class TcpControlHeader
     // Supported types:
     // - "PAIR_REQUEST": Sender submits TargetPin (the receiver's 6-digit PIN) to verify sender -> receiver
     // - "PAIR_VERIFY_ACK": Receiver confirms TargetPin matched receiver's LocalPin (and includes whether mutual pairing is now complete)
+    // - "PAIR_ACCEPT": Direct 1-click confirmation by host when remote has entered PIN (no manual code entry required)
+    // - "PAIR_ACCEPT_ACK": Receiver acknowledges direct 1-click pair confirmation
     // - "PAIR_REJECT": Receiver rejects wrong 6-digit PIN
     // - "TRUSTED_RECONNECT": Sender uses pre-shared persistent trustToken to auto-connect without 6-digit PIN
     // - "TRUSTED_RECONNECT_ACK": Receiver confirms valid trustToken and completes auto-pairing
+    // - "COLONY_INTRODUCE": A connected peer introduces a new member to the colony mesh
+    // - "COLONY_MEMBERS_SYNC": Syncs all members of a colony
+    // - "EDGE_HANDOFF": Reliable TCP fallback for mouse edge transition
     // - "TOPOLOGY_SYNC": Sender broadcasts its updated multi-monitor layout (SenderMonitors)
     // - "CLIPBOARD_TEXT": Universal clipboard text sync
     // - "CLIPBOARD_IMAGE": Universal clipboard PNG sync
@@ -424,6 +465,18 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("isMutualComplete")]
     public bool? IsMutualComplete { get; set; }
+
+    [JsonPropertyName("colonyId")]
+    public string? ColonyId { get; set; }
+
+    [JsonPropertyName("colonyName")]
+    public string? ColonyName { get; set; }
+
+    [JsonPropertyName("colonyMembers")]
+    public List<ColonyMemberDescriptor>? ColonyMembers { get; set; }
+
+    [JsonPropertyName("newMember")]
+    public ColonyMemberDescriptor? NewMember { get; set; }
 
     [JsonPropertyName("text")]
     public string? Text { get; set; }

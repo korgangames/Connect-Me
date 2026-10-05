@@ -35,6 +35,11 @@ public sealed class PeerDeviceNode
     public string TrustToken { get; set; } = string.Empty;
     public string? PendingTrustToken { get; set; }
 
+    // Colony / Mesh Group State
+    public string? ColonyId { get; set; }
+    public string? ColonyName { get; set; }
+    public List<ColonyMemberDescriptor> ColonyMembers { get; set; } = new();
+
     public PeerPairingState PairingState => (MyEnteredPinVerifiedByRemote, RemoteEnteredMyPinVerified) switch
     {
         (true, true) => PeerPairingState.MutuallyPaired,
