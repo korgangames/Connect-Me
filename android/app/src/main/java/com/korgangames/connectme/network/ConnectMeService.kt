@@ -418,11 +418,18 @@ class ConnectMeService : Service() {
                     if (resp.first.optBoolean("isMutualComplete", false)) {
                         peer.remoteEnteredMyPinVerified = true
                     }
+                    try {
+                        activePcAddress = InetAddress.getByName(peer.ipAddress)
+                    } catch (_: Exception) {}
+                    activePcUdpPort = peer.udpInputPort
+                    activePcTcpPort = peer.tcpControlPort
+
                     if (peer.isMutuallyPaired) {
                         log("[Çift Taraflı Eşleşme] ✅ '${peer.deviceName}' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!")
                     } else {
                         log("[PIN Doğrulama] ✅ '${peer.deviceName}' kodu doğrulandı! Şimdi karşı cihazda da sizin kodunuzu ($localPairingPin) girin.")
                     }
+                    onStateUpdated?.invoke()
                 } else {
                     log("[PIN Red] ❌ '${peer.deviceName}' girdiğiniz 6 haneli kodu ($cleanPin) reddetti.")
                 }
@@ -537,7 +544,7 @@ class ConnectMeService : Service() {
 
                 val senderIp = pkt.address.hostAddress ?: continue
                 val senderPeer = discoveredPeers.find { it.ipAddress == senderIp }
-                if (senderPeer != null && !senderPeer.isMutuallyPaired) {
+                if (senderPeer != null && !senderPeer.isMutuallyPaired && !senderPeer.remoteEnteredMyPinVerified) {
                     // Reject input from unverified peers
                     continue
                 }
@@ -593,6 +600,7 @@ class ConnectMeService : Service() {
     fun sendEdgeHandOffBackToPeer(windowsEntranceEdge: Byte, normalizedPos: Float) {
         scope.launch(Dispatchers.IO) {
             val pairedPeer = discoveredPeers.firstOrNull { it.isMutuallyPaired }
+                ?: discoveredPeers.firstOrNull { it.remoteEnteredMyPinVerified || it.myEnteredPinVerifiedByRemote }
             val targetAddr = activePcAddress
                 ?: (if (pairedPeer != null) {
                     try { InetAddress.getByName(pairedPeer.ipAddress) } catch (_: Exception) { null }
@@ -676,9 +684,9 @@ class ConnectMeService : Service() {
     fun sendClipboardTextToPc(text: String) {
         if (text.isBlank()) return
         scope.launch {
-            val pairedTargets = discoveredPeers.filter { it.isMutuallyPaired }
+            val pairedTargets = discoveredPeers.filter { it.isMutuallyPaired || it.remoteEnteredMyPinVerified || it.myEnteredPinVerifiedByRemote }
             if (pairedTargets.isEmpty()) {
-                log("[Uyarı] Pano göndermek için önce en az bir cihazla çift taraflı 6 haneli PIN onayını tamamlayın.")
+                log("[Uyarı] Pano göndermek için önce en az bir cihazla 6 haneli PIN onayını tamamlayın.")
                 return@launch
             }
 
@@ -703,9 +711,11 @@ class ConnectMeService : Service() {
 
     fun sendStreamToPcShelf(fileName: String, inputStream: InputStream, fileSize: Long) {
         scope.launch {
-            val targetPeer = discoveredPeers.firstOrNull { it.isMutuallyPaired } ?: discoveredPeers.firstOrNull()
-            if (targetPeer == null || !targetPeer.isMutuallyPaired) {
-                log("[Uyarı] Dosya göndermek için önce çift taraflı 6 haneli PIN onayını tamamlayın.")
+            val targetPeer = discoveredPeers.firstOrNull { it.isMutuallyPaired }
+                ?: discoveredPeers.firstOrNull { it.remoteEnteredMyPinVerified || it.myEnteredPinVerifiedByRemote }
+                ?: discoveredPeers.firstOrNull()
+            if (targetPeer == null || (!targetPeer.isMutuallyPaired && !targetPeer.remoteEnteredMyPinVerified && !targetPeer.myEnteredPinVerifiedByRemote)) {
+                log("[Uyarı] Dosya göndermek için önce cihazla 6 haneli PIN onayını tamamlayın.")
                 return@launch
             }
 

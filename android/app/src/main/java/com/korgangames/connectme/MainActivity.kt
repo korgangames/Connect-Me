@@ -62,19 +62,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var updateActionBtn: Button
     private lateinit var checkUpdateBtn: Button
 
+    private var pendingAudioTarget: DiscoveredPcPeer? = null
+
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        val targetPc = pendingAudioTarget ?: resolveTargetPc()
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val projection = mediaProjectionManager.getMediaProjection(result.resultCode, result.data!!)
-            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired && it.platform.contains("win", ignoreCase = true) }
-                ?: ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
-            if (pairedPc != null) {
+            if (targetPc != null) {
                 AudioStreamService.activeProjection = projection
                 val intent = Intent(this, AudioStreamService::class.java).apply {
                     action = AudioStreamService.ACTION_START_AUDIO
-                    putExtra("hostIp", pairedPc.ipAddress)
+                    putExtra("hostIp", targetPc.ipAddress)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     startForegroundService(intent)
@@ -82,15 +83,17 @@ class MainActivity : AppCompatActivity() {
                     startService(intent)
                 }
                 updateAudioUi()
-                Toast.makeText(this, "🎧 Sesler '${pairedPc.deviceName}' bilgisayarına aktarılıyor!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "🎧 Sesler '${targetPc.deviceName}' bilgisayarına aktarılıyor!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Hedef bilgisayar adresi bulunamadı.", Toast.LENGTH_SHORT).show()
             }
         } else {
-            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired && it.platform.contains("win", ignoreCase = true) }
-                ?: ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
-            if (pairedPc != null) {
-                AudioStreamEngine.instance.start(pairedPc.ipAddress, null)
+            if (targetPc != null) {
+                AudioStreamEngine.instance.start(targetPc.ipAddress, null)
                 updateAudioUi()
-                Toast.makeText(this, "Mikrofon ses aktarımı başlatıldı -> ${pairedPc.deviceName}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Mikrofon ses aktarımı başlatıldı -> ${targetPc.deviceName}", Toast.LENGTH_SHORT).show()
+            } else {
+                updateAudioUi()
             }
         }
     }
@@ -109,9 +112,9 @@ class MainActivity : AppCompatActivity() {
 
     private val appVersionName: String
         get() = try {
-            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.7.1"
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.7.2"
         } catch (_: Exception) {
-            "1.7.1"
+            "1.7.2"
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -265,16 +268,16 @@ class MainActivity : AppCompatActivity() {
                 }
                 itemCard.addView(ipTv)
 
+                val isConnected = p.isMutuallyPaired || p.remoteEnteredMyPinVerified || p.myEnteredPinVerifiedByRemote
                 val stateDesc = when {
                     p.isMutuallyPaired -> "🟢 ÇİFT TARAFLI EŞLEŞTİ (Aktif)"
-                    p.remoteEnteredMyPinVerified -> "🟠 BU CİHAZ SİZİN KODUNUZU ONAYLADI!\n(Aşağıdaki butona basıp bu cihazın kodunu girin)"
+                    p.remoteEnteredMyPinVerified -> "🟢 BAĞLANDI (Bilgisayar Kodunuzu Onayladı)"
                     p.myEnteredPinVerifiedByRemote -> "🟡 SİZ ONAYLADINIZ (Karşı ekranda $pin kodunu onaylayın)"
                     isTrusted -> "⭐ GÜVENİLİR (Otomatik Bağlanıyor...)"
                     else -> "⚪ Eşleşmedi (6 Haneli Kod Gerekli)"
                 }
                 val stateColor = when {
-                    p.isMutuallyPaired -> "#4ADE80"
-                    p.remoteEnteredMyPinVerified -> "#FB923C"
+                    p.isMutuallyPaired || p.remoteEnteredMyPinVerified -> "#4ADE80"
                     p.myEnteredPinVerifiedByRemote -> "#FBBF24"
                     else -> "#94A3B8"
                 }
@@ -288,20 +291,23 @@ class MainActivity : AppCompatActivity() {
                 }
                 itemCard.addView(statusTv)
 
-                if (!p.isMutuallyPaired) {
-                    val btnBg = if (p.remoteEnteredMyPinVerified) "#D97706" else "#2563EB"
-                    val pairBtn = createStyledButton("🔐 Bu Cihazın 6 Haneli Kodunu Gir", btnBg) {
-                        selectedPeer = p
-                        showEnterPinForPeerDialog(p)
-                    }
-                    itemCard.addView(pairBtn)
-                } else {
+                if (isConnected) {
                     val disconnectBtn = createStyledButton("🔌 Bağlantıyı Kes (Kopar)", "#DC2626") {
                         val svc = ConnectMeService.instance
                         svc?.disconnectPeer(p)
                         refreshUiState()
                     }
                     itemCard.addView(disconnectBtn)
+                }
+
+                if (!p.isMutuallyPaired) {
+                    val btnBg = if (p.remoteEnteredMyPinVerified) "#0284C7" else "#2563EB"
+                    val btnText = if (p.remoteEnteredMyPinVerified) "🔐 Çift Taraflı PIN Tamamla" else "🔐 Bu Cihazın 6 Haneli Kodunu Gir"
+                    val pairBtn = createStyledButton(btnText, btnBg) {
+                        selectedPeer = p
+                        showEnterPinForPeerDialog(p)
+                    }
+                    itemCard.addView(pairBtn)
                 }
 
                 if (isTrusted) {
@@ -1030,8 +1036,9 @@ class MainActivity : AppCompatActivity() {
     private fun updateAudioUi() {
         if (!::audioStatusText.isInitialized || !::audioToggleBtn.isInitialized) return
         val isStreaming = AudioStreamEngine.instance.isStreaming
+        val targetIp = AudioStreamEngine.instance.targetHostIp ?: ""
         audioStatusText.text = if (isStreaming) {
-            "🟢 Sesi Bilgisayara Aktarılıyor (48kHz 16-bit Stereo, <15ms)\nBilgisayara takılı kulaklıktan dinleniyor."
+            "🟢 Ses Bilgisayara Aktarılıyor (48kHz 16-bit Stereo, <15ms)\nBilgisayara takılı kulaklıktan dinleniyor${if (targetIp.isNotEmpty()) " -> $targetIp" else ""}."
         } else {
             "⚪ Ses aktarımı kapalı. Başlatıldığında tüm telefon sesleri bilgisayar kulaklığından gelir."
         }
@@ -1040,6 +1047,60 @@ class MainActivity : AppCompatActivity() {
         (audioToggleBtn.background as? GradientDrawable)?.setColor(
             Color.parseColor(if (isStreaming) "#DC2626" else "#059669")
         )
+    }
+
+    private fun resolveTargetPc(): DiscoveredPcPeer? {
+        val peers = ConnectMeService.discoveredPeers
+
+        // 1. Mutually paired Windows device
+        peers.firstOrNull { it.isMutuallyPaired && it.platform.contains("win", ignoreCase = true) }?.let { return it }
+        peers.firstOrNull { it.isMutuallyPaired }?.let { return it }
+
+        // 2. Active PC address (device currently controlling cursor or connected via TCP/UDP)
+        val activeIp = ConnectMeService.activePcAddress?.hostAddress
+        if (!activeIp.isNullOrBlank()) {
+            val matchingPeer = peers.firstOrNull { it.ipAddress == activeIp }
+            if (matchingPeer != null) return matchingPeer
+            return DiscoveredPcPeer(
+                deviceId = "active-$activeIp",
+                deviceName = "Bağlı Bilgisayar ($activeIp)",
+                platform = "windows",
+                ipAddress = activeIp,
+                udpInputPort = ConnectMeService.activePcUdpPort,
+                tcpControlPort = ConnectMeService.activePcTcpPort,
+                remoteEnteredMyPinVerified = true
+            )
+        }
+
+        // 3. One-way verified PC (e.g. Windows entered Android PIN or Android entered Windows PIN)
+        peers.firstOrNull { (it.remoteEnteredMyPinVerified || it.myEnteredPinVerifiedByRemote) && it.platform.contains("win", ignoreCase = true) }?.let { return it }
+        peers.firstOrNull { it.remoteEnteredMyPinVerified || it.myEnteredPinVerifiedByRemote }?.let { return it }
+
+        // 4. Currently selected peer in UI
+        selectedPeer?.let { return it }
+
+        // 5. Any discovered Windows PC
+        peers.firstOrNull { it.platform.contains("win", ignoreCase = true) }?.let { return it }
+
+        // 6. Any discovered peer
+        peers.firstOrNull()?.let { return it }
+
+        // 7. Manual IP typed in pcIpInput
+        val manualIp = if (::pcIpInput.isInitialized) pcIpInput.text?.toString()?.trim() else null
+        if (!manualIp.isNullOrBlank() && manualIp != "192.168.1." && manualIp.length >= 7) {
+            val existing = peers.firstOrNull { it.ipAddress == manualIp }
+            if (existing != null) return existing
+            return DiscoveredPcPeer(
+                deviceId = "manual-$manualIp",
+                deviceName = "Bilgisayar ($manualIp)",
+                platform = "windows",
+                ipAddress = manualIp,
+                udpInputPort = ProtocolConstants.FAST_INPUT_UDP_PORT,
+                tcpControlPort = ProtocolConstants.DATA_CONTROL_TCP_PORT
+            )
+        }
+
+        return null
     }
 
     private fun toggleAudioStreaming() {
@@ -1053,12 +1114,17 @@ class MainActivity : AppCompatActivity() {
             updateAudioUi()
             Toast.makeText(this, "Ses aktarımı durduruldu", Toast.LENGTH_SHORT).show()
         } else {
-            val pairedPc = ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired && it.platform.contains("win", ignoreCase = true) }
-                ?: ConnectMeService.discoveredPeers.firstOrNull { it.isMutuallyPaired }
-            if (pairedPc == null) {
-                Toast.makeText(this, "Önce bilgisayarla 6 haneli PIN eşleşmesini tamamlayın!", Toast.LENGTH_LONG).show()
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissionsLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
                 return
             }
+
+            val targetPc = resolveTargetPc()
+            if (targetPc == null) {
+                Toast.makeText(this, "Bağlı veya keşfedilen bir bilgisayar bulunamadı. Lütfen bilgisayarınızın açık ve aynı Wi-Fi ağında olduğundan emin olun veya IP adresini girin.", Toast.LENGTH_LONG).show()
+                return
+            }
+            pendingAudioTarget = targetPc
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -1066,10 +1132,11 @@ class MainActivity : AppCompatActivity() {
             } else {
                 val intent = Intent(this, AudioStreamService::class.java).apply {
                     action = AudioStreamService.ACTION_START_AUDIO
-                    putExtra("hostIp", pairedPc.ipAddress)
+                    putExtra("hostIp", targetPc.ipAddress)
                 }
                 startService(intent)
                 updateAudioUi()
+                Toast.makeText(this, "🎧 Sesler '${targetPc.deviceName}' bilgisayarına aktarılıyor!", Toast.LENGTH_SHORT).show()
             }
         }
     }

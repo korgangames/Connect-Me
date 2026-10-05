@@ -334,12 +334,14 @@ object AppUpdateManager {
     }
 
     /**
-     * Semantik sürüm karşılaştırması (Örn: "v1.6.0" > "1.5.0").
+     * Semantik sürüm karşılaştırması (Örn: "v1.7.2" > "1.7.1", "V1.7.2" > "1.7.1").
      */
     fun isNewerVersion(remoteTag: String, currentVersion: String): Boolean {
         try {
-            val rParts = remoteTag.removePrefix("v").split('.').mapNotNull { it.toIntOrNull() }
-            val cParts = currentVersion.removePrefix("v").split('.').mapNotNull { it.toIntOrNull() }
+            val rClean = remoteTag.trim().removePrefix("v").removePrefix("V").split("-")[0]
+            val cClean = currentVersion.trim().removePrefix("v").removePrefix("V").split("-")[0]
+            val rParts = rClean.split('.').mapNotNull { it.toIntOrNull() }
+            val cParts = cClean.split('.').mapNotNull { it.toIntOrNull() }
 
             val maxLen = maxOf(rParts.size, cParts.size)
             for (i in 0 until maxLen) {

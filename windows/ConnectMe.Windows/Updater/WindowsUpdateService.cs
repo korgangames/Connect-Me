@@ -35,7 +35,7 @@ public static class WindowsUpdateService
 
     static WindowsUpdateService()
     {
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ConnectMe-Windows", "1.7.1"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ConnectMe-Windows", "1.7.2"));
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
     }
 
@@ -206,8 +206,10 @@ del ""{cmdPath}""
     {
         try
         {
-            var rParts = remoteTag.TrimStart('v', 'V').Split('.').Select(p => int.TryParse(p, out var v) ? v : 0).ToList();
-            var cParts = currentVersion.TrimStart('v', 'V').Split('.').Select(p => int.TryParse(p, out var v) ? v : 0).ToList();
+            var rClean = remoteTag.Trim().TrimStart('v', 'V').Split('-')[0];
+            var cClean = currentVersion.Trim().TrimStart('v', 'V').Split('-')[0];
+            var rParts = rClean.Split('.').Select(p => int.TryParse(p, out var v) ? v : 0).ToList();
+            var cParts = cClean.Split('.').Select(p => int.TryParse(p, out var v) ? v : 0).ToList();
 
             int maxLen = Math.Max(rParts.Count, cParts.Count);
             for (int i = 0; i < maxLen; i++)

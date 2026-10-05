@@ -1,3 +1,34 @@
+# Connect Me v1.7.2 — Kusursuz Ses Aktarımı (Audio Streaming), Akıllı Hedef Çözümleme & Tek Taraflı/Çift Taraflı PIN Desteği
+
+Bu sürüm; Android ve Windows arasında ses aktarımı başlatıldığında cihazlar bağlı olmasına rağmen ortaya çıkan *"Önce bilgisayarla 6 haneli PIN eşleşmesini tamamlayın!"* hatasını kökten çözer. Ses akışı artık bağlı, aktif veya yerel ağda keşfedilen bilgisayarı otomatik ve akıllıca tespit eder.
+
+---
+
+### 🌟 v1.7.2 Yenilikleri ve Düzeltmeleri:
+
+* **🎧 Kesintisiz Ses Aktarımı & Akıllı Hedef Bilgisayar Çözümleme (Smart Target Resolution):**
+  - Android uygulamasında "Sesi Bilgisayara / Kulaklığa Aktar" butonuna basıldığında, yalnızca katı çift taraflı eşleşme (`isMutuallyPaired`) arayan kontrol kaldırıldı.
+  - Artık akıllı öncelik sırası ile hedef bilgisayar saniyeler içinde belirlenir:
+    1. Karşılıklı doğrulanmış Windows cihazları (`isMutuallyPaired`),
+    2. Aktif olarak fare/klavye kontrolü yapan bilgisayar (`activePcAddress`),
+    3. Tek taraflı PIN doğrulaması tamamlanmış bilgisayar (`remoteEnteredMyPinVerified` veya `myEnteredPinVerifiedByRemote`),
+    4. Kullanıcının listeden seçtiği veya IP kutusuna girdiği bilgisayar,
+    5. Yerel ağda keşfedilen Windows bilgisayarı.
+  - Windows bilgisayarınız Android telefonunuzun kodunu girdiğinde veya aktif bağlantı kurulduğunda, hiçbir ek PIN sorgusu olmadan sesler anında UDP 42852 portundan kulaklığınıza akmaya başlar.
+
+* **🔄 PIN Doğrulama & Durum Senkronizasyonu Düzeltmesi:**
+  - Android tarafından bilgisayarın PIN kodu girildiğinde (`submitRemotePinToPeerInternal`), doğrulama başarılı olsa dahi aktif bilgisayar adresinin (`activePcAddress`) ve arayüzün (`onStateUpdated`) yenilenmemesi hatası giderildi.
+  - Tek taraflı veya çift taraflı PIN girildiğinde cihaz kartı anında yeşil renkte `"🟢 BAĞLANDI (Bilgisayar Kodunuzu Onayladı)"` durumuna geçer ve `"🔌 Bağlantıyı Kes (Kopar)"` butonu görünür.
+
+* **🛡️ Giriş ve Dönüş Güvenliği Uyumluluğu:**
+  - Kenar geçişi (`sendEdgeHandOffBackToPeer`), evrensel pano (`sendClipboardTextToPc`) ve ortak cep (`sendStreamToPcShelf`) fonksiyonları tek taraflı doğrulanmış aktif bağlantıları da tanıyacak şekilde güncellendi.
+  - Ağdaki yabancı cihazlardan gelen paketler engellenirken, PIN doğrulanmış bilgisayardan gelen fare ve ses girişleri tam yetkiyle kabul edilir.
+
+* **📦 Sürüm Karşılaştırma & Otomatik Güncelleyici İyileştirmesi:**
+  - Android ve Windows otomatik güncelleyicilerinde (`AppUpdateManager` & `WindowsUpdateService`) büyük/küçük harf (`v` / `V`) ve sürüm son eki (tire işaretleri) kaynaklı sürüm ayrıştırma sorunları giderildi.
+
+---
+
 # Connect Me v1.7.1 — Kusursuz Kenar Dönüşü (Seamless Border Return), Merkez İmleç Sıçrama Koruması & Akıllı Koordinat İadesi
 
 Bu sürüm; uzak bir cihazdan (Android, Linux veya ikincil Windows) ana Windows ekranına geri dönüldüğünde imlecin her seferinde ekranın ortasına sıçraması sorununu kökten çözer. İmleç artık diğer cihazdan ayrıldığı yükseklik ve orantısal koordinata birebir sadık kalarak yerel masaüstü sınırından akıcı ve kesintisiz şekilde devam eder.
