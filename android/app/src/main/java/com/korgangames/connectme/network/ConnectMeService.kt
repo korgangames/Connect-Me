@@ -746,6 +746,11 @@ class ConnectMeService : Service() {
                         activePcUdpPort = udpPort
                         activePcTcpPort = tcpPort
 
+                        val initReturnEdge = header.optInt("returnEdge", ProtocolConstants.EDGE_NONE.toInt()).toByte()
+                        if (initReturnEdge != ProtocolConstants.EDGE_NONE) {
+                            CursorAccessibilityService.instance?.activeEntranceEdge = initReturnEdge
+                        }
+
                         if (reqTrust && trustToken.isNotEmpty()) {
                             saveTrustTokenForDevice(peer.deviceId, trustToken)
                             log("[Güvenlik] ⭐ '$senderName' güvenilir cihaz olarak hatırlandı.")
@@ -814,6 +819,10 @@ class ConnectMeService : Service() {
                         }
                         TcpFrameCodec.writeFrame(output, ack)
                         log("[Otomatik Bağlantı] ⭐ Güvenilir cihaz '$senderName' ($remoteIp) PIN'siz otomatik bağlandı!")
+                        val initReturnEdge = header.optInt("returnEdge", ProtocolConstants.EDGE_NONE.toInt()).toByte()
+                        if (initReturnEdge != ProtocolConstants.EDGE_NONE) {
+                            CursorAccessibilityService.instance?.activeEntranceEdge = initReturnEdge
+                        }
                     } else {
                         val rej = JSONObject().apply {
                             put("type", "PAIR_REJECT")
@@ -823,6 +832,27 @@ class ConnectMeService : Service() {
                         TcpFrameCodec.writeFrame(output, rej)
                         log("[Güvenlik] ⚠️ '$senderName' güvenilirlik belirteci doğrulanamadı.")
                     }
+                    onStateUpdated?.invoke()
+                }
+
+                "EDGE_CONFIG" -> {
+                    val returnEdge = header.optInt("returnEdge", ProtocolConstants.EDGE_LEFT.toInt()).toByte()
+                    if (returnEdge != ProtocolConstants.EDGE_NONE) {
+                        CursorAccessibilityService.instance?.activeEntranceEdge = returnEdge
+                        val edgeName = when (returnEdge) {
+                            ProtocolConstants.EDGE_LEFT -> "Sol Kenar"
+                            ProtocolConstants.EDGE_RIGHT -> "Sağ Kenar"
+                            ProtocolConstants.EDGE_TOP -> "Üst Kenar"
+                            ProtocolConstants.EDGE_BOTTOM -> "Alt Kenar"
+                            else -> "Kenar $returnEdge"
+                        }
+                        log("[Ekran Konfigürasyonu] Ortak geçiş kenarı ayarlandı: $edgeName.")
+                    }
+                    val ack = JSONObject().apply {
+                        put("type", "EDGE_CONFIG_ACK")
+                        put("senderId", localDeviceId)
+                    }
+                    TcpFrameCodec.writeFrame(output, ack)
                     onStateUpdated?.invoke()
                 }
 

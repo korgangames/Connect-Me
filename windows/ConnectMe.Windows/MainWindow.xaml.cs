@@ -70,7 +70,7 @@ public partial class MainWindow : Window
         var ips = ConnectMeNetworkNode.GetLocalIPv4Addresses();
         string ipText = string.Join(", ", ips.Select(i => i.ToString()));
         LocalNetworkInfoText.Text =
-            $"v1.6.7 (v1-6-7) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
+            $"v1.6.8 (v1-6-8) | IP: {ipText} | UDP: {_network.InputUdpPort} | TCP: {_network.ControlTcpPort} | Ses: {ProtocolConstants.AudioStreamUdpPort}";
 
         var firstLan = ips.FirstOrDefault(i => !IPAddress.IsLoopback(i));
         if (firstLan != null)
@@ -84,7 +84,7 @@ public partial class MainWindow : Window
 
         RedrawDisplayArrangementCanvas();
         int monCount = _topology.LocalMonitors.Count;
-        AppendLog($"[Sistem] Connect Me v1.6.7 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
+        AppendLog($"[Sistem] Connect Me v1.6.8 hazır ({monCount} yerel monitör, toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}). Yerel 6 Haneli PIN: {_network.PairingPin} | Ses Merkezi Portu: {ProtocolConstants.AudioStreamUdpPort}");
 
         // Otomatik GitHub güncelleme denetimi (Arka planda)
         _ = CheckForUpdatesAsync(isManual: false);
@@ -1050,6 +1050,7 @@ public partial class MainWindow : Window
         {
             _draggingBorder.ReleaseMouseCapture();
             _network.SavePeerTopologyToTrustedStore(_draggingPeer);
+            _network.SendEdgeConfigToPeer(_draggingPeer);
             AppendLog(
                 $"[Ekran Konfigürasyonu] '{_draggingPeer.DeviceName}' -> {_draggingPeer.AttachedLocalMonitorId} ({FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} kenar, %{_draggingPeer.EdgeOffsetStart * 100:F0}-%{_draggingPeer.EdgeOffsetEnd * 100:F0}) hizalandı.");
             _draggingBorder = null;
@@ -1088,6 +1089,7 @@ public partial class MainWindow : Window
         }
         DistributePeersOnEdge(edge);
         _network.SavePeerTopologyToTrustedStore(_selectedPeer);
+        _network.SendEdgeConfigToPeer(_selectedPeer);
 
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();
@@ -1116,6 +1118,7 @@ public partial class MainWindow : Window
         foreach (var p in paired)
         {
             _network.SavePeerTopologyToTrustedStore(p);
+            _network.SendEdgeConfigToPeer(p);
         }
 
         RefreshPeersList();
@@ -1153,6 +1156,7 @@ public partial class MainWindow : Window
             {
                 _network.SavePeerTopologyToTrustedStore(_selectedPeer);
             }
+            _network.SendEdgeConfigToPeer(_selectedPeer);
         }
         UpdateSelectedPeerPairingPanel();
         RefreshPeersList();
@@ -1957,7 +1961,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.6.7");
+            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.6.8");
             await Dispatcher.InvokeAsync(() =>
             {
                 if (result.HasUpdate && result.UpdateInfo != null)
@@ -1973,7 +1977,7 @@ public partial class MainWindow : Window
                         var res = MessageBox.Show(
                             this,
                             $"Yeni bir Connect Me sürümü mevcut!\n\n" +
-                            $"Mevcut Sürüm: v1.6.7\n" +
+                            $"Mevcut Sürüm: v1.6.8\n" +
                             $"Yeni Sürüm: {update.VersionTag}\n\n" +
                             $"{update.ReleaseTitle}\n\n" +
                             $"Şimdi otomatik olarak indirilip kurulsun mu?",
@@ -2008,7 +2012,7 @@ public partial class MainWindow : Window
                     {
                         MessageBox.Show(
                             this,
-                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.7).",
+                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.6.8).",
                             "Connect Me Güncel",
                             MessageBoxButton.OK,
                             MessageBoxImage.Information);

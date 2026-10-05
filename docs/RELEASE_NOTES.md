@@ -1,3 +1,27 @@
+# Connect Me v1.6.8 — Ortak Kenar Geçiş Koruması, Otomatik Kenar Senkronizasyonu & İndirme Bağlantıları Güncellemesi
+
+Bu sürüm; Windows'tan Android'e fare geçtiğinde telefonun herhangi bir kenarına (üst bildirim çubuğu, alt gezinme çubuğu, sağ kenar) değildiğinde imlecin istenmeyen şekilde Windows'a geri dönmesi sorununu çözen akıllı ortak kenar filtresini, Windows 2D kanvasındaki yerleşim değişikliklerinin anında Android'e iletilmesini (`EDGE_CONFIG`) ve indirme bağlantılarının en son sürümlerle eşzamanlanmasını sunar.
+
+---
+
+### 🌟 v1.6.8 Yenilikleri ve Düzeltmeleri:
+
+* **📱 Android Ortak Kenar Geçiş Koruması (Exclusive Shared Border Return):**
+  - Windows'tan Android'e fare geçtiğinde, önceden tanımlanmış 14px'lik genel kenar serbestisi nedeniyle kullanıcının telefonun üstündeki durum çubuğuna, altındaki ana ekran tuşlarına veya karşı kenara yaklaşması durumunda imlecin kontrolsüzce Windows masaüstüne fırlaması sorunu giderildi.
+  - Artık imleç Android üzerindeyken **sadece ve sadece arayüzde Windows ile ortak olarak yapılandırılmış kenardan** (örneğin telefon Windows'un sağındaysa yalnızca Sol Kenarından) Windows'a geri dönebilir.
+  - Diğer kenarlara (üst bildirim çubuğu, alt gezinme butonları vb.) fare çarptığında imleç telefon ekranı sınırları içinde tutulur, kullanıcı telefonun tüm köşeleriyle ve sistem arayüzleriyle rahatça etkileşime girebilir.
+  - Windows'a geri dönüş için ortak kenarda 6 piksellik bilinçli itme direnci uygulanarak kazara geçişler engellendi.
+
+* **🔄 Gerçek Zamanlı Kenar Konfigürasyon Senkronizasyonu (`EDGE_CONFIG`):**
+  - Windows arayüzündeki 2D Ekran Konfigürasyonu Kanvası üzerinden Android cihazı sürüklendiğinde veya hızlı kenar butonları (Sol, Sağ, Üst, Alt) kullanıldığında, yeni ortak kenar TCP üzerinden Android servisine anında bildirilir.
+  - Android cihaz ilk eşleştiğinde (`PAIR_REQUEST`) veya otomatik yeniden bağlandığında (`TRUSTED_RECONNECT`) ortak kenar otomatik olarak yüklenir.
+
+* **📦 İndirme ve Güncelleme Bağlantıları Güncellemesi:**
+  - `README.md` ve `DOWNLOADS.md` dosyalarındaki indirme bağlantıları ve dosya isimleri v1.6.8 sürümleriyle tam uyumlu hale getirildi.
+  - Android ve Windows uygulama içi otomatik güncelleyicileri (`In-Program Auto Updater`) v1.6.8 sürümünü algılayıp tek tıkla güncelleme yapacak şekilde senkronize edildi.
+
+---
+
 # Connect Me v1.6.7 — Wayland Donanım İmleci, 2D Kanvas Sürükle-Bırak, Hedefe Özel PIN & Android Ses Köprüsü
 
 Bu sürüm; Windows'tan Nobara Linux'a fare geçtiğinde KDE Plasma Wayland üzerinde imlecin görünmemesi veya hareket etmemesi sorununu çözen ayrık çekirdek sanal cihaz mimarisini (`Connect-Me-Mouse` & `Connect-Me-Keyboard`), Linux arayüzündeki ekran yerleşimini karmaşık ve üst üste binmiş halden kurtarıp serbestçe sürüklenebilir kartlara ve temiz dik bağlantılara dönüştüren yeni 2D kanvası, PIN kodunun yanlış cihaza gitmesini engelleyen hedefe özel eşleşme pencerelerini ve Android 14/15'te ses aktarımının çökmesine yol açan `MediaProjection` kısıtlamasını çözen ses motoru iyileştirmelerini sunar.

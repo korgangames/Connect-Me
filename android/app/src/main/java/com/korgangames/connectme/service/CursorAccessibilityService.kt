@@ -289,38 +289,51 @@ class CursorAccessibilityService : AccessibilityService() {
         val nextX = cursorX + packet.deltaX
         val nextY = cursorY + packet.deltaY
 
-        // Detect if cursor is hitting any outer boundary and pushing outward towards PC
-        var pushingBorder: Byte = ProtocolConstants.EDGE_NONE
+        // Detect if cursor is hitting the configured shared boundary facing the PC
+        var pushingSharedEdge = false
         var outwardDelta = 0f
         var returnNormPos = 0.5f
         var oppositeWindowsEdge: Byte = ProtocolConstants.EDGE_NONE
 
-        if (packet.deltaX < 0 && (cursorX <= 6f || nextX < 0f)) {
-            pushingBorder = ProtocolConstants.EDGE_LEFT
-            outwardDelta = -packet.deltaX.toFloat()
-            returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
-            oppositeWindowsEdge = ProtocolConstants.EDGE_RIGHT
-        } else if (packet.deltaX > 0 && (cursorX >= (screenWidth - 6f) || nextX > screenWidth)) {
-            pushingBorder = ProtocolConstants.EDGE_RIGHT
-            outwardDelta = packet.deltaX.toFloat()
-            returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
-            oppositeWindowsEdge = ProtocolConstants.EDGE_LEFT
-        } else if (packet.deltaY < 0 && (cursorY <= 6f || nextY < 0f)) {
-            pushingBorder = ProtocolConstants.EDGE_TOP
-            outwardDelta = -packet.deltaY.toFloat()
-            returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
-            oppositeWindowsEdge = ProtocolConstants.EDGE_BOTTOM
-        } else if (packet.deltaY > 0 && (cursorY >= (screenHeight - 6f) || nextY > screenHeight)) {
-            pushingBorder = ProtocolConstants.EDGE_BOTTOM
-            outwardDelta = packet.deltaY.toFloat()
-            returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
-            oppositeWindowsEdge = ProtocolConstants.EDGE_TOP
+        when (activeEntranceEdge) {
+            ProtocolConstants.EDGE_LEFT -> {
+                if (packet.deltaX < 0 && (cursorX <= 6f || nextX < 0f)) {
+                    pushingSharedEdge = true
+                    outwardDelta = -packet.deltaX.toFloat()
+                    returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
+                    oppositeWindowsEdge = ProtocolConstants.EDGE_RIGHT
+                }
+            }
+            ProtocolConstants.EDGE_RIGHT -> {
+                if (packet.deltaX > 0 && (cursorX >= (screenWidth - 6f) || nextX > screenWidth)) {
+                    pushingSharedEdge = true
+                    outwardDelta = packet.deltaX.toFloat()
+                    returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
+                    oppositeWindowsEdge = ProtocolConstants.EDGE_LEFT
+                }
+            }
+            ProtocolConstants.EDGE_TOP -> {
+                if (packet.deltaY < 0 && (cursorY <= 6f || nextY < 0f)) {
+                    pushingSharedEdge = true
+                    outwardDelta = -packet.deltaY.toFloat()
+                    returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
+                    oppositeWindowsEdge = ProtocolConstants.EDGE_BOTTOM
+                }
+            }
+            ProtocolConstants.EDGE_BOTTOM -> {
+                if (packet.deltaY > 0 && (cursorY >= (screenHeight - 6f) || nextY > screenHeight)) {
+                    pushingSharedEdge = true
+                    outwardDelta = packet.deltaY.toFloat()
+                    returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
+                    oppositeWindowsEdge = ProtocolConstants.EDGE_TOP
+                }
+            }
         }
 
-        if (pushingBorder != ProtocolConstants.EDGE_NONE && outwardDelta > 0f && !isLeftButtonDown) {
-            // Buttery-smooth return: only 3px needed when pushing against the edge facing the PC!
-            // If pushing against an unexpected edge, allow return with 14px so cursor is NEVER trapped.
-            val requiredResistance = if (pushingBorder == activeEntranceEdge) 3f else 14f
+        // ONLY allow return if pushing against the configured shared edge facing the PC!
+        // Touching or pushing against any other frame edge keeps the cursor on Android.
+        if (pushingSharedEdge && outwardDelta > 0f && !isLeftButtonDown) {
+            val requiredResistance = 6f
             returnEdgePushAccum += outwardDelta
             if (returnEdgePushAccum >= requiredResistance) {
                 returnEdgePushAccum = 0f
@@ -331,8 +344,7 @@ class CursorAccessibilityService : AccessibilityService() {
                 ConnectMeService.instance?.sendEdgeHandOffBackToPeer(oppositeWindowsEdge, returnNormPos)
                 return
             }
-        } else if (cursorX > 25f && cursorX < (screenWidth - 25f) && cursorY > 25f && cursorY < (screenHeight - 25f)) {
-            // Only reset resistance when user visibly moves away from the edge back towards screen center
+        } else if (!pushingSharedEdge || (cursorX > 25f && cursorX < (screenWidth - 25f) && cursorY > 25f && cursorY < (screenHeight - 25f))) {
             returnEdgePushAccum = 0f
         }
 

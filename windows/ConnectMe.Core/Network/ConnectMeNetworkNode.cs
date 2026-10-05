@@ -398,7 +398,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
                 TargetPin = cleanPin,
                 RequestTrust = rememberDevice,
-                TrustToken = generatedTrustToken
+                TrustToken = generatedTrustToken,
+                ReturnEdge = (int)SpatialTopologyEngine.GetOppositeEdge(peer.AssignedEdgeOnLocal)
             };
 
             await TcpFrameCodec.WriteFrameAsync(stream, reqHeader, null, 0, timeoutCts.Token).ConfigureAwait(false);
@@ -532,7 +533,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 SenderScreenWidth = LocalScreenWidth,
                 SenderScreenHeight = LocalScreenHeight,
                 SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
-                TrustToken = trustToken
+                TrustToken = trustToken,
+                ReturnEdge = (int)SpatialTopologyEngine.GetOppositeEdge(peer.AssignedEdgeOnLocal)
             };
 
             await TcpFrameCodec.WriteFrameAsync(stream, req, null, 0, timeoutCts.Token).ConfigureAwait(false);
@@ -869,6 +871,30 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
         Log($"[Drop Shelf] '{fi.Name}' ({FormatBytes(fi.Length)}) -> {peer.DeviceName} cihazına gönderildi.");
         return entry;
+    }
+
+    /// <summary>
+    /// Notifies remote peer (Android / Linux) about its updated layout edge relative to local machine.
+    /// </summary>
+    public void SendEdgeConfigToPeer(PeerDeviceNode peer)
+    {
+        if (!peer.IsMutuallyPaired)
+            return;
+
+        var oppositeEdge = SpatialTopologyEngine.GetOppositeEdge(peer.AssignedEdgeOnLocal);
+        var header = new TcpControlHeader
+        {
+            Type = "EDGE_CONFIG",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform,
+            ReturnEdge = (int)oppositeEdge
+        };
+
+        _ = Task.Run(async () =>
+        {
+            await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
+        });
     }
 
     private async Task<bool> SendTcpFrameToPeerAsync(
