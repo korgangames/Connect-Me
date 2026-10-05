@@ -92,6 +92,15 @@ class ConnectMeService : Service() {
 
         var onStateUpdated: (() -> Unit)? = null
 
+        @Volatile
+        var activePcAddress: InetAddress? = null
+
+        @Volatile
+        var activePcUdpPort: Int = ProtocolConstants.FAST_INPUT_UDP_PORT
+
+        @Volatile
+        var activePcTcpPort: Int = ProtocolConstants.DATA_CONTROL_TCP_PORT
+
         fun log(msg: String) {
             val line = "${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $msg"
             telemetryLogs.add(0, line)
@@ -165,15 +174,6 @@ class ConnectMeService : Service() {
         private set
 
     val suppressedAutoConnectDeviceIds: MutableSet<String> = Collections.synchronizedSet(HashSet())
-
-    @Volatile
-    var activePcAddress: InetAddress? = null
-
-    @Volatile
-    var activePcUdpPort: Int = ProtocolConstants.FAST_INPUT_UDP_PORT
-
-    @Volatile
-    var activePcTcpPort: Int = ProtocolConstants.DATA_CONTROL_TCP_PORT
 
     private var serviceClipboardManager: ClipboardManager? = null
     private var serviceClipboardListener: ClipboardManager.OnPrimaryClipChangedListener? = null
