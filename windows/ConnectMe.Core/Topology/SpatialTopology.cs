@@ -716,6 +716,12 @@ public sealed class SpatialTopologyEngine
     {
         lock (_sync)
         {
+            ScreenEdge effectiveEdge = localEntranceEdge;
+            if (effectiveEdge == ScreenEdge.None && returningPeer?.AssignedEdgeOnLocal is { } edge && edge != ScreenEdge.None)
+            {
+                effectiveEdge = edge;
+            }
+
             PhysicalMonitorDescriptor? targetMon = null;
 
             if (!string.IsNullOrEmpty(returningPeer?.AttachedLocalMonitorId))
@@ -723,7 +729,7 @@ public sealed class SpatialTopologyEngine
                 targetMon = _localMonitors.FirstOrDefault(m => m.MonitorId == returningPeer.AttachedLocalMonitorId);
             }
 
-            targetMon ??= GetOutermostMonitorForEdge(localEntranceEdge);
+            targetMon ??= GetOutermostMonitorForEdge(effectiveEdge);
 
             float segStart = returningPeer?.EdgeOffsetStart ?? 0.0f;
             float segEnd = returningPeer?.EdgeOffsetEnd ?? 1.0f;
@@ -731,7 +737,7 @@ public sealed class SpatialTopologyEngine
             float t = Math.Clamp(mappedNorm, 0.02f, 0.98f);
             const int insetPixels = 8;
 
-            return localEntranceEdge switch
+            return effectiveEdge switch
             {
                 ScreenEdge.Left => (
                     targetMon.VirtualX + insetPixels,

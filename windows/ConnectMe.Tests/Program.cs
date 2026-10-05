@@ -193,6 +193,12 @@ public static class Program
         AssertTrue(
             retX == 2560 - 8 && retY == 1080,
             $"Android'den Windows'a dönüş koordinat eşlemesi ({retX}, {retY})");
+
+        // 4) Return fallback with ScreenEdge.None -> must use androidPeer.AssignedEdgeOnLocal (Right edge at 0.75f -> 2552, 1080) instead of screen center (1280, 720)
+        var (fallbackX, fallbackY) = topo.ComputeLocalEntryPoint(ScreenEdge.None, 0.75f, androidPeer);
+        AssertTrue(
+            fallbackX == 2560 - 8 && fallbackY == 1080,
+            $"Kenar Yok (ScreenEdge.None) durumunda AssignedEdgeOnLocal ({fallbackX}, {fallbackY}) fallback koordinat eşlemesi");
     }
 
     private static void TestMultiDevicePartialEdgeSegmentsAndCanvasSnapping()

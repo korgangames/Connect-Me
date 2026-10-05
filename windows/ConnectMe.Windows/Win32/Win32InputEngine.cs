@@ -67,6 +67,9 @@ public sealed class Win32InputEngine : IDisposable
     private ScreenEdge _incomingEntryEdge = ScreenEdge.None;
     private double _incomingPushAccum;
     private DateTimeOffset _lastReturnToLocalTime;
+    private DateTimeOffset _suppressAnchorJitterUntil = DateTimeOffset.MinValue;
+    private int _suppressedEntryX;
+    private int _suppressedEntryY;
 
     public PeerDeviceNode? ActiveRemotePeer { get; private set; }
     public bool IsHooksInstalled => _mouseHookId != IntPtr.Zero && _keyboardHookId != IntPtr.Zero;
@@ -193,21 +196,37 @@ public sealed class Win32InputEngine : IDisposable
             _network.SendEdgeReturnToPeer(returningPeer, localEntranceEdge, normalizedPosition);
         }
 
-        if (localEntranceEdge != ScreenEdge.None)
+        ScreenEdge effectiveEdge = localEntranceEdge;
+        if (effectiveEdge == ScreenEdge.None && returningPeer.AssignedEdgeOnLocal != ScreenEdge.None)
         {
-            var (entryX, entryY) = _topology.ComputeLocalEntryPoint(localEntranceEdge, normalizedPosition, returningPeer);
-            _lastCursorX = entryX;
-            _lastCursorY = entryY;
-            SetCursorPos(entryX, entryY);
-        }
-        else
-        {
-            _lastCursorX = _anchorX;
-            _lastCursorY = _anchorY;
-            SetCursorPos(_anchorX, _anchorY);
+            effectiveEdge = returningPeer.AssignedEdgeOnLocal;
         }
 
-        ActiveTargetChanged?.Invoke(null, localEntranceEdge, normalizedPosition);
+        float effectiveNorm = normalizedPosition;
+        if ((Math.Abs(effectiveNorm - 0.5f) < 0.001f || effectiveNorm <= 0.0f || effectiveNorm >= 1.0f) &&
+            returningPeer.ScreenWidth > 0 && returningPeer.ScreenHeight > 0)
+        {
+            if (effectiveEdge == ScreenEdge.Left || effectiveEdge == ScreenEdge.Right)
+            {
+                effectiveNorm = (float)returningPeer.RemoteCursorY / returningPeer.ScreenHeight;
+            }
+            else if (effectiveEdge == ScreenEdge.Top || effectiveEdge == ScreenEdge.Bottom)
+            {
+                effectiveNorm = (float)returningPeer.RemoteCursorX / returningPeer.ScreenWidth;
+            }
+        }
+        effectiveNorm = Math.Clamp(effectiveNorm, 0.02f, 0.98f);
+
+        var (entryX, entryY) = _topology.ComputeLocalEntryPoint(effectiveEdge, effectiveNorm, returningPeer);
+        _lastCursorX = entryX;
+        _lastCursorY = entryY;
+        _suppressedEntryX = entryX;
+        _suppressedEntryY = entryY;
+        _suppressAnchorJitterUntil = DateTimeOffset.UtcNow.AddMilliseconds(150);
+
+        SetCursorPos(entryX, entryY);
+
+        ActiveTargetChanged?.Invoke(null, effectiveEdge, effectiveNorm);
     }
 
     private void OnRemoteEdgeHandOffReceived(EdgeHandOffPacket packet, System.Net.IPEndPoint sender)
@@ -230,9 +249,15 @@ public sealed class Win32InputEngine : IDisposable
         _incomingEntryEdge = packet.TargetEntranceEdge;
         _incomingPushAccum = 0;
 
-        if (packet.TargetEntranceEdge != ScreenEdge.None)
+        ScreenEdge entranceEdge = packet.TargetEntranceEdge;
+        if (entranceEdge == ScreenEdge.None && peer?.AssignedEdgeOnLocal is { } edge && edge != ScreenEdge.None)
         {
-            var (entryX, entryY) = _topology.ComputeLocalEntryPoint(packet.TargetEntranceEdge, packet.NormalizedPosition, peer);
+            entranceEdge = edge;
+        }
+
+        if (entranceEdge != ScreenEdge.None)
+        {
+            var (entryX, entryY) = _topology.ComputeLocalEntryPoint(entranceEdge, packet.NormalizedPosition, peer);
             _lastCursorX = entryX;
             _lastCursorY = entryY;
             SetCursorPos(entryX, entryY);
@@ -432,6 +457,23 @@ public sealed class Win32InputEngine : IDisposable
 
                 if (remote == null)
                 {
+                    // If we just returned from remote control, Windows message queue might still contain
+                    // stale hardware mouse move events that were generated while the cursor was pinned at the screen center (_anchorX, _anchorY).
+                    // Suppress those stale anchor-centered mouse events so they don't snap the cursor back to screen center!
+                    if (DateTimeOffset.UtcNow < _suppressAnchorJitterUntil)
+                    {
+                        int dxAnchor = info.pt.X - _anchorX;
+                        int dyAnchor = info.pt.Y - _anchorY;
+                        int distAnchorSq = dxAnchor * dxAnchor + dyAnchor * dyAnchor;
+                        if (distAnchorSq < 160 * 160)
+                        {
+                            SetCursorPos(_suppressedEntryX, _suppressedEntryY);
+                            _lastCursorX = _suppressedEntryX;
+                            _lastCursorY = _suppressedEntryY;
+                            return (IntPtr)1;
+                        }
+                    }
+
                     // Local Windows mode: check if cursor hits an active outer edge toward Android/Linux
                     if (msg == WM_MOUSEMOVE)
                     {
@@ -444,7 +486,8 @@ public sealed class Win32InputEngine : IDisposable
                         _lastCursorY = clampedY;
 
                         var transition = _topology.EvaluateCursorStep(clampedX, clampedY, dx, dy);
-                        if (transition.ShouldTransition && transition.TargetPeer != null)
+                        if (transition.ShouldTransition && transition.TargetPeer != null &&
+                            (DateTimeOffset.UtcNow - _lastReturnToLocalTime > TimeSpan.FromMilliseconds(350)))
                         {
                             SwitchControlToPeer(
                                 transition.TargetPeer,

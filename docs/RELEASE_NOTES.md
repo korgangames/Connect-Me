@@ -1,3 +1,25 @@
+# Connect Me v1.7.1 — Kusursuz Kenar Dönüşü (Seamless Border Return), Merkez İmleç Sıçrama Koruması & Akıllı Koordinat İadesi
+
+Bu sürüm; uzak bir cihazdan (Android, Linux veya ikincil Windows) ana Windows ekranına geri dönüldüğünde imlecin her seferinde ekranın ortasına sıçraması sorununu kökten çözer. İmleç artık diğer cihazdan ayrıldığı yükseklik ve orantısal koordinata birebir sadık kalarak yerel masaüstü sınırından akıcı ve kesintisiz şekilde devam eder.
+
+---
+
+### 🌟 v1.7.1 Yenilikleri ve Düzeltmeleri:
+
+* **🎯 Kusursuz Kenar Giriş Koordinatı (Exact Border Arrival Coordinates):**
+  - Uzak ekrandan ana Windows ekranına dönüş yapıldığında, imleç karşı cihazın ekranında hangi dikey (veya yatay) konumdaysa ana ekrandaki ortak kenara tam o yükseklikten girer (`NormalizedPosition` hassasiyeti).
+  - İmleç asla ekranın ortasından başlamaz; iki ekran arasında gerçek bir çoklu monitör deneyimi gibi pürüzsüz geçiş sağlanır.
+
+* **🛡️ Donanımsal Merkez Kuyruk Bastırma (Anchor Jitter & Stale Event Suppression):**
+  - Uzak cihaz kontrol edilirken Windows fiziksel faresi merkez koordinatında (`_anchorX, _anchorY`) sabit tutuluyordu. Kontrol yerel ekrana iade edildiğinde sürücü kuyruğunda biriken eski merkez hareket mesajları imleci anlık olarak merkeze fırlatıyordu.
+  - Geliştirilen düşük seviyeli kanca filtresi (`MSLLHOOKSTRUCT`) ile yerel ekrana geçişten sonraki ilk 150ms boyunca merkez kancasından arta kalan bayat donanım olayları bastırılır ve kenar giriş koordinatı korunur.
+
+* **🧭 Akıllı Kenar ve Koordinat Fallback'i:**
+  - Acil durum kısayolları (Scroll Lock / Ctrl+Alt+L) veya kenar bilgisi içermeyen dönüş paketlerinde imleç artık körü körüne merkeze atılmaz; cihazın 2D Kanvastaki atanmış kenarı (`AssignedEdgeOnLocal`) ve takip edilen son koordinatı temel alınır.
+  - Sınır çizgisinden yerel ekrana giriş anında istem dışı geri sekme (edge bouncing / ping-pong) koruması devreye alınarak fare kontrolü tamamen kararlı hale getirildi.
+
+---
+
 # Connect Me v1.7.0 — Çift Yönlü Windows-Windows KVM, Gelen Bağlantı İstek Kartı, Port 42850 İyileştirmesi & Klavye/Fare Enjeksiyonu
 
 Bu sürüm; iki Windows bilgisayar arasında kesintisiz çift yönlü KVM kontrolü (fare ve klavye enjeksiyonu), karşı cihaz kodunuzu girdiğinde anında beliren canlı gelen bağlantı isteği kartı (`🔔 GELEN BAĞLANTI İSTEĞİ`), Windows UDP soket port çakışmasını gideren dinamik port bağlama mimarisi ve karşılıklı kenar geçiş-dönüş senkronizasyonunu sunar.
