@@ -159,7 +159,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.get_ver.outputs.version }}
-          name: "Connect Me v${{ steps.get_ver.outputs.version }} — Wayland Donanım İmleci, 2D Kanvas Sürükle-Bırak, Hedefe Özel PIN & Android Ses Köprüsü"
+          name: "Connect Me v${{ steps.get_ver.outputs.version }} — Tek Tıkla Bağlantı Kesme, İmleç İadesi & Güvenilir Cihaz Yönetimi"
           body_path: docs/RELEASE_NOTES.md
           draft: false
           prerelease: false

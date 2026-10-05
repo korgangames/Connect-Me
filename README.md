@@ -16,11 +16,11 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
 
 | İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.6.8.zip` | [⬇️ **ConnectMe-Windows-x64-v1.6.8.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.8/ConnectMe-Windows-x64-v1.6.8.zip) |
-| 📱 **Android** | `.apk` | `ConnectMe-v1.6.8.apk` | [⬇️ **ConnectMe-v1.6.8.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.8/ConnectMe-v1.6.8.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.6.8.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.6.8.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.8/ConnectMe-Linux-x64-v1.6.8.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.6.9.zip` | [⬇️ **ConnectMe-Windows-x64-v1.6.9.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.9/ConnectMe-Windows-x64-v1.6.9.zip) |
+| 📱 **Android** | `.apk` | `ConnectMe-v1.6.9.apk` | [⬇️ **ConnectMe-v1.6.9.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.9/ConnectMe-v1.6.9.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.6.9.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.6.9.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.6.9/ConnectMe-Linux-x64-v1.6.9.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.6.8 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.6.8)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.6.9 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.6.9)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---

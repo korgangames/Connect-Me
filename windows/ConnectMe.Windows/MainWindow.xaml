@@ -73,7 +73,7 @@
                 <WrapPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock Text="🌐 Connect Me" FontSize="18" FontWeight="Bold" Foreground="#38BDF8" VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <Border Background="#1E293B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="6,2" VerticalAlignment="Center" Margin="0,0,10,0">
-                        <TextBlock Text="v1.6.8" FontSize="11" FontWeight="Bold" Foreground="#38BDF8"/>
+                        <TextBlock Text="v1.6.9" FontSize="11" FontWeight="Bold" Foreground="#38BDF8"/>
                     </Border>
                     <Border x:Name="ActiveFocusBadge" Background="#1E3A2F" BorderBrush="#22C55E" BorderThickness="1" CornerRadius="6" Padding="8,2" Margin="0,2,8,2">
                         <TextBlock x:Name="ActiveFocusText" Text="🪟 Kontrol: Bu Bilgisayar (Yerel)" FontWeight="SemiBold" Foreground="#4ADE80" FontSize="12"/>

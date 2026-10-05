@@ -1,3 +1,28 @@
+# Connect Me v1.6.9 — Tek Tıkla Bağlantı Kesme (Disconnect / Unpair), İmleç İadesi & Akıllı Otomatik Bağlantı Bastırma
+
+Bu sürüm; Windows, Android ve Nobara Linux arasında aktif bağlantıları tek tıkla kesebilme (`🔌 Bağlantıyı Kes`), imleci anında yerel ana ekrana geri çekme, TCP üzerinden karşı cihazı senkronize bilgilendirme ve kullanıcı bilerek bağlantıyı kestiğinde güvenilir cihazların hemen tekrar otomatik bağlanmasını önleyen akıllı bastırma mekanizmasını sunar.
+
+---
+
+### 🌟 v1.6.9 Yenilikleri ve Düzeltmeleri:
+
+* **🔌 Tek Tıkla Bağlantıyı Kes (Disconnect / Unpair):**
+  - **Windows:** Eşleşmiş her cihaz kartına kırmızı **`🔌 Bağlantıyı Kes (Kopar)`** butonu eklendi.
+  - **Android:** Karşılıklı onaylanmış cihaz kartlarına **`🔌 Bağlantıyı Kes (Kopar)`** butonu eklendi.
+  - **Linux (Nobara):** Ana aksiyon çubuğu, cihaz kartları ve PIN pencerelerine **`🔌 Bağlantıyı Kes`** seçeneği eklendi.
+  - Karşı tarafa TCP `DISCONNECT` kontrol çerçevesi iletilerek iki tarafta da oturum eşzamanlı olarak sonlandırılır.
+
+* **🎯 Anında Yerel Ekrana İmleç İadesi:**
+  - Bağlantı kesildiği sırada fare imleci uzak cihazın ekranında bulunuyorsa, imleç ve klavye kontrolü bekleme veya takılma olmaksızın derhal yerel ana ekrana iade edilir.
+
+* **🛑 Akıllı Otomatik Bağlantı Bastırma (Auto-Reconnect Suppression):**
+  - "Bu Cihaza Güven ve Hatırla (Sıfır-PIN)" olarak kaydedilmiş cihazlarda, kullanıcı bağlantıyı kestiğinde arka plan servisinin hemen tekrar bağlanıp kullanıcıyla inatlaşması engellendi. Kullanıcı ilgili cihaza manuel bağlanana veya PIN girene kadar otomatik bağlantı bastırılır.
+
+* **🗑️ Cihazı Unut (Güvenilirlik Kaydını Sil):**
+  - Kayıtlı güvenilir cihazları tek tıkla silip unutabilmek için tüm platformlara **`🗑️ Bu Cihazı Unut (Güveni Kaldır)`** seçeneği eklendi.
+
+---
+
 # Connect Me v1.6.8 — Ortak Kenar Geçiş Koruması, Otomatik Kenar Senkronizasyonu & İndirme Bağlantıları Güncellemesi
 
 Bu sürüm; Windows'tan Android'e fare geçtiğinde telefonun herhangi bir kenarına (üst bildirim çubuğu, alt gezinme çubuğu, sağ kenar) değildiğinde imlecin istenmeyen şekilde Windows'a geri dönmesi sorununu çözen akıllı ortak kenar filtresini, Windows 2D kanvasındaki yerleşim değişikliklerinin anında Android'e iletilmesini (`EDGE_CONFIG`) ve indirme bağlantılarının en son sürümlerle eşzamanlanmasını sunar.

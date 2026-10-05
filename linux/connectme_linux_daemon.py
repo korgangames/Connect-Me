@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.6.8"
+VERSION = "1.6.9"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
