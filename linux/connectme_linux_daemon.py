@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.7.9"
+VERSION = "1.8.0"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -1623,6 +1623,30 @@ class ConnectMeLinuxNode:
             peer["is_trusted"] = True
             self.log(f"[Güvenlik] ⭐ '{peer.get('deviceName')}' güvenilir cihaz olarak kaydedildi.")
 
+        # Send fast-path UDP PAIR_ACCEPT
+        try:
+            remote_ip = peer.get("ipAddress")
+            if remote_ip:
+                u_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                req_udp = {
+                    "type": "PAIR_ACCEPT",
+                    "senderId": self.device_id,
+                    "senderName": self.device_name,
+                    "senderPlatform": "linux-nobara",
+                    "senderUdpPort": FAST_INPUT_UDP_PORT,
+                    "senderTcpPort": DATA_CONTROL_TCP_PORT,
+                    "senderScreenWidth": self.topology.total_width,
+                    "senderScreenHeight": self.topology.total_height,
+                    "senderMonitors": [asdict(m) for m in self.topology.monitors],
+                    "requestTrust": remember,
+                    "trustToken": trust_token if remember else None,
+                    "isMutualComplete": True
+                }
+                u_sock.sendto(json.dumps(req_udp).encode("utf-8"), (remote_ip, DISCOVERY_UDP_PORT))
+                u_sock.close()
+        except Exception:
+            pass
+
         # Send PAIR_ACCEPT over TCP to peer
         try:
             remote_ip = peer.get("ipAddress")
@@ -1786,7 +1810,196 @@ class ConnectMeLinuxNode:
                 if not data:
                     continue
                 payload = json.loads(data.decode("utf-8"))
-                if payload.get("type") != "DISCOVER_BEACON":
+                msg_type = payload.get("type", "")
+
+                if msg_type == "PAIR_REQUEST":
+                    target_pin = str(payload.get("targetPin", "")).strip()
+                    sender_id = payload.get("senderId", addr[0])
+                    sender_name = payload.get("senderName", addr[0])
+                    peer = self.peers.setdefault(sender_id, {
+                        "deviceId": sender_id,
+                        "deviceName": sender_name,
+                        "platform": payload.get("senderPlatform", "windows"),
+                        "ipAddress": addr[0],
+                        "udpInputPort": payload.get("senderUdpPort", FAST_INPUT_UDP_PORT),
+                        "tcpControlPort": payload.get("senderTcpPort", DATA_CONTROL_TCP_PORT),
+                        "in_ok": False,
+                        "out_ok": False,
+                        "isMutuallyPaired": False
+                    })
+                    peer["ipAddress"] = addr[0]
+                    peer["deviceName"] = sender_name
+                    peer["platform"] = payload.get("senderPlatform", peer.get("platform", "windows"))
+                    if payload.get("senderMonitors"):
+                        peer["monitors"] = payload.get("senderMonitors")
+                    peer["lastSeen"] = time.time()
+
+                    if target_pin == self.local_pin:
+                        peer["in_ok"] = True
+                        req_trust = bool(payload.get("requestTrust", False))
+                        trust_token = payload.get("trustToken", "")
+                        is_mut = bool(peer.get("out_ok", False))
+                        peer["isMutuallyPaired"] = is_mut
+
+                        if is_mut:
+                            if req_trust and trust_token:
+                                self.trusted_devices[sender_id] = {
+                                    "deviceId": sender_id,
+                                    "deviceName": sender_name,
+                                    "platform": peer.get("platform", "windows"),
+                                    "trustToken": trust_token,
+                                    "autoConnect": True
+                                }
+                                self._save_trusted_devices()
+                                peer["is_trusted"] = True
+                                self.log(f"[Güvenlik] ⭐ '{sender_name}' karşılıklı doğrulandı ve güvenilir cihaz olarak kaydedildi.")
+                        else:
+                            peer["pending_trust_token"] = trust_token if req_trust else ""
+                            peer["pending_req_trust"] = req_trust
+                            self.log(f"[PIN İsteği - UDP] 🔔 '{sender_name}' ({addr[0]}) sizin 6 haneli kodunuzu ({self.local_pin}) doğru girdi! Eşleşmeyi tamamlamak için siz de onun 6 haneli kodunu girip onaylayın.")
+                            if self.on_pin_request_received:
+                                try:
+                                    self.on_pin_request_received(sender_id, sender_name)
+                                except Exception:
+                                    pass
+
+                        ack = {
+                            "type": "PAIR_VERIFY_ACK",
+                            "senderId": self.device_id,
+                            "senderName": self.device_name,
+                            "senderMonitors": [asdict(m) for m in self.topology.monitors],
+                            "trustToken": trust_token if req_trust else None,
+                            "isMutualComplete": is_mut,
+                        }
+                        ack_bytes = json.dumps(ack).encode("utf-8")
+                        sock.sendto(ack_bytes, addr)
+                        if self.on_peer_updated:
+                            try:
+                                self.on_peer_updated(peer)
+                            except Exception:
+                                pass
+                    else:
+                        rej = {"type": "PAIR_REJECT", "senderId": self.device_id, "senderName": self.device_name}
+                        sock.sendto(json.dumps(rej).encode("utf-8"), addr)
+                        self.log(f"[Güvenlik] ⚠️ '{sender_name}' hatalı kod denedi ({target_pin}).")
+                    continue
+
+                elif msg_type == "PAIR_VERIFY_ACK":
+                    sender_id = payload.get("senderId", addr[0])
+                    peer = self.peers.get(sender_id)
+                    if not peer:
+                        for p in self.peers.values():
+                            if p.get("ipAddress") == addr[0]:
+                                peer = p
+                                break
+                    if peer:
+                        peer["out_ok"] = True
+                        if payload.get("senderMonitors"):
+                            peer["monitors"] = payload.get("senderMonitors")
+                        if payload.get("senderName"):
+                            peer["deviceName"] = payload.get("senderName")
+                        if payload.get("isMutualComplete") or peer.get("in_ok"):
+                            peer["isMutuallyPaired"] = True
+                            if payload.get("trustToken"):
+                                self.trusted_devices[peer["deviceId"]] = {
+                                    "deviceId": peer["deviceId"],
+                                    "deviceName": peer.get("deviceName", peer["deviceId"]),
+                                    "platform": peer.get("platform", "windows"),
+                                    "trustToken": payload.get("trustToken"),
+                                    "autoConnect": True
+                                }
+                                self._save_trusted_devices()
+                                peer["is_trusted"] = True
+                            self.log(f"[Hızlı Eşleşme - UDP] ✅ '{peer.get('deviceName')}' ile karşılıklı eşleşme tamamlandı!")
+                        else:
+                            self.log(f"[PIN Onayı - UDP] 🔔 '{peer.get('deviceName')}' kodunuzu onayladı! Bağlantıyı tamamlamak için o da sizin kodunuzu ({self.local_pin}) girmeli.")
+                        if self.on_peer_updated:
+                            try:
+                                self.on_peer_updated(peer)
+                            except Exception:
+                                pass
+                    continue
+
+                elif msg_type == "PAIR_ACCEPT":
+                    sender_id = payload.get("senderId", addr[0])
+                    sender_name = payload.get("senderName", addr[0])
+                    peer = self.peers.setdefault(sender_id, {
+                        "deviceId": sender_id,
+                        "deviceName": sender_name,
+                        "platform": payload.get("senderPlatform", "android"),
+                        "ipAddress": addr[0],
+                        "udpInputPort": payload.get("senderUdpPort", FAST_INPUT_UDP_PORT),
+                        "tcpControlPort": payload.get("senderTcpPort", DATA_CONTROL_TCP_PORT),
+                    })
+                    peer["deviceName"] = sender_name
+                    peer["platform"] = payload.get("senderPlatform", peer.get("platform", "android"))
+                    peer["ipAddress"] = addr[0]
+                    peer["in_ok"] = True
+                    peer["out_ok"] = True
+                    peer["isMutuallyPaired"] = True
+                    self.suppressed_autoconnect.discard(sender_id)
+
+                    req_trust = bool(payload.get("requestTrust", False))
+                    trust_token = payload.get("trustToken", "")
+                    if req_trust and trust_token:
+                        self.trusted_devices[sender_id] = {
+                            "deviceId": sender_id,
+                            "deviceName": sender_name,
+                            "platform": peer.get("platform", "android"),
+                            "trustToken": trust_token,
+                            "autoConnect": True
+                        }
+                        self._save_trusted_devices()
+                        peer["is_trusted"] = True
+
+                    ack = {
+                        "type": "PAIR_ACCEPT_ACK",
+                        "senderId": self.device_id,
+                        "senderName": self.device_name,
+                        "senderPlatform": "linux-nobara",
+                        "senderUdpPort": FAST_INPUT_UDP_PORT,
+                        "senderTcpPort": DATA_CONTROL_TCP_PORT,
+                        "senderScreenWidth": self.topology.total_width,
+                        "senderScreenHeight": self.topology.total_height,
+                        "senderMonitors": [asdict(m) for m in self.topology.monitors],
+                        "isMutualComplete": True
+                    }
+                    sock.sendto(json.dumps(ack).encode("utf-8"), addr)
+                    self.log(f"[Çift Taraflı Eşleşme - UDP] ✅ '{sender_name}' ({addr[0]}) bağlantı isteğinizi onayladı!")
+                    if self.on_peer_updated:
+                        try:
+                            self.on_peer_updated(peer)
+                        except Exception:
+                            pass
+                    continue
+
+                elif msg_type == "PAIR_ACCEPT_ACK":
+                    sender_id = payload.get("senderId", addr[0])
+                    sender_name = payload.get("senderName", addr[0])
+                    peer = self.peers.get(sender_id)
+                    if not peer:
+                        for p in self.peers.values():
+                            if p.get("ipAddress") == addr[0]:
+                                peer = p
+                                break
+                    if peer:
+                        peer["in_ok"] = True
+                        peer["out_ok"] = True
+                        peer["isMutuallyPaired"] = True
+                        if self.on_peer_updated:
+                            try:
+                                self.on_peer_updated(peer)
+                            except Exception:
+                                pass
+                    self.log(f"[Bağlantı Onayı - UDP] ✅ '{sender_name}' ({addr[0]}) PAIR_ACCEPT_ACK teyit etti.")
+                    continue
+
+                elif msg_type == "PAIR_REJECT":
+                    sender_name = payload.get("senderName", addr[0])
+                    self.log(f"[PIN Reddi - UDP] ⚠️ '{sender_name}' ({addr[0]}) girilen PIN kodunu reddetti.")
+                    continue
+
+                if msg_type != "DISCOVER_BEACON":
                     continue
 
                 dev_id = payload.get("deviceId", "")

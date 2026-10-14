@@ -1,8 +1,31 @@
-# Connect Me v1.7.9 — Linux ➔ Windows Çift Yönlü Fare Geçişi, Donanım Yetkilendirme & HUD İyileştirmeleri
+# Connect Me v1.8.0 — Çift Kanallı Eşleşme (TCP + UDP Hızlı Yol), Windows Güvenlik Duvarı Otomasyonu & Canlı Ağ Tanılama
 
-Bu sürüm; Windows ile Linux birlikte çalıştığında farenin yalnızca Windows'tan Linux'a geçebilip Linux'tan Windows'a geri dönememesi sorununu kökten çözer. Linux dönüş paketindeki ikili veri paketleme hatasını, Windows imleç yakalama hook sıfırlamasını, IPv6-mapped IPv4 adres çözümlemesini ve evdev donanımsal girdi izinlerini kusursuzlaştırır.
+Bu sürüm; Linux'tan Windows'a bağlanırken Windows 6 haneli PIN kodu girildiğinde isteğin Windows'a ulaşmaması veya yanıtsız kalması sorununu kökten çözer. Windows Güvenlik Duvarı (Windows Defender Firewall) otomatik kural kurulumunu, UDP port 42849 ve TCP port 42851 üzerinden çift kanallı (dual-channel) eşleşme motorunu, IPv6-mapped IPv4 normalizasyonunu ve Linux GUI canlı kullanıcı teşhis geri bildirimlerini sunar.
 
 ---
+
+### 🌟 v1.8.0 Yenilikleri ve Düzeltmeleri:
+
+* **🛡️ Windows Defender Güvenlik Duvarı Otomatik Yapılandırması:**
+  - **Sorunun Kök Nedeni:** Windows işletim sistemi, varsayılan güvenlik duvarı kuralları gereği yerel ağdan (LAN/Wi-Fi) gelen TCP 42851 bağlantı isteklerini (SYN paketleri) sessizce düşürüyordu. UDP keşif paketleri (42849) ulaşıyor olsa bile eşleşme isteği sadece TCP üzerinden gönderildiği için Windows'a hiçbir zaman ulaşmıyordu.
+  - **Çözüm:** `WindowsFirewallHelper` geliştirildi. Program Windows'ta ilk açıldığında arka planda `netsh advfirewall` aracılığıyla `ConnectMe.exe` program kuralı, TCP port 42851 ve UDP portları (42849, 42850, 42852) için gelen kuralları otomatik ve sessizce oluşturur.
+
+* **⚡ Çift Kanallı Eşleşme Motoru (Dual-Channel Pairing: TCP + UDP Hızlı Yol):**
+  - **UDP Üzerinden Eşleşme Paketi Desteği:** Eşleşme sinyalleri (`PAIR_REQUEST`, `PAIR_VERIFY_ACK`, `PAIR_ACCEPT`, `PAIR_ACCEPT_ACK`, `PAIR_REJECT`) artık hem güvenilir TCP çerçevesiyle hem de UDP port 42849 üzerinden hızlı yoldan eşzamanlı olarak iletilir.
+  - **Güvenlik Duvarı Engeli Aşımı:** Herhangi bir sebeple TCP portu güvenlik duvarı veya router tarafından bloklansa dahi UDP hızlı yolu üzerinden eşleşme paketleri 1 milisaniyeden kısa sürede hedefe ulaşır, karşı cihaz anında bildirim kartını açar ve bağlantı kusursuzca kurulur.
+  - **Tüm Platformlar Arasında Senkronizasyon:** Windows `ConnectMeNetworkNode`, Linux `ConnectMeLinuxNode` ve Linux GUI motorlarının tamamı UDP eşleşme paketlerini dinleyecek ve teyit edecek şekilde güncellendi.
+
+* **🌐 IPv6-Mapped IPv4 Adres Normalizasyonu:**
+  - Windows TCP dinleyicisine bağlanan Linux istemcileri, çift yığınlı soketlerde `::ffff:192.168.x.x` şeklinde görünüyordu. Bu adresler artık `MapToIPv4()` ile saf IPv4 adresine dönüştürülür ve IP uyuşmazlıkları engellenir.
+
+* **🖥️ Linux GUI Kullanıcı Geri Bildirimi & Canlı Tanılama Diyalogları:**
+  - **Sessiz Zaman Aşımı Giderildi:** Eski sürümlerde TCP soket zaman aşımı veya hataları yalnızca arka plan loglarına yazılıyor, kullanıcı ekranda hiçbir tepki görmüyordu. Artık bağlantı yanıt vermediğinde olası nedenleri ve çözüm önerilerini içeren bilgilendirici bir uyarı penceresi açılır.
+  - **Cihaz Seçim Listesi Eşleşmesi (`_displayed_peer_ids`):** Listede birden fazla cihaz varken veya keşif beklenirken yapılan seçimlerin doğru hedef IP ve cihaza yönlendirilmesi sağlandı. Buton üzerinde bağlanılacak cihazın adı dinamik olarak gösterilir (`🔗 'Windows' ile Doğrula ve Bağlan`).
+  - **PIN Doğrulama ve Red Bildirimleri:** PIN kabul edildiğinde veya hatalı kod girildiğinde anında görsel bildirim kutuları ile kullanıcı net olarak bilgilendirilir.
+
+---
+
+
 
 ### 🌟 v1.7.9 Yenilikleri ve Düzeltmeleri:
 

@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ConnectMe.Core.Protocol;
 using ConnectMe.Core.Topology;
 
@@ -92,6 +93,12 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     private TcpListener? _tcpListener;
     private ushort _mouseSeq;
     private string _lastClipboardHash = string.Empty;
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        PropertyNameCaseInsensitive = true
+    };
 
     public string LocalDeviceId { get; }
     public string LocalDeviceName { get; }
@@ -403,6 +410,33 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
         _suppressedAutoConnectPeers.TryRemove(peer.DeviceId, out _);
 
+        // Send fast-path UDP PAIR_REQUEST to remote peer
+        try
+        {
+            if (_discoveryUdp != null && !string.IsNullOrEmpty(peer.IpAddress))
+            {
+                var udpReqHeader = new TcpControlHeader
+                {
+                    Type = "PAIR_REQUEST",
+                    SenderId = LocalDeviceId,
+                    SenderName = LocalDeviceName,
+                    SenderPlatform = LocalPlatform,
+                    SenderUdpPort = InputUdpPort,
+                    SenderTcpPort = ControlTcpPort,
+                    SenderScreenWidth = LocalScreenWidth,
+                    SenderScreenHeight = LocalScreenHeight,
+                    SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
+                    TargetPin = cleanPin,
+                    RequestTrust = rememberDevice,
+                    TrustToken = generatedTrustToken,
+                    ReturnEdge = (int)SpatialTopologyEngine.GetOppositeEdge(peer.AssignedEdgeOnLocal)
+                };
+                byte[] udpReqBytes = JsonSerializer.SerializeToUtf8Bytes(udpReqHeader, JsonOptions);
+                _ = _discoveryUdp.SendAsync(udpReqBytes, udpReqBytes.Length, peer.IpAddress, ProtocolConstants.DiscoveryUdpPort);
+            }
+        }
+        catch { }
+
         // Real network peer over TCP 42851
         try
         {
@@ -512,6 +546,15 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            if (peer.MyEnteredPinVerifiedByRemote)
+            {
+                string trustBadge = rememberDevice ? " [⭐ Bu Cihaz Hatırlandı]" : "";
+                string successMsg = peer.IsMutuallyPaired
+                    ? $"✅ '{peer.DeviceName}' ile UDP hızlı yol üzerinden ÇİFT TARAFLI eşleşme tamamlandı!{trustBadge}"
+                    : $"✅ '{peer.DeviceName}' kodu UDP hızlı yol üzerinden doğrulandı.{trustBadge}";
+                Log($"[PIN Doğrulama - UDP] {successMsg}");
+                return (true, peer.IsMutuallyPaired, successMsg);
+            }
             string msg = $"❌ '{peer.DeviceName}' ({peer.IpAddress}:{peer.TcpControlPort}) bağlantı hatası: {ex.Message}";
             Log($"[PIN Hata] {msg}");
             return (false, false, msg);
@@ -579,6 +622,33 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 AutoConnect = true
             });
         }
+
+        try
+        {
+            if (_discoveryUdp != null && !string.IsNullOrEmpty(peer.IpAddress))
+            {
+                var udpReq = new TcpControlHeader
+                {
+                    Type = "PAIR_ACCEPT",
+                    SenderId = LocalDeviceId,
+                    SenderName = LocalDeviceName,
+                    SenderPlatform = LocalPlatform,
+                    SenderUdpPort = InputUdpPort,
+                    SenderTcpPort = ControlTcpPort,
+                    SenderScreenWidth = LocalScreenWidth,
+                    SenderScreenHeight = LocalScreenHeight,
+                    SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
+                    RequestTrust = rememberDevice,
+                    TrustToken = generatedToken,
+                    ColonyId = GetCurrentColonyId(),
+                    ColonyMembers = GetColonyMembers(),
+                    IsMutualComplete = true
+                };
+                byte[] udpReqBytes = JsonSerializer.SerializeToUtf8Bytes(udpReq, JsonOptions);
+                _ = _discoveryUdp.SendAsync(udpReqBytes, udpReqBytes.Length, peer.IpAddress, ProtocolConstants.DiscoveryUdpPort);
+            }
+        }
+        catch { }
 
         try
         {
@@ -1309,11 +1379,74 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             try
             {
                 var res = await _discoveryUdp.ReceiveAsync(ct).ConfigureAwait(false);
-                var beacon = JsonSerializer.Deserialize<DiscoveryBeacon>(res.Buffer);
+                var rawAddr = res.RemoteEndPoint.Address;
+                if (rawAddr.IsIPv4MappedToIPv6)
+                {
+                    rawAddr = rawAddr.MapToIPv4();
+                }
+                string senderIp = rawAddr.ToString();
+
+                using var doc = JsonDocument.Parse(res.Buffer);
+                if (!doc.RootElement.TryGetProperty("type", out var typeProp))
+                    continue;
+
+                string? msgType = typeProp.GetString();
+                if (string.IsNullOrEmpty(msgType))
+                    continue;
+
+                if (msgType == "PAIR_REQUEST")
+                {
+                    var header = JsonSerializer.Deserialize<TcpControlHeader>(res.Buffer, JsonOptions);
+                    if (header != null && !string.IsNullOrEmpty(header.SenderId) && header.SenderId != LocalDeviceId)
+                    {
+                        var (success, resp) = ProcessInboundPairRequest(header, senderIp);
+                        byte[] respBytes = JsonSerializer.SerializeToUtf8Bytes(resp, JsonOptions);
+                        await _discoveryUdp.SendAsync(respBytes, respBytes.Length, res.RemoteEndPoint).ConfigureAwait(false);
+                        Log($"[Hızlı UDP Eşleşme] ⚡ '{senderIp}' cihazına UDP üzerinden {(success ? "PAIR_VERIFY_ACK" : "PAIR_REJECT")} yanıtı iletildi.");
+                    }
+                    continue;
+                }
+                else if (msgType == "PAIR_VERIFY_ACK")
+                {
+                    var header = JsonSerializer.Deserialize<TcpControlHeader>(res.Buffer, JsonOptions);
+                    if (header != null && !string.IsNullOrEmpty(header.SenderId) && header.SenderId != LocalDeviceId)
+                    {
+                        ProcessInboundPairVerifyAck(header, senderIp);
+                        Log($"[Hızlı UDP Eşleşme] ⚡ '{senderIp}' cihazından UDP üzerinden PAIR_VERIFY_ACK alındı ve doğrulandı.");
+                    }
+                    continue;
+                }
+                else if (msgType == "PAIR_ACCEPT")
+                {
+                    var header = JsonSerializer.Deserialize<TcpControlHeader>(res.Buffer, JsonOptions);
+                    if (header != null && !string.IsNullOrEmpty(header.SenderId) && header.SenderId != LocalDeviceId)
+                    {
+                        var resp = ProcessInboundPairAccept(header, senderIp);
+                        byte[] respBytes = JsonSerializer.SerializeToUtf8Bytes(resp, JsonOptions);
+                        await _discoveryUdp.SendAsync(respBytes, respBytes.Length, res.RemoteEndPoint).ConfigureAwait(false);
+                        Log($"[Hızlı UDP Eşleşme] ⚡ '{senderIp}' cihazına UDP üzerinden PAIR_ACCEPT_ACK iletildi.");
+                    }
+                    continue;
+                }
+                else if (msgType == "PAIR_ACCEPT_ACK")
+                {
+                    var header = JsonSerializer.Deserialize<TcpControlHeader>(res.Buffer, JsonOptions);
+                    if (header != null && !string.IsNullOrEmpty(header.SenderId) && header.SenderId != LocalDeviceId)
+                    {
+                        ProcessInboundPairVerifyAck(header, senderIp);
+                        Log($"[Hızlı UDP Eşleşme] ⚡ '{senderIp}' cihazından UDP üzerinden PAIR_ACCEPT_ACK teyit edildi.");
+                    }
+                    continue;
+                }
+                else if (msgType != "DISCOVER_BEACON")
+                {
+                    continue;
+                }
+
+                var beacon = JsonSerializer.Deserialize<DiscoveryBeacon>(res.Buffer, JsonOptions);
                 if (beacon == null || string.IsNullOrEmpty(beacon.DeviceId) || beacon.DeviceId == LocalDeviceId)
                     continue;
 
-                string senderIp = res.RemoteEndPoint.Address.ToString();
                 bool isNew = !_peers.ContainsKey(beacon.DeviceId);
 
                 var peer = _peers.AddOrUpdate(
@@ -1585,6 +1718,363 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         }
     }
 
+    public (bool Success, TcpControlHeader Response) ProcessInboundPairRequest(TcpControlHeader header, string remoteIp)
+    {
+        string peerId = !string.IsNullOrEmpty(header.SenderId)
+            ? header.SenderId
+            : $"{header.SenderPlatform ?? "peer"}-{remoteIp}:{header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort}";
+
+        var peer = _peers.AddOrUpdate(
+            peerId,
+            _ =>
+            {
+                var np = new PeerDeviceNode
+                {
+                    DeviceId = peerId,
+                    DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
+                    Platform = header.SenderPlatform ?? "android",
+                    IpAddress = remoteIp,
+                    UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
+                    TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
+                    ScreenWidth = header.SenderScreenWidth ?? 1080,
+                    ScreenHeight = header.SenderScreenHeight ?? 2400,
+                    LastSeen = DateTimeOffset.UtcNow
+                };
+                UpdatePeerDimensionsFromMonitors(np, header.SenderMonitors);
+                return np;
+            },
+            (_, existing) =>
+            {
+                if (!string.IsNullOrEmpty(header.SenderName))
+                    existing.DeviceName = header.SenderName;
+                if (!string.IsNullOrEmpty(header.SenderPlatform))
+                    existing.Platform = header.SenderPlatform;
+                existing.IpAddress = remoteIp;
+                if (header.SenderUdpPort.HasValue)
+                    existing.UdpInputPort = header.SenderUdpPort.Value;
+                if (header.SenderTcpPort.HasValue)
+                    existing.TcpControlPort = header.SenderTcpPort.Value;
+                if (header.SenderScreenWidth.HasValue)
+                    existing.ScreenWidth = header.SenderScreenWidth.Value;
+                if (header.SenderScreenHeight.HasValue)
+                    existing.ScreenHeight = header.SenderScreenHeight.Value;
+                if (header.SenderMonitors is { Count: > 0 })
+                    UpdatePeerDimensionsFromMonitors(existing, header.SenderMonitors);
+                existing.LastSeen = DateTimeOffset.UtcNow;
+                return existing;
+            });
+
+        // Merge and clean up any placeholder peer entry with the same IP but different DeviceId
+        int senderTcp = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort;
+        var placeholder = _peers.Values.FirstOrDefault(p =>
+            p.IpAddress == remoteIp &&
+            p.DeviceId != peerId &&
+            (p.DeviceId.StartsWith("peer-") || p.DeviceId.StartsWith("manual-")) &&
+            p.TcpControlPort == senderTcp);
+        if (placeholder != null)
+        {
+            if (placeholder.MyEnteredPinVerifiedByRemote) peer.MyEnteredPinVerifiedByRemote = true;
+            if (placeholder.RemoteEnteredMyPinVerified) peer.RemoteEnteredMyPinVerified = true;
+            if (placeholder.IsTrusted) { peer.IsTrusted = true; peer.TrustToken = placeholder.TrustToken; }
+            if (!string.IsNullOrEmpty(placeholder.ColonyId)) peer.ColonyId = placeholder.ColonyId;
+            if (placeholder.ColonyMembers.Count > 0) peer.ColonyMembers = placeholder.ColonyMembers;
+            if (placeholder.HasCustomCanvasPosition)
+            {
+                peer.HasCustomCanvasPosition = true;
+                peer.CanvasX = placeholder.CanvasX;
+                peer.CanvasY = placeholder.CanvasY;
+            }
+            peer.AssignedEdgeOnLocal = placeholder.AssignedEdgeOnLocal;
+            peer.EdgeOffsetStart = placeholder.EdgeOffsetStart;
+            peer.EdgeOffsetEnd = placeholder.EdgeOffsetEnd;
+            if (!string.IsNullOrEmpty(placeholder.AttachedLocalMonitorId))
+                peer.AttachedLocalMonitorId = placeholder.AttachedLocalMonitorId;
+
+            _peers.TryRemove(placeholder.DeviceId, out _);
+        }
+
+        string submittedPin = (header.TargetPin ?? string.Empty).Trim();
+        if (submittedPin == PairingPin)
+        {
+            peer.RemoteEnteredMyPinVerified = true;
+            bool requestedTrust = header.RequestTrust == true && !string.IsNullOrWhiteSpace(header.TrustToken);
+            if (requestedTrust)
+            {
+                peer.PendingTrustToken = header.TrustToken!;
+            }
+
+            if (peer.IsMutuallyPaired)
+            {
+                string effectiveToken = !string.IsNullOrWhiteSpace(peer.PendingTrustToken)
+                    ? peer.PendingTrustToken
+                    : (header.TrustToken ?? peer.TrustToken);
+
+                if (!string.IsNullOrWhiteSpace(effectiveToken))
+                {
+                    peer.IsTrusted = true;
+                    peer.TrustToken = effectiveToken;
+                    var record = new TrustedDeviceRecord
+                    {
+                        DeviceId = peer.DeviceId,
+                        DeviceName = peer.DeviceName,
+                        Platform = peer.Platform,
+                        TrustToken = effectiveToken,
+                        AssignedEdge = peer.AssignedEdgeOnLocal,
+                        EdgeOffsetStart = peer.EdgeOffsetStart,
+                        EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                        AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                        CanvasX = peer.CanvasX,
+                        CanvasY = peer.CanvasY,
+                        HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                        AutoConnect = true
+                    };
+                    TrustStore.AddOrUpdateTrustedDevice(record);
+                }
+            }
+
+            var ack = new TcpControlHeader
+            {
+                Type = "PAIR_VERIFY_ACK",
+                SenderId = LocalDeviceId,
+                SenderName = LocalDeviceName,
+                SenderPlatform = LocalPlatform,
+                SenderUdpPort = InputUdpPort,
+                SenderTcpPort = ControlTcpPort,
+                SenderScreenWidth = LocalScreenWidth,
+                SenderScreenHeight = LocalScreenHeight,
+                SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
+                ColonyId = GetCurrentColonyId(),
+                ColonyMembers = GetColonyMembers(),
+                RequestTrust = requestedTrust,
+                TrustToken = requestedTrust ? header.TrustToken : null,
+                IsMutualComplete = peer.IsMutuallyPaired
+            };
+
+            string trustNote = requestedTrust ? " (⭐ Cihaz güvenildi & hatırlandı)" : "";
+            if (peer.IsMutuallyPaired)
+            {
+                Log($"[Çift Taraflı Eşleşme] ✅ '{peer.DeviceName}' ({remoteIp}) ile karşılıklı 6 haneli PIN onayı tamamlandı!{trustNote}");
+                _ = IntroduceNewMemberToColonyAsync(peer);
+            }
+            else
+            {
+                Log($"[PIN İsteği] 🔔 '{peer.DeviceName}' sizin 6 haneli kodunuzu ({PairingPin}) doğru girdi!{trustNote} Bağlantıyı tamamlamak için bildirimden 'Kabul Et'e basın veya onun 6 haneli kodunu girin.");
+                RemotePinVerifiedWaitingLocalPin?.Invoke(peer);
+            }
+
+            PeerPairingStatusChanged?.Invoke(peer);
+            PeerDiscoveredOrUpdated?.Invoke(peer);
+            return (true, ack);
+        }
+        else
+        {
+            var rej = new TcpControlHeader
+            {
+                Type = "PAIR_REJECT",
+                SenderId = LocalDeviceId,
+                SenderName = LocalDeviceName
+            };
+            Log($"[Güvenlik] ⚠️ '{peer.DeviceName}' ({remoteIp}) hatalı PIN kodu denedi (Girilen: '{submittedPin}', Beklenen: '{PairingPin}').");
+            return (false, rej);
+        }
+    }
+
+    public TcpControlHeader ProcessInboundPairAccept(TcpControlHeader header, string remoteIp)
+    {
+        string peerId = !string.IsNullOrEmpty(header.SenderId)
+            ? header.SenderId
+            : $"{header.SenderPlatform ?? "peer"}-{remoteIp}:{header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort}";
+
+        var peer = _peers.AddOrUpdate(
+            peerId,
+            _ =>
+            {
+                var np = new PeerDeviceNode
+                {
+                    DeviceId = peerId,
+                    DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
+                    Platform = header.SenderPlatform ?? "android",
+                    IpAddress = remoteIp,
+                    UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
+                    TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
+                    ScreenWidth = header.SenderScreenWidth ?? 1080,
+                    ScreenHeight = header.SenderScreenHeight ?? 2400,
+                    LastSeen = DateTimeOffset.UtcNow,
+                    MyEnteredPinVerifiedByRemote = true,
+                    RemoteEnteredMyPinVerified = true
+                };
+                UpdatePeerDimensionsFromMonitors(np, header.SenderMonitors);
+                return np;
+            },
+            (_, existing) =>
+            {
+                if (!string.IsNullOrEmpty(header.SenderName)) existing.DeviceName = header.SenderName;
+                if (!string.IsNullOrEmpty(header.SenderPlatform)) existing.Platform = header.SenderPlatform;
+                existing.IpAddress = remoteIp;
+                if (header.SenderUdpPort.HasValue) existing.UdpInputPort = header.SenderUdpPort.Value;
+                if (header.SenderTcpPort.HasValue) existing.TcpControlPort = header.SenderTcpPort.Value;
+                if (header.SenderScreenWidth.HasValue) existing.ScreenWidth = header.SenderScreenWidth.Value;
+                if (header.SenderScreenHeight.HasValue) existing.ScreenHeight = header.SenderScreenHeight.Value;
+                if (header.SenderMonitors is { Count: > 0 }) UpdatePeerDimensionsFromMonitors(existing, header.SenderMonitors);
+                existing.MyEnteredPinVerifiedByRemote = true;
+                existing.RemoteEnteredMyPinVerified = true;
+                existing.LastSeen = DateTimeOffset.UtcNow;
+                return existing;
+            });
+
+        int senderTcp = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort;
+        var placeholder = _peers.Values.FirstOrDefault(p =>
+            p.IpAddress == remoteIp &&
+            p.DeviceId != peerId &&
+            (p.DeviceId.StartsWith("peer-") || p.DeviceId.StartsWith("manual-")) &&
+            p.TcpControlPort == senderTcp);
+        if (placeholder != null)
+        {
+            if (placeholder.HasCustomCanvasPosition)
+            {
+                peer.HasCustomCanvasPosition = true;
+                peer.CanvasX = placeholder.CanvasX;
+                peer.CanvasY = placeholder.CanvasY;
+            }
+            peer.AssignedEdgeOnLocal = placeholder.AssignedEdgeOnLocal;
+            peer.EdgeOffsetStart = placeholder.EdgeOffsetStart;
+            peer.EdgeOffsetEnd = placeholder.EdgeOffsetEnd;
+            if (!string.IsNullOrEmpty(placeholder.AttachedLocalMonitorId))
+                peer.AttachedLocalMonitorId = placeholder.AttachedLocalMonitorId;
+            _peers.TryRemove(placeholder.DeviceId, out _);
+        }
+
+        if (header.RequestTrust == true && !string.IsNullOrWhiteSpace(header.TrustToken))
+        {
+            peer.IsTrusted = true;
+            peer.TrustToken = header.TrustToken;
+            TrustStore.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+            {
+                DeviceId = peer.DeviceId,
+                DeviceName = peer.DeviceName,
+                Platform = peer.Platform,
+                TrustToken = header.TrustToken,
+                AssignedEdge = peer.AssignedEdgeOnLocal,
+                EdgeOffsetStart = peer.EdgeOffsetStart,
+                EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                CanvasX = peer.CanvasX,
+                CanvasY = peer.CanvasY,
+                HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                AutoConnect = true
+            });
+        }
+
+        if (!string.IsNullOrEmpty(header.ColonyId))
+        {
+            peer.ColonyId = header.ColonyId;
+            peer.ColonyName = header.ColonyName;
+        }
+        if (header.ColonyMembers is { Count: > 0 })
+        {
+            peer.ColonyMembers = header.ColonyMembers;
+        }
+
+        var ack = new TcpControlHeader
+        {
+            Type = "PAIR_ACCEPT_ACK",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform,
+            SenderUdpPort = InputUdpPort,
+            SenderTcpPort = ControlTcpPort,
+            SenderScreenWidth = LocalScreenWidth,
+            SenderScreenHeight = LocalScreenHeight,
+            SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
+            ColonyId = GetCurrentColonyId(),
+            ColonyMembers = GetColonyMembers(),
+            IsMutualComplete = true
+        };
+
+        Log($"[Çift Taraflı Eşleşme] ✅ '{peer.DeviceName}' ({remoteIp}) doğrudan onay ile karşılıklı eşleşti!");
+        _ = IntroduceNewMemberToColonyAsync(peer);
+
+        PeerPairingStatusChanged?.Invoke(peer);
+        PeerDiscoveredOrUpdated?.Invoke(peer);
+
+        return ack;
+    }
+
+    public void ProcessInboundPairVerifyAck(TcpControlHeader header, string remoteIp)
+    {
+        string peerId = !string.IsNullOrEmpty(header.SenderId)
+            ? header.SenderId
+            : $"{header.SenderPlatform ?? "peer"}-{remoteIp}:{header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort}";
+
+        PeerDeviceNode? peer = null;
+        if (!_peers.TryGetValue(peerId, out peer))
+        {
+            peer = _peers.Values.FirstOrDefault(p => p.IpAddress == remoteIp);
+        }
+
+        if (peer != null)
+        {
+            peer.MyEnteredPinVerifiedByRemote = true;
+            if (!string.IsNullOrEmpty(header.SenderName)) peer.DeviceName = header.SenderName;
+            if (!string.IsNullOrEmpty(header.SenderPlatform)) peer.Platform = header.SenderPlatform;
+            if (header.SenderUdpPort.HasValue) peer.UdpInputPort = header.SenderUdpPort.Value;
+            if (header.SenderTcpPort.HasValue) peer.TcpControlPort = header.SenderTcpPort.Value;
+            if (header.SenderScreenWidth.HasValue) peer.ScreenWidth = header.SenderScreenWidth.Value;
+            if (header.SenderScreenHeight.HasValue) peer.ScreenHeight = header.SenderScreenHeight.Value;
+            if (header.SenderMonitors is { Count: > 0 })
+            {
+                UpdatePeerDimensionsFromMonitors(peer, header.SenderMonitors);
+            }
+            if (header.IsMutualComplete == true)
+            {
+                peer.RemoteEnteredMyPinVerified = true;
+            }
+            if (!string.IsNullOrEmpty(header.ColonyId))
+            {
+                peer.ColonyId = header.ColonyId;
+                peer.ColonyName = header.ColonyName;
+            }
+            if (header.ColonyMembers is { Count: > 0 })
+            {
+                peer.ColonyMembers = header.ColonyMembers;
+            }
+
+            if (peer.IsMutuallyPaired)
+            {
+                string effectiveToken = !string.IsNullOrWhiteSpace(peer.PendingTrustToken)
+                    ? peer.PendingTrustToken
+                    : (header.TrustToken ?? peer.TrustToken);
+
+                if (!string.IsNullOrWhiteSpace(effectiveToken))
+                {
+                    peer.IsTrusted = true;
+                    peer.TrustToken = effectiveToken;
+                    TrustStore.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+                    {
+                        DeviceId = peer.DeviceId,
+                        DeviceName = peer.DeviceName,
+                        Platform = peer.Platform,
+                        TrustToken = effectiveToken,
+                        AssignedEdge = peer.AssignedEdgeOnLocal,
+                        EdgeOffsetStart = peer.EdgeOffsetStart,
+                        EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                        AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                        CanvasX = peer.CanvasX,
+                        CanvasY = peer.CanvasY,
+                        HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
+                        AutoConnect = true
+                    });
+                }
+
+                _ = IntroduceNewMemberToColonyAsync(peer);
+            }
+
+            PeerPairingStatusChanged?.Invoke(peer);
+            PeerDiscoveredOrUpdated?.Invoke(peer);
+            Log($"[PIN Doğrulama] ✅ '{peer.DeviceName}' ({remoteIp}) eşleşme doğrulaması alındı.");
+        }
+    }
+
     private async Task HandleTcpClientAsync(TcpClient client, CancellationToken ct)
     {
         using (client)
@@ -1594,280 +2084,27 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             if (header == null)
                 return;
 
-            string remoteIp = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "127.0.0.1";
+            var ep = client.Client.RemoteEndPoint as IPEndPoint;
+            var rawAddr = ep?.Address ?? IPAddress.Loopback;
+            if (rawAddr.IsIPv4MappedToIPv6)
+            {
+                rawAddr = rawAddr.MapToIPv4();
+            }
+            string remoteIp = rawAddr.ToString();
 
             switch (header.Type)
             {
                 case "PAIR_REQUEST":
                 {
-                    string peerId = !string.IsNullOrEmpty(header.SenderId)
-                        ? header.SenderId
-                        : $"{header.SenderPlatform ?? "peer"}-{remoteIp}:{header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort}";
-
-                    var peer = _peers.AddOrUpdate(
-                        peerId,
-                        _ =>
-                        {
-                            var np = new PeerDeviceNode
-                            {
-                                DeviceId = peerId,
-                                DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
-                                Platform = header.SenderPlatform ?? "android",
-                                IpAddress = remoteIp,
-                                UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
-                                TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
-                                ScreenWidth = header.SenderScreenWidth ?? 1080,
-                                ScreenHeight = header.SenderScreenHeight ?? 2400,
-                                LastSeen = DateTimeOffset.UtcNow
-                            };
-                            UpdatePeerDimensionsFromMonitors(np, header.SenderMonitors);
-                            return np;
-                        },
-                        (_, existing) =>
-                        {
-                            if (!string.IsNullOrEmpty(header.SenderName))
-                                existing.DeviceName = header.SenderName;
-                            if (!string.IsNullOrEmpty(header.SenderPlatform))
-                                existing.Platform = header.SenderPlatform;
-                            existing.IpAddress = remoteIp;
-                            if (header.SenderUdpPort.HasValue)
-                                existing.UdpInputPort = header.SenderUdpPort.Value;
-                            if (header.SenderTcpPort.HasValue)
-                                existing.TcpControlPort = header.SenderTcpPort.Value;
-                            if (header.SenderScreenWidth.HasValue)
-                                existing.ScreenWidth = header.SenderScreenWidth.Value;
-                            if (header.SenderScreenHeight.HasValue)
-                                existing.ScreenHeight = header.SenderScreenHeight.Value;
-                            if (header.SenderMonitors is { Count: > 0 })
-                                UpdatePeerDimensionsFromMonitors(existing, header.SenderMonitors);
-                            existing.LastSeen = DateTimeOffset.UtcNow;
-                            return existing;
-                        });
-
-                    // Merge and clean up any placeholder peer entry with the same IP but different DeviceId
-                    int senderTcp = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort;
-                    var placeholder = _peers.Values.FirstOrDefault(p =>
-                        p.IpAddress == remoteIp &&
-                        p.DeviceId != peerId &&
-                        (p.DeviceId.StartsWith("peer-") || p.DeviceId.StartsWith("manual-")) &&
-                        p.TcpControlPort == senderTcp);
-                    if (placeholder != null)
-                    {
-                        if (placeholder.MyEnteredPinVerifiedByRemote) peer.MyEnteredPinVerifiedByRemote = true;
-                        if (placeholder.RemoteEnteredMyPinVerified) peer.RemoteEnteredMyPinVerified = true;
-                        if (placeholder.IsTrusted) { peer.IsTrusted = true; peer.TrustToken = placeholder.TrustToken; }
-                        if (!string.IsNullOrEmpty(placeholder.ColonyId)) peer.ColonyId = placeholder.ColonyId;
-                        if (placeholder.ColonyMembers.Count > 0) peer.ColonyMembers = placeholder.ColonyMembers;
-                        if (placeholder.HasCustomCanvasPosition)
-                        {
-                            peer.HasCustomCanvasPosition = true;
-                            peer.CanvasX = placeholder.CanvasX;
-                            peer.CanvasY = placeholder.CanvasY;
-                        }
-                        peer.AssignedEdgeOnLocal = placeholder.AssignedEdgeOnLocal;
-                        peer.EdgeOffsetStart = placeholder.EdgeOffsetStart;
-                        peer.EdgeOffsetEnd = placeholder.EdgeOffsetEnd;
-                        if (!string.IsNullOrEmpty(placeholder.AttachedLocalMonitorId))
-                            peer.AttachedLocalMonitorId = placeholder.AttachedLocalMonitorId;
-
-                        _peers.TryRemove(placeholder.DeviceId, out _);
-                    }
-
-                    string submittedPin = (header.TargetPin ?? string.Empty).Trim();
-                    if (submittedPin == PairingPin)
-                    {
-                        peer.RemoteEnteredMyPinVerified = true;
-                        bool requestedTrust = header.RequestTrust == true && !string.IsNullOrWhiteSpace(header.TrustToken);
-                        if (requestedTrust)
-                        {
-                            peer.PendingTrustToken = header.TrustToken!;
-                        }
-
-                        if (peer.IsMutuallyPaired)
-                        {
-                            string effectiveToken = !string.IsNullOrWhiteSpace(peer.PendingTrustToken)
-                                ? peer.PendingTrustToken
-                                : (header.TrustToken ?? peer.TrustToken);
-
-                            if (!string.IsNullOrWhiteSpace(effectiveToken))
-                            {
-                                peer.IsTrusted = true;
-                                peer.TrustToken = effectiveToken;
-                                var record = new TrustedDeviceRecord
-                                {
-                                    DeviceId = peer.DeviceId,
-                                    DeviceName = peer.DeviceName,
-                                    Platform = peer.Platform,
-                                    TrustToken = effectiveToken,
-                                    AssignedEdge = peer.AssignedEdgeOnLocal,
-                                    EdgeOffsetStart = peer.EdgeOffsetStart,
-                                    EdgeOffsetEnd = peer.EdgeOffsetEnd,
-                                    AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
-                                    CanvasX = peer.CanvasX,
-                                    CanvasY = peer.CanvasY,
-                                    HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
-                                    AutoConnect = true
-                                };
-                                TrustStore.AddOrUpdateTrustedDevice(record);
-                            }
-                        }
-
-                        var ack = new TcpControlHeader
-                        {
-                            Type = "PAIR_VERIFY_ACK",
-                            SenderId = LocalDeviceId,
-                            SenderName = LocalDeviceName,
-                            SenderPlatform = LocalPlatform,
-                            SenderUdpPort = InputUdpPort,
-                            SenderTcpPort = ControlTcpPort,
-                            SenderScreenWidth = LocalScreenWidth,
-                            SenderScreenHeight = LocalScreenHeight,
-                            SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
-                            ColonyId = GetCurrentColonyId(),
-                            ColonyMembers = GetColonyMembers(),
-                            RequestTrust = requestedTrust,
-                            TrustToken = requestedTrust ? header.TrustToken : null,
-                            IsMutualComplete = peer.IsMutuallyPaired
-                        };
-                        await TcpFrameCodec.WriteFrameAsync(stream, ack, null, 0, ct).ConfigureAwait(false);
-
-                        string trustNote = requestedTrust ? " (⭐ Cihaz güvenildi & hatırlandı)" : "";
-                        if (peer.IsMutuallyPaired)
-                        {
-                            Log($"[Çift Taraflı Eşleşme] ✅ '{peer.DeviceName}' ({remoteIp}) ile karşılıklı 6 haneli PIN onayı tamamlandı!{trustNote}");
-                            _ = IntroduceNewMemberToColonyAsync(peer);
-                        }
-                        else
-                        {
-                            Log($"[PIN İsteği] 🔔 '{peer.DeviceName}' sizin 6 haneli kodunuzu ({PairingPin}) doğru girdi!{trustNote} Bağlantıyı tamamlamak için bildirimden 'Kabul Et'e basın veya onun 6 haneli kodunu girin.");
-                            RemotePinVerifiedWaitingLocalPin?.Invoke(peer);
-                        }
-
-                        PeerPairingStatusChanged?.Invoke(peer);
-                        PeerDiscoveredOrUpdated?.Invoke(peer);
-                    }
-                    else
-                    {
-                        var rej = new TcpControlHeader
-                        {
-                            Type = "PAIR_REJECT",
-                            SenderId = LocalDeviceId,
-                            SenderName = LocalDeviceName
-                        };
-                        await TcpFrameCodec.WriteFrameAsync(stream, rej, null, 0, ct).ConfigureAwait(false);
-                        Log($"[Güvenlik] ⚠️ '{peer.DeviceName}' ({remoteIp}) hatalı PIN kodu denedi (Girilen: '{submittedPin}', Beklenen: '{PairingPin}').");
-                    }
+                    var (success, resp) = ProcessInboundPairRequest(header, remoteIp);
+                    await TcpFrameCodec.WriteFrameAsync(stream, resp, null, 0, ct).ConfigureAwait(false);
                     break;
                 }
 
                 case "PAIR_ACCEPT":
                 {
-                    string peerId = !string.IsNullOrEmpty(header.SenderId)
-                        ? header.SenderId
-                        : $"{header.SenderPlatform ?? "peer"}-{remoteIp}:{header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort}";
-
-                    var peer = _peers.AddOrUpdate(
-                        peerId,
-                        _ =>
-                        {
-                            var np = new PeerDeviceNode
-                            {
-                                DeviceId = peerId,
-                                DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
-                                Platform = header.SenderPlatform ?? "android",
-                                IpAddress = remoteIp,
-                                UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
-                                TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
-                                ScreenWidth = header.SenderScreenWidth ?? 1080,
-                                ScreenHeight = header.SenderScreenHeight ?? 2400,
-                                LastSeen = DateTimeOffset.UtcNow,
-                                MyEnteredPinVerifiedByRemote = true,
-                                RemoteEnteredMyPinVerified = true
-                            };
-                            UpdatePeerDimensionsFromMonitors(np, header.SenderMonitors);
-                            return np;
-                        },
-                        (_, existing) =>
-                        {
-                            if (!string.IsNullOrEmpty(header.SenderName)) existing.DeviceName = header.SenderName;
-                            if (!string.IsNullOrEmpty(header.SenderPlatform)) existing.Platform = header.SenderPlatform;
-                            existing.IpAddress = remoteIp;
-                            if (header.SenderUdpPort.HasValue) existing.UdpInputPort = header.SenderUdpPort.Value;
-                            if (header.SenderTcpPort.HasValue) existing.TcpControlPort = header.SenderTcpPort.Value;
-                            if (header.SenderScreenWidth.HasValue) existing.ScreenWidth = header.SenderScreenWidth.Value;
-                            if (header.SenderScreenHeight.HasValue) existing.ScreenHeight = header.SenderScreenHeight.Value;
-                            if (header.SenderMonitors is { Count: > 0 }) UpdatePeerDimensionsFromMonitors(existing, header.SenderMonitors);
-                            existing.MyEnteredPinVerifiedByRemote = true;
-                            existing.RemoteEnteredMyPinVerified = true;
-                            existing.LastSeen = DateTimeOffset.UtcNow;
-                            return existing;
-                        });
-
-                    int senderTcp = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort;
-                    var placeholder = _peers.Values.FirstOrDefault(p =>
-                        p.IpAddress == remoteIp &&
-                        p.DeviceId != peerId &&
-                        (p.DeviceId.StartsWith("peer-") || p.DeviceId.StartsWith("manual-")) &&
-                        p.TcpControlPort == senderTcp);
-                    if (placeholder != null)
-                    {
-                        if (placeholder.HasCustomCanvasPosition)
-                        {
-                            peer.HasCustomCanvasPosition = true;
-                            peer.CanvasX = placeholder.CanvasX;
-                            peer.CanvasY = placeholder.CanvasY;
-                        }
-                        peer.AssignedEdgeOnLocal = placeholder.AssignedEdgeOnLocal;
-                        peer.EdgeOffsetStart = placeholder.EdgeOffsetStart;
-                        peer.EdgeOffsetEnd = placeholder.EdgeOffsetEnd;
-                        if (!string.IsNullOrEmpty(placeholder.AttachedLocalMonitorId))
-                            peer.AttachedLocalMonitorId = placeholder.AttachedLocalMonitorId;
-                        _peers.TryRemove(placeholder.DeviceId, out _);
-                    }
-
-                    if (header.RequestTrust == true && !string.IsNullOrWhiteSpace(header.TrustToken))
-                    {
-                        peer.IsTrusted = true;
-                        peer.TrustToken = header.TrustToken;
-                        TrustStore.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
-                        {
-                            DeviceId = peer.DeviceId,
-                            DeviceName = peer.DeviceName,
-                            Platform = peer.Platform,
-                            TrustToken = header.TrustToken,
-                            AssignedEdge = peer.AssignedEdgeOnLocal,
-                            EdgeOffsetStart = peer.EdgeOffsetStart,
-                            EdgeOffsetEnd = peer.EdgeOffsetEnd,
-                            AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
-                            CanvasX = peer.CanvasX,
-                            CanvasY = peer.CanvasY,
-                            HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
-                            AutoConnect = true
-                        });
-                    }
-
-                    var ack = new TcpControlHeader
-                    {
-                        Type = "PAIR_ACCEPT_ACK",
-                        SenderId = LocalDeviceId,
-                        SenderName = LocalDeviceName,
-                        SenderPlatform = LocalPlatform,
-                        SenderUdpPort = InputUdpPort,
-                        SenderTcpPort = ControlTcpPort,
-                        SenderScreenWidth = LocalScreenWidth,
-                        SenderScreenHeight = LocalScreenHeight,
-                        SenderMonitors = LocalMonitors.Count > 0 ? LocalMonitors.ToList() : null,
-                        ColonyId = GetCurrentColonyId(),
-                        ColonyMembers = GetColonyMembers(),
-                        IsMutualComplete = true
-                    };
-                    await TcpFrameCodec.WriteFrameAsync(stream, ack, null, 0, ct).ConfigureAwait(false);
-
-                    Log($"[Çift Taraflı Eşleşme] ✅ '{peer.DeviceName}' ({remoteIp}) doğrudan onay ile karşılıklı eşleşti!");
-                    _ = IntroduceNewMemberToColonyAsync(peer);
-
-                    PeerPairingStatusChanged?.Invoke(peer);
-                    PeerDiscoveredOrUpdated?.Invoke(peer);
+                    var resp = ProcessInboundPairAccept(header, remoteIp);
+                    await TcpFrameCodec.WriteFrameAsync(stream, resp, null, 0, ct).ConfigureAwait(false);
                     break;
                 }
 
@@ -1987,8 +2224,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 {
                     var edge = (ScreenEdge)(header.ReturnEdge ?? 0);
                     float norm = (float)(header.NormalizedPosition ?? 0.5);
-                    var ep = client.Client.RemoteEndPoint as IPEndPoint ?? new IPEndPoint(IPAddress.Parse(remoteIp), header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort);
-                    RemoteEdgeHandOffReceived?.Invoke(new EdgeHandOffPacket(edge, false, norm), ep);
+                    var remoteEp = client.Client.RemoteEndPoint as IPEndPoint ?? new IPEndPoint(IPAddress.Parse(remoteIp), header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort);
+                    RemoteEdgeHandOffReceived?.Invoke(new EdgeHandOffPacket(edge, false, norm), remoteEp);
                     Log($"[Kenar Geçişi TCP] '{header.SenderName}' imleç kenar geçişini TCP üzerinden doğruladı ({edge}, %{(int)(norm * 100)}).");
                     break;
                 }

@@ -68,6 +68,7 @@ public partial class MainWindow : Window
         _inputEngine.ScreenLockToggled += OnScreenLockToggled;
 
         _network.Start();
+        WindowsFirewallHelper.EnsureFirewallRules();
         _inputEngine.StartHooks();
         _clipboardService.AttachToWindow(this);
 

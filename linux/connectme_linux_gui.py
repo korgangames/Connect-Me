@@ -718,8 +718,8 @@ class ConnectMeLinuxGui:
                                    selectcolor="#0F172A", activebackground="#1E293B", activeforeground="#38BDF8")
         trust_chk.pack(side=tk.LEFT, padx=12)
 
-        pair_btn = ttk.Button(act_box, text="🔗 Doğrula ve Bağlan", style="Accent.TButton", command=self._on_pair_click)
-        pair_btn.pack(side=tk.RIGHT, padx=6)
+        self.pair_btn = ttk.Button(act_box, text="🔗 Doğrula ve Bağlan", style="Accent.TButton", command=self._on_pair_click)
+        self.pair_btn.pack(side=tk.RIGHT, padx=6)
 
         disc_btn = ttk.Button(act_box, text="🔌 Bağlantıyı Kes", style="Danger.TButton", command=self._on_disconnect_click)
         disc_btn.pack(side=tk.RIGHT, padx=6)
@@ -884,11 +884,20 @@ class ConnectMeLinuxGui:
         sel = self.peer_list.curselection()
         if not sel:
             return
-        keys = list(self.node.peers.keys())
-        if sel[0] < len(keys):
-            self.selected_peer_id = keys[sel[0]]
-            peer = self.node.peers[self.selected_peer_id]
+        if hasattr(self, "_displayed_peer_ids") and sel[0] < len(self._displayed_peer_ids):
+            self.selected_peer_id = self._displayed_peer_ids[sel[0]]
+        else:
+            keys = list(self.node.peers.keys())
+            if sel[0] < len(keys):
+                self.selected_peer_id = keys[sel[0]]
+            else:
+                return
+
+        peer = self.node.peers.get(self.selected_peer_id)
+        if peer:
             self.pair_prompt_lbl.configure(text=f"'{peer.get('deviceName')}' 6 Haneli Kodu:")
+            if hasattr(self, "pair_btn"):
+                self.pair_btn.configure(text=f"🔗 '{peer.get('deviceName')}' ile Doğrula ve Bağlan")
             self.pin_entry.focus_set()
 
     def _on_inbound_accept_click(self):
@@ -1771,28 +1780,48 @@ class ConnectMeLinuxGui:
 
     def _send_pair_request(self, peer: dict, pin: str, req_trust: bool, token: str):
         self.node.suppressed_autoconnect.discard(peer.get("deviceId", ""))
+        peer_name = peer.get("deviceName", peer.get("ipAddress", "Cihaz"))
+        remote_ip = peer.get("ipAddress", "")
+        tcp_port = peer.get("tcpControlPort", 42851)
+        target_dev_id = peer.get("deviceId", "")
+
+        hdr = {
+            "type": "PAIR_REQUEST",
+            "senderId": self.node.device_id,
+            "senderName": self.node.device_name,
+            "senderPlatform": self.node.platform,
+            "senderUdpPort": 42850,
+            "senderTcpPort": 42851,
+            "targetPin": pin,
+            "requestTrust": req_trust,
+            "trustToken": token,
+            "senderMonitors": [asdict(m) for m in self.node.topology.monitors]
+        }
+
+        # 1. Hızlı Yol: UDP port 42849 üzerinden doğrudan PAIR_REQUEST gönder (Windows Güvenlik Duvarı TCP engelini aşar)
+        try:
+            u_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            u_sock.sendto(json.dumps(hdr).encode("utf-8"), (remote_ip, 42849))
+            u_sock.close()
+            self._log(f"[Hızlı Eşleşme] ⚡ '{peer_name}' ({remote_ip}) için UDP 42849 kanalından eşleşme paketi iletildi.")
+        except Exception as u_err:
+            self._log(f"[UDP Eşleşme Uyarı] UDP paketi gönderilemedi: {u_err}")
+
+        # 2. Güvenilir Çerçeveli TCP Kanalı (42851)
+        tcp_success = False
+        tcp_err_msg = ""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(5.0)
-            s.connect((peer["ipAddress"], peer.get("tcpControlPort", 42851)))
-            hdr = {
-                "type": "PAIR_REQUEST",
-                "senderId": self.node.device_id,
-                "senderName": self.node.device_name,
-                "senderPlatform": self.node.platform,
-                "senderUdpPort": 42850,
-                "senderTcpPort": 42851,
-                "targetPin": pin,
-                "requestTrust": req_trust,
-                "trustToken": token,
-                "senderMonitors": [asdict(m) for m in self.node.topology.monitors]
-            }
+            s.connect((remote_ip, tcp_port))
             self.node._send_tcp_frame(s, hdr)
             prefix = self.node._recv_exact(s, 12)
             if len(prefix) == 12:
                 jlen, _ = struct.unpack("<iq", prefix)
                 resp = json.loads(self.node._recv_exact(s, jlen).decode("utf-8"))
+                s.close()
                 if resp.get("type") == "PAIR_VERIFY_ACK":
+                    tcp_success = True
                     peer["out_ok"] = True
                     if resp.get("senderMonitors"):
                         peer["monitors"] = resp.get("senderMonitors")
@@ -1814,15 +1843,52 @@ class ConnectMeLinuxGui:
                             self.node._save_trusted_devices()
                             peer["is_trusted"] = True
                         self._log(f"✅ '{peer.get('deviceName')}' ile karşılıklı eşleşme tamamlandı! [⭐ Cihaz Hatırlandı]")
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "Bağlantı Başarılı",
+                            f"✅ '{peer.get('deviceName')}' ile çift taraflı eşleşme sağlandı!\nEkran Kanvası sekmesinden cihazı dilediğiniz kenara taşıyabilirsiniz."
+                        ))
                     else:
-                        self._log(f"🔔 '{peer.get('deviceName')}' kodunuzu onayladı! Bağlantıyı tamamlamak için o da sizin kodunuzu ({self.node.local_pin}) girmeli.")
+                        self._log(f"🔔 '{peer.get('deviceName')}' kodunuzu onayladı! Karşı cihazda 'Kabul Et'e basılmalı veya sizin kodunuz ({self.node.local_pin}) girilmeli.")
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "Kod Doğrulandı",
+                            f"🔔 '{peer.get('deviceName')}' kodunuzu onayladı!\n\nBağlantının tamamlanması için karşı cihaz ekranındaki bildirimden 'Kabul Et'e basın veya sizin 6 haneli kodunuzu ({self.node.local_pin}) girin."
+                        ))
                 elif resp.get("type") == "PAIR_REJECT":
                     self._log(f"⚠️ Karşı taraf girilen PIN kodunu reddetti.")
-            s.close()
-            self.root.after(0, self._refresh_state)
+                    self.root.after(0, lambda: messagebox.showwarning(
+                        "PIN Reddedildi",
+                        f"❌ '{peer_name}' girdiğiniz 6 haneli kodu ({pin}) reddetti.\nLütfen karşı cihazın ekranında görünen güncel 6 haneli kodu kontrol edin."
+                    ))
+                    self.root.after(0, self._refresh_state)
+                    return
+            else:
+                s.close()
         except Exception as e:
-            self._log(f"⚠️ Eşleşme bağlantı hatası: {e}")
+            tcp_err_msg = str(e)
+            self._log(f"⚠️ TCP eşleşme bağlantı uyarısı: {e}")
+
+        # Eğer TCP zaman aşımına uğramışsa ancak UDP hızlı yoluyla teyit alındıysa:
+        time.sleep(0.5)
+        latest_peer = self.node.peers.get(target_dev_id, peer)
+        if latest_peer.get("out_ok") or latest_peer.get("isMutuallyPaired"):
+            self._log(f"⚡ '{peer_name}' UDP hızlı yolu üzerinden başarıyla eşleşti!")
             self.root.after(0, self._refresh_state)
+            return
+
+        # Hem TCP başarısız oldu hem de UDP'den yanıt gelmediyse kullanıcıya açıklayıcı teşhis uyarısı göster:
+        if not tcp_success:
+            self.root.after(0, lambda: messagebox.showwarning(
+                "Bağlantı Yanıt Vermedi",
+                f"⚠️ '{peer_name}' ({remote_ip}) cihazına eşleşme isteği ulaştırılamadı.\n\n"
+                f"Olası Nedenler & Çözümler:\n"
+                f"1. Windows Güvenlik Duvarı (Windows Defender Firewall) gelen TCP bağlantılarını engelliyor olabilir.\n"
+                f"   Windows bilgisayarda Connect Me'yi v1.8.0 sürümüne güncelleyin veya bir kez yönetici olarak çalıştırın.\n"
+                f"2. Karşı cihazda Connect Me programının açık ve ekranda 6 haneli PIN'in görünür olduğunu teyit edin.\n"
+                f"3. Her iki cihazın aynı Wi-Fi / yerel ağda olduğundan emin olun.\n\n"
+                f"Hata detayı: {tcp_err_msg or 'Karşı taraftan yanıt alınamadı'}"
+            ))
+
+        self.root.after(0, self._refresh_state)
 
     def _on_revoke_trust(self):
         sel = self.trusted_list.curselection()
