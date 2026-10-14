@@ -1,3 +1,25 @@
+# Connect Me v1.8.4 — Ses Matrisi Akustik Döngü Önleme, Windows Kararlılık & Performans Güncellemesi
+
+Bu sürüm; ses çıkışı yönlendirmesinde karşılaşılan sonsuz akustik geri besleme (yankı / döngü), Windows çökmesi ve arayüz donmalarını kökten çözen kritik kararlılık ve performans iyileştirmelerini içerir.
+
+---
+
+### 🌟 v1.8.4 Yenilikleri ve Düzeltmeleri:
+
+* **🔇 Sonsuz Akustik Döngü ve Yankı (Feedback Loop) Kökten Engellendi:**
+  - **Sorun:** Android üzerinde ekran/ses yakalama izni verilmeden önce sistemin sessizce telefon mikrofonuna (`MediaRecorder.AudioSource.MIC`) geçmesi ve Windows'un yerel IP'yi `127.0.0.1` olarak bildirmesi sonucunda, iki cihazın sesleri birbirini tetikleyerek sonsuz bir yankı ve tiz ses döngüsü oluşturuyordu.
+  - **Çözüm:** Dahili ses aktarımında mikrofon fallback mekanizması tamamen kaldırıldı; yalnızca resmi sistem ses yakalama (`AudioPlaybackCaptureConfiguration`) kullanılır. Ek olarak hem Windows hem Android UDP ses alıcı ve vericilerine döngü koruması (anti-loopback) eklendi; cihazların kendi gönderdikleri veya `127.0.0.1` paketlerini kendilerine geri çalmaları engellendi.
+
+* **🛡️ Windows winmm.dll Bellek Çökmesi (Crash) Giderildi:**
+  - **Sorun:** Windows ses alıcısı her gelen 10ms'lik ses paketi için dinamik bellek ayırıp arka plan gecikmesiyle temizliyordu. Ses hedefi değiştirildiğinde veya ses kapatıldığında kapatılmış aygıt tanıtıcısı (handle) üzerinden serbest bırakma yapılmaya çalışılarak programın aniden kapanmasına yol açıyordu.
+  - **Çözüm:** Windows ses motoru sıfır tahsisatlı (zero-allocation) statik 8'li WinMM ring-buffer mimarisine geçirildi. Aygıt sıfırlama (`waveOutReset`) ve güvenli temizleme sırası ile çökme tamamen ortadan kaldırıldı.
+
+* **⚡ Bilgisayar Donması ve UI Kasıntısı Çözüldü:**
+  - **Sorun:** Windows tarafında saniyede 100 paket alan ses dinleyicisi, her paket için WPF arayüz Dispatcher'ını tetikleyerek işlemciyi ve grafik döngüsünü kilitliyordu.
+  - **Çözüm:** Arayüz durum bildirimleri maksimum saniyede 2 kez (500ms throttle) olacak şekilde optimize edildi. Ayrıca hem Windows hem Android tarafına sessizlik bastırma (silence suppression) eklendi; müzik veya video çalmadığı anlarda ağa boş UDP paketleri pompalanması engellenerek işlemci ve Wi-Fi yükü sıfıra indirildi.
+
+---
+
 # Connect Me v1.8.3 — Çoklu Cihaz Ses Matrisi (Audio Matrix) & Android 14+ Uyumluluk Güncellemesi
 
 Bu sürüm; ağdaki tüm cihazların (Windows, Linux Nobara, Android) tüm ses çıkışlarını (hoparlör, kulaklık, USB DAC vb.) tek bir dinamik matriste toplayarak seçtiğiniz cihaza tüm sistem seslerini ultra düşük gecikmeyle yönlendirmenizi sağlar. Ayrıca Android 14+ MediaProjection çökmesi tamamen giderilmiş ve Android tarafına çift yönlü ses oynatıcı (AudioTrack) eklenmiştir.

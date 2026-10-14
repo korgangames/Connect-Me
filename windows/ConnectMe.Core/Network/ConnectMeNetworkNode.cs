@@ -119,6 +119,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public List<AudioSinkDescriptor> LocalAudioSinks { get; private set; } = new();
     public ConcurrentDictionary<string, List<AudioSinkDescriptor>> RemoteAudioSinks { get; } = new();
     public AudioRouteTarget? ActiveAudioRoute { get; private set; }
+    public string LocalIpv4 => GetLocalIPv4Addresses().FirstOrDefault()?.ToString() ?? "127.0.0.1";
 
     // Events
     public event Action<PeerDeviceNode>? PeerDiscoveredOrUpdated;

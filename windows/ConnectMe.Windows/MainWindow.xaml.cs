@@ -2146,7 +2146,7 @@ public partial class MainWindow : Window
                 Platform = "windows",
                 SinkId = s.SinkId,
                 SinkName = s.SinkName,
-                IpAddress = "127.0.0.1",
+                IpAddress = _network.LocalIpv4,
                 IsDisableOption = false
             });
         }
@@ -2244,13 +2244,17 @@ public partial class MainWindow : Window
         }
         else
         {
+            string targetIp = (item.DeviceId == _network.LocalDeviceId || IPAddress.IsLoopback(IPAddress.TryParse(item.IpAddress, out var ip) ? ip : IPAddress.Loopback))
+                ? _network.LocalIpv4
+                : item.IpAddress;
+
             var route = new AudioRouteTarget
             {
                 TargetDeviceId = item.DeviceId,
                 TargetDeviceName = item.DeviceName,
                 TargetSinkId = item.SinkId,
                 TargetSinkName = item.SinkName,
-                TargetIp = item.IpAddress,
+                TargetIp = targetIp,
                 TargetUdpPort = ProtocolConstants.AudioStreamUdpPort
             };
             _ = _network.SetAndBroadcastAudioRouteAsync(route);

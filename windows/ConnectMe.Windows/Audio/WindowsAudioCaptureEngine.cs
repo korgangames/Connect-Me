@@ -107,6 +107,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
     {
         IntPtr pDevice = IntPtr.Zero;
         IntPtr pAudioClient = IntPtr.Zero;
+        IntPtr acVtbl = IntPtr.Zero;
         IntPtr pCaptureClient = IntPtr.Zero;
         IntPtr pFormat = IntPtr.Zero;
 
@@ -132,7 +133,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
                 return;
             }
 
-            IntPtr acVtbl = Marshal.ReadIntPtr(pAudioClient);
+            acVtbl = Marshal.ReadIntPtr(pAudioClient);
             IntPtr getMixFormatPtr = Marshal.ReadIntPtr(acVtbl, 8 * IntPtr.Size);
             var getMixFormat = Marshal.GetDelegateForFunctionPointer<GetMixFormatDelegate>(getMixFormatPtr);
             int gmfHr = getMixFormat(pAudioClient, out pFormat);
@@ -184,8 +185,13 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             var start = Marshal.GetDelegateForFunctionPointer<StartDelegate>(startPtr);
             start(pAudioClient);
 
-            byte[] sendBuffer = new byte[14 + 1920];
-            IPEndPoint remoteEp = new IPEndPoint(IPAddress.Parse(_targetIp!), _targetPort);
+            if (!IPAddress.TryParse(_targetIp, out var parsedIp) || IPAddress.IsLoopback(parsedIp))
+            {
+                CaptureStatusChanged?.Invoke("Hata: Hedef IP geçersiz veya yerel döngü (loopback) seçildi.");
+                return;
+            }
+
+            IPEndPoint remoteEp = new IPEndPoint(parsedIp, _targetPort);
 
             while (_isRunning && !_disposed)
             {
@@ -193,34 +199,39 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
                 if (gbHr == 0 && numFramesToRead > 0 && pData != IntPtr.Zero)
                 {
                     bool isSilent = (flags & 0x01 /* AUDCLNT_BUFFERFLAGS_SILENT */) != 0;
-                    byte[] pcmChunk = ConvertToPcm16Stereo(pData, numFramesToRead, channels, sampleRate, isFloat, isSilent);
 
-                    if (pcmChunk.Length > 0 && _udpClient != null)
+                    // If silent (no music/video playing), do not flood network with silent UDP packets
+                    if (!isSilent)
                     {
-                        // Split into standard chunks of up to 1920 bytes (~10ms)
-                        int offset = 0;
-                        while (offset < pcmChunk.Length && _isRunning)
+                        byte[] pcmChunk = ConvertToPcm16Stereo(pData, numFramesToRead, channels, sampleRate, isFloat, isSilent: false);
+
+                        if (pcmChunk.Length > 0 && _udpClient != null)
                         {
-                            int chunkLen = Math.Min(1920, pcmChunk.Length - offset);
-                            byte[] subChunk = new byte[chunkLen];
-                            Buffer.BlockCopy(pcmChunk, offset, subChunk, 0, chunkLen);
-
-                            var packet = new AudioChunkPacket(
-                                Channels: 2,
-                                SampleRate: 48000,
-                                BitsPerSample: 16,
-                                Sequence: _sequence++,
-                                PcmData: subChunk);
-
-                            byte[] wireBytes = WirePacketCodec.EncodeAudioChunk(packet);
-                            try
+                            // Split into standard chunks of up to 1920 bytes (~10ms)
+                            int offset = 0;
+                            while (offset < pcmChunk.Length && _isRunning)
                             {
-                                _udpClient.Send(wireBytes, wireBytes.Length, remoteEp);
-                                _totalAudioBytesSent += chunkLen;
-                            }
-                            catch { }
+                                int chunkLen = Math.Min(1920, pcmChunk.Length - offset);
+                                byte[] subChunk = new byte[chunkLen];
+                                Buffer.BlockCopy(pcmChunk, offset, subChunk, 0, chunkLen);
 
-                            offset += chunkLen;
+                                var packet = new AudioChunkPacket(
+                                    Channels: 2,
+                                    SampleRate: 48000,
+                                    BitsPerSample: 16,
+                                    Sequence: _sequence++,
+                                    PcmData: subChunk);
+
+                                byte[] wireBytes = WirePacketCodec.EncodeAudioChunk(packet);
+                                try
+                                {
+                                    _udpClient.Send(wireBytes, wireBytes.Length, remoteEp);
+                                    _totalAudioBytesSent += chunkLen;
+                                }
+                                catch { }
+
+                                offset += chunkLen;
+                            }
                         }
                     }
 
@@ -229,10 +240,6 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
 
                 Thread.Sleep(5);
             }
-
-            IntPtr stopPtr = Marshal.ReadIntPtr(acVtbl, 11 * IntPtr.Size);
-            var stop = Marshal.GetDelegateForFunctionPointer<StopDelegate>(stopPtr);
-            stop(pAudioClient);
         }
         catch (Exception ex)
         {
@@ -240,6 +247,17 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
         }
         finally
         {
+            if (pAudioClient != IntPtr.Zero && acVtbl != IntPtr.Zero)
+            {
+                try
+                {
+                    IntPtr stopPtr = Marshal.ReadIntPtr(acVtbl, 11 * IntPtr.Size);
+                    var stop = Marshal.GetDelegateForFunctionPointer<StopDelegate>(stopPtr);
+                    stop(pAudioClient);
+                }
+                catch { }
+            }
+
             if (pCaptureClient != IntPtr.Zero) Marshal.Release(pCaptureClient);
             if (pFormat != IntPtr.Zero) Marshal.FreeCoTaskMem(pFormat);
             if (pAudioClient != IntPtr.Zero) Marshal.Release(pAudioClient);

@@ -105,9 +105,30 @@ class AndroidAudioPlaybackEngine private constructor() {
         val buffer = ByteArray(4096)
         val packet = DatagramPacket(buffer, buffer.size)
 
+        var cachedMyIp: String? = null
+        var lastIpCheck = 0L
+
         while (isRunning.get()) {
             try {
                 socket.receive(packet)
+
+                // Anti-Loopback / Anti-Feedback Protection
+                val remoteAddr = packet.address
+                if (remoteAddr != null) {
+                    if (remoteAddr.isLoopbackAddress || remoteAddr.isAnyLocalAddress) {
+                        continue
+                    }
+                    val now = System.currentTimeMillis()
+                    if (now - lastIpCheck > 3000) {
+                        cachedMyIp = com.korgangames.connectme.network.ConnectMeService.instance?.getLocalIpv4Address()
+                        lastIpCheck = now
+                    }
+                    val senderIp = remoteAddr.hostAddress
+                    if (cachedMyIp != null && cachedMyIp != "0.0.0.0" && senderIp == cachedMyIp) {
+                        continue
+                    }
+                }
+
                 val len = packet.length
                 if (len >= 14 && buffer[0] == 'C'.code.toByte() && buffer[1] == 'M'.code.toByte() && buffer[3] == 0x08.toByte()) {
                     val pcmLen = ByteBuffer.wrap(buffer, 12, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
@@ -132,17 +153,17 @@ class AndroidAudioPlaybackEngine private constructor() {
         udpSocket = null
 
         try {
+            receiveThread?.interrupt()
+            receiveThread?.join(300)
+        } catch (_: Throwable) {}
+        receiveThread = null
+
+        try {
             audioTrack?.stop()
         } catch (_: Throwable) {}
         try {
             audioTrack?.release()
         } catch (_: Throwable) {}
         audioTrack = null
-
-        try {
-            receiveThread?.interrupt()
-            receiveThread?.join(200)
-        } catch (_: Throwable) {}
-        receiveThread = null
     }
 }

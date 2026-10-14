@@ -57,31 +57,43 @@ class AudioStreamService : Service() {
                     intent.getParcelableExtra("resultData")
                 }
 
+                if (hostIp.isNullOrBlank()) {
+                    stopAudioStreaming()
+                    return START_NOT_STICKY
+                }
+
                 // 1. In Android 14+ (API 34+), startForeground with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                 // MUST be called before calling MediaProjectionManager.getMediaProjection().
                 startForegroundAudio()
 
-                if (hostIp != null) {
-                    var projection = activeProjection
-                    if (resultCode == Activity.RESULT_OK && resultData != null) {
-                        try {
-                            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                            projection = mpm.getMediaProjection(resultCode, resultData)
-                            activeProjection = projection
+                var projection = activeProjection
+                if (resultCode == Activity.RESULT_OK && resultData != null) {
+                    try {
+                        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                        projection = mpm.getMediaProjection(resultCode, resultData)
+                        activeProjection = projection
 
-                            projection?.registerCallback(object : MediaProjection.Callback() {
-                                override fun onStop() {
-                                    Log.i(TAG, "MediaProjection stopped by system")
-                                    stopAudioStreaming()
-                                }
-                            }, Handler(Looper.getMainLooper()))
-                        } catch (t: Throwable) {
-                            Log.e(TAG, "Failed to initialize MediaProjection: ${t.message}", t)
-                            projection = null
-                        }
+                        projection?.registerCallback(object : MediaProjection.Callback() {
+                            override fun onStop() {
+                                Log.i(TAG, "MediaProjection stopped by system")
+                                stopAudioStreaming()
+                            }
+                        }, Handler(Looper.getMainLooper()))
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Failed to initialize MediaProjection: ${t.message}", t)
+                        projection = null
                     }
+                }
 
-                    AudioStreamEngine.instance.start(hostIp, projection)
+                if (projection == null) {
+                    Log.w(TAG, "Cannot start AudioStreamService without active MediaProjection")
+                    stopAudioStreaming()
+                    return START_NOT_STICKY
+                }
+
+                val started = AudioStreamEngine.instance.start(hostIp, projection)
+                if (!started) {
+                    stopAudioStreaming()
                 }
             }
         }

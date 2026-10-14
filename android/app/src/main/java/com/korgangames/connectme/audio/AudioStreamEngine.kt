@@ -56,6 +56,24 @@ class AudioStreamEngine private constructor() {
             stop()
         }
 
+        // Anti-Loopback Protection: Never stream audio to self
+        val myIp = com.korgangames.connectme.network.ConnectMeService.instance?.getLocalIpv4Address()
+        if (hostIp == "127.0.0.1" || (myIp != null && myIp != "0.0.0.0" && hostIp == myIp)) {
+            Log.w(TAG, "Refusing to stream audio to local/self IP ($hostIp)")
+            stop()
+            onStatusChanged?.invoke(false, "Kendi cihazınıza ses yönlendirilemez")
+            return false
+        }
+
+        // Enforce Android 10+ and active MediaProjection for system audio capture.
+        // Never fall back to room microphone!
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || mediaProjection == null) {
+            Log.w(TAG, "Dahili sistem sesi yakalama için Android 10+ ve MediaProjection izni zorunludur.")
+            stop()
+            onStatusChanged?.invoke(false, "Dahili ses yakalama için ekran/ses izni verilmedi.")
+            return false
+        }
+
         targetHostIp = hostIp
         isRunning.set(true)
 
@@ -71,58 +89,27 @@ class AudioStreamEngine private constructor() {
             .build()
 
         try {
-            var record: AudioRecord? = null
+            val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
+                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                .build()
 
-            // In Android 10+ (API 29+), try AudioPlaybackCaptureConfiguration
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaProjection != null) {
-                try {
-                    val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
-                        .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                        .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                        .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                        .build()
+            val record = AudioRecord.Builder()
+                .setAudioPlaybackCaptureConfig(captureConfig)
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(bufferSize)
+                .build()
 
-                    record = AudioRecord.Builder()
-                        .setAudioPlaybackCaptureConfig(captureConfig)
-                        .setAudioFormat(format)
-                        .setBufferSizeInBytes(bufferSize)
-                        .build()
-
-                    Log.i(TAG, "Internal system audio playback capture initialized successfully")
-                } catch (e: Throwable) {
-                    Log.w(TAG, "AudioPlaybackCapture failed (${e.message}), falling back to MIC source: ${e.message}")
-                    record = null
-                }
-            }
-
-            // Fallback to high-quality audio source if mediaProjection wasn't used or failed
-            if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
-                try {
-                    record?.release()
-                } catch (_: Throwable) {}
-                try {
-                    record = AudioRecord(
-                        MediaRecorder.AudioSource.MIC,
-                        SAMPLE_RATE,
-                        channelConfig,
-                        audioEncoding,
-                        bufferSize
-                    )
-                    Log.i(TAG, "Initialized microphone audio source fallback")
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Microphone fallback failed: ${t.message}", t)
-                    record = null
-                }
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioPlaybackCapture AudioRecord initialization failed!")
+                try { record.release() } catch (_: Throwable) {}
+                stop()
+                onStatusChanged?.invoke(false, "Ses yakalama motoru başlatılamadı.")
+                return false
             }
 
             audioRecord = record
-
-            if (audioRecord == null || audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord initialization failed!")
-                stop()
-                onStatusChanged?.invoke(false, "Ses yakalama motoru başlatılamadı")
-                return false
-            }
 
             try {
                 audioRecord?.startRecording()
@@ -154,6 +141,19 @@ class AudioStreamEngine private constructor() {
         }
     }
 
+    private fun isBufferSilent(buffer: ByteArray, length: Int): Boolean {
+        var i = 0
+        while (i + 1 < length) {
+            val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
+            val sampleShort = sample.toShort().toInt()
+            if (sampleShort > 100 || sampleShort < -100) {
+                return false
+            }
+            i += 2
+        }
+        return true
+    }
+
     private fun streamAudioLoop(hostIp: String) {
         val targetAddr = try {
             InetAddress.getByName(hostIp)
@@ -163,9 +163,6 @@ class AudioStreamEngine private constructor() {
             return
         }
 
-        // 20ms audio frame @ 48kHz Stereo 16-bit:
-        // 48000 samples/sec * 0.02s = 960 samples/channel * 2 channels * 2 bytes = 3840 bytes
-        // Using 1920 bytes (10ms stereo) for lower latency
         val pcmChunkSize = 1920
         val pcmBuffer = ByteArray(pcmChunkSize)
         val packetBuffer = ByteArray(14 + pcmChunkSize)
@@ -179,6 +176,16 @@ class AudioStreamEngine private constructor() {
                 -1
             }
             if (bytesRead > 0) {
+                // Silence suppression: Do not flood network when audio is completely silent
+                if (isBufferSilent(pcmBuffer, bytesRead)) {
+                    try {
+                        Thread.sleep(10)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
+                    continue
+                }
+
                 val bb = ByteBuffer.wrap(packetBuffer).order(ByteOrder.LITTLE_ENDIAN)
                 bb.put(ProtocolConstants.MAGIC_0)
                 bb.put(ProtocolConstants.MAGIC_1)
@@ -211,15 +218,7 @@ class AudioStreamEngine private constructor() {
     fun stop() {
         isRunning.set(false)
         isStreaming = false
-
-        try {
-            audioRecord?.stop()
-        } catch (_: Throwable) {}
-
-        try {
-            audioRecord?.release()
-        } catch (_: Throwable) {}
-        audioRecord = null
+        targetHostIp = null
 
         try {
             udpSocket?.close()
@@ -228,9 +227,17 @@ class AudioStreamEngine private constructor() {
 
         try {
             streamThread?.interrupt()
-            streamThread?.join(200)
+            streamThread?.join(300)
         } catch (_: Throwable) {}
         streamThread = null
+
+        try {
+            audioRecord?.stop()
+        } catch (_: Throwable) {}
+        try {
+            audioRecord?.release()
+        } catch (_: Throwable) {}
+        audioRecord = null
 
         onStatusChanged?.invoke(false, "⚪ Ses aktarımı durduruldu")
     }

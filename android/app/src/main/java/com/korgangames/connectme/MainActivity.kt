@@ -93,24 +93,9 @@ class MainActivity : AppCompatActivity() {
                 android.util.Log.e("ConnectMe", "Failed to start AudioStreamService: ${t.message}", t)
                 updateAudioUi()
             }
-        } else if (!targetIp.isNullOrBlank()) {
-            val intent = Intent(this, AudioStreamService::class.java).apply {
-                action = AudioStreamService.ACTION_START_AUDIO
-                putExtra("hostIp", targetIp)
-            }
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(intent)
-                } else {
-                    startService(intent)
-                }
-                updateAudioUi()
-                Toast.makeText(this, "Mikrofon ses aktarımı başlatıldı", Toast.LENGTH_SHORT).show()
-            } catch (t: Throwable) {
-                android.util.Log.e("ConnectMe", "Failed to start fallback AudioStreamService: ${t.message}", t)
-                updateAudioUi()
-            }
         } else {
+            pendingAudioTarget = null
+            Toast.makeText(this, "⚠️ Dahili ses aktarımı için ekran/ses izni verilmedi.", Toast.LENGTH_SHORT).show()
             updateAudioUi()
         }
     }
@@ -182,7 +167,21 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { updateAudioUi() }
         }
         ConnectMeService.onAudioRouteChanged = {
-            runOnUiThread { updateAudioUi() }
+            runOnUiThread {
+                updateAudioUi()
+                val route = ConnectMeService.activeAudioRoute
+                val localDevId = ConnectMeService.instance?.localDeviceId ?: ""
+                if (route != null && route.targetDeviceId.isNotEmpty() && route.targetDeviceId != "NONE" && route.targetDeviceId != localDevId) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && AudioStreamService.activeProjection == null) {
+                        try {
+                            val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                            mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+                        } catch (t: Throwable) {
+                            android.util.Log.e("ConnectMe", "Failed to launch screen capture: ${t.message}", t)
+                        }
+                    }
+                }
+            }
         }
         AudioStreamEngine.instance.onStatusChanged = { _, _ ->
             runOnUiThread { updateAudioUi() }
@@ -1229,10 +1228,13 @@ class MainActivity : AppCompatActivity() {
                 updateAudioUi()
 
                 if (selectedTarget == null) {
+                    pendingAudioTarget = null
                     Toast.makeText(this, "Ses yerel moda döndü", Toast.LENGTH_SHORT).show()
                 } else if (selectedTarget.targetDeviceId == localDevId) {
+                    pendingAudioTarget = null
                     Toast.makeText(this, "Diğer cihazların sesleri bu telefondan çalınacak", Toast.LENGTH_SHORT).show()
                 } else {
+                    pendingAudioTarget = pairedPeers.firstOrNull { it.deviceId == selectedTarget.targetDeviceId }
                     Toast.makeText(this, "Ses '${selectedTarget.targetDeviceName}' (${selectedTarget.targetSinkName}) hedefine yönlendirildi!", Toast.LENGTH_SHORT).show()
                     // Prompt for projection if not already streaming on Android 10+
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && AudioStreamService.activeProjection == null) {
