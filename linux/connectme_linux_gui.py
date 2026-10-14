@@ -12,9 +12,13 @@ Korgan Games (v1.6.6 Kalıcı Cihaz Kimlikleri, Çoklu Cihaz PIN & Otomatik Reco
 - Donanım Girdi Enjektörü & Çoklu Monitör Durumu
 """
 
+from __future__ import annotations
+
 import os
 import sys
+import time
 import json
+import struct
 import shutil
 import socket
 import datetime
@@ -25,14 +29,23 @@ import tempfile
 import urllib.request
 import urllib.error
 from pathlib import Path
+from typing import Optional, Dict, Set, List, Tuple, Any, Callable
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
-    from connectme_linux_daemon import ConnectMeLinuxNode, asdict, PhysicalMonitor, VERSION
+    from connectme_linux_daemon import (
+        ConnectMeLinuxNode, asdict, PhysicalMonitor, VERSION,
+        EDGE_NONE, EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, EDGE_BOTTOM,
+        FAST_INPUT_UDP_PORT, DATA_CONTROL_TCP_PORT, AUDIO_STREAM_UDP_PORT,
+    )
 except ImportError:
-    from linux.connectme_linux_daemon import ConnectMeLinuxNode, asdict, PhysicalMonitor, VERSION
+    from linux.connectme_linux_daemon import (
+        ConnectMeLinuxNode, asdict, PhysicalMonitor, VERSION,
+        EDGE_NONE, EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, EDGE_BOTTOM,
+        FAST_INPUT_UDP_PORT, DATA_CONTROL_TCP_PORT, AUDIO_STREAM_UDP_PORT,
+    )
 
 
 class LinuxCursorOverlay:
@@ -2072,13 +2085,53 @@ X-GNOME-Autostart-enabled=true
                         pass
             self.root.after(0, _fail)
 
+    def _on_close(self):
+        try:
+            if hasattr(self, "edge_sentinels"):
+                self.edge_sentinels.hide()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "host_capture_overlay") and self.host_capture_overlay.is_active:
+                self.host_capture_overlay.deactivate(notify_peer=True)
+        except Exception:
+            pass
+        try:
+            self.node.stop()
+        except Exception:
+            pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
 
 def main():
-    root = tk.Tk()
-    app = ConnectMeLinuxGui(root)
-    root.protocol("WM_DELETE_WINDOW", root.destroy)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app = ConnectMeLinuxGui(root)
+        root.protocol("WM_DELETE_WINDOW", app._on_close)
+        root.mainloop()
+    except Exception as e:
+        import traceback
+        err_txt = traceback.format_exc()
+        print(err_txt, file=sys.stderr)
+        log_dir = Path.home() / ".config" / "connectme"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "crash.log", "w", encoding="utf-8") as f:
+            f.write(err_txt)
+        try:
+            err_root = tk.Tk()
+            err_root.withdraw()
+            messagebox.showerror(
+                "Connect Me Başlatma Hatası",
+                f"Connect Me başlatılırken bir hata oluştu:\n\n{e}\n\nDetaylar: ~/.config/connectme/crash.log"
+            )
+            err_root.destroy()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
     main()
+

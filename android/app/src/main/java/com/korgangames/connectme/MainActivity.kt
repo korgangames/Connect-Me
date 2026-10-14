@@ -112,9 +112,9 @@ class MainActivity : AppCompatActivity() {
 
     private val appVersionName: String
         get() = try {
-            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.7.5"
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.7.6"
         } catch (_: Exception) {
-            "1.7.5"
+            "1.7.6"
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {

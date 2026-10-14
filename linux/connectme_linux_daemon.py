@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.7.5"
+VERSION = "1.7.6"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -1204,6 +1204,22 @@ class ConnectMeLinuxNode:
         threading.Thread(target=self._udp_input_loop, daemon=True).start()
         threading.Thread(target=self._clipboard_monitor_loop, daemon=True).start()
 
+    def stop(self) -> None:
+        """Stops the daemon background loops, releases sockets, and cleans up."""
+        self.running = False
+        for s in (
+            getattr(self, "discovery_sock", None),
+            getattr(self, "tcp_srv", None),
+            self.udp_sock,
+            getattr(self, "_host_udp_sock", None),
+        ):
+            if s:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+        self.stop_audio_streaming()
+
     def build_beacon_json(self) -> bytes:
         _, _, vw, vh = self.topology.virtual_desktop_bounds()
         payload = {
@@ -1248,6 +1264,7 @@ class ConnectMeLinuxNode:
                 pass
         try:
             sock.bind(("0.0.0.0", DISCOVERY_UDP_PORT))
+            self.discovery_sock = sock
         except OSError as ex:
             self.log(f"[Keşif Hata] UDP {DISCOVERY_UDP_PORT} dinlenemedi: {ex}")
             return
@@ -1450,13 +1467,21 @@ class ConnectMeLinuxNode:
             time.sleep(2.5)
 
     def _tcp_server_loop(self) -> None:
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("0.0.0.0", DATA_CONTROL_TCP_PORT))
-        srv.listen(8)
-        while self.running:
-            conn, addr = srv.accept()
-            threading.Thread(target=self._handle_tcp_client, args=(conn, addr[0]), daemon=True).start()
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("0.0.0.0", DATA_CONTROL_TCP_PORT))
+            srv.listen(8)
+            self.tcp_srv = srv
+            while self.running:
+                try:
+                    conn, addr = srv.accept()
+                    threading.Thread(target=self._handle_tcp_client, args=(conn, addr[0]), daemon=True).start()
+                except Exception:
+                    if not self.running:
+                        break
+        except Exception as e:
+            self.log(f"[TCP Sunucu Hatası] Port {DATA_CONTROL_TCP_PORT} başlatılamadı: {e}")
 
     def _handle_tcp_client(self, conn: socket.socket, remote_ip: str) -> None:
         with conn:
@@ -1693,8 +1718,18 @@ class ConnectMeLinuxNode:
                     subprocess.run(["notify-send", "Connect Me: Ortak Cep", f"Yeni dosya alındı:\n{fname}"], check=False)
 
     def _udp_input_loop(self) -> None:
-        self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_sock.bind(("0.0.0.0", FAST_INPUT_UDP_PORT))
+        try:
+            self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if hasattr(socket, "SO_REUSEPORT"):
+                try:
+                    self.udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except OSError:
+                    pass
+            self.udp_sock.bind(("0.0.0.0", FAST_INPUT_UDP_PORT))
+        except OSError as ex:
+            self.log(f"[UDP Girdi Hatası] Port {FAST_INPUT_UDP_PORT} dinlenemedi: {ex}")
+            return
         min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
 
         while self.running:
