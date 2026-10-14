@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -201,7 +201,13 @@ class LinuxMultiMonitorTopology:
         for m in self.monitors:
             if m.contains(x, y):
                 return m
-        return self.monitors[0] if self.monitors else None
+        if not self.monitors:
+            return None
+        def dist_sq(m: PhysicalMonitor) -> float:
+            dx = max(0, max(m.virtualX - x, x - (m.right - 1)))
+            dy = max(0, max(m.virtualY - y, y - (m.bottom - 1)))
+            return dx * dx + dy * dy
+        return min(self.monitors, key=dist_sq)
 
     @staticmethod
     def _run_cmd(cmd: List[str]) -> Optional[str]:
@@ -1065,17 +1071,73 @@ class LinuxInputInjector:
 
 
 class LinuxHardwareInputGrabber:
-    """Hardware-level input capture for Linux as Host KVM using evdev device grabbing."""
+    """Hardware-level input capture and background edge-crossing tracker for Linux as Host KVM using evdev."""
 
     def __init__(self, node: 'ConnectMeLinuxNode'):
         self.node = node
         self.is_active = False
         self.active_peer: Optional[dict] = None
         self.exit_edge: int = EDGE_NONE
-        self._grabbed_devices: List[Any] = []
+        self._pointer_devs: List[Any] = []
+        self._kbd_devs: List[Any] = []
         self._threads: List[threading.Thread] = []
         self._stop_event = threading.Event()
         self.on_deactivated: Optional[Callable[[], None]] = None
+
+        # Coordinate tracking & edge resistance
+        self._coord_lock = threading.Lock()
+        self.cur_x = 960
+        self.cur_y = 540
+        self._accum_push = 0.0
+        self._push_edge = EDGE_NONE
+        self._edge_cooldown_until = 0.0
+        self._supervisor_thread: Optional[threading.Thread] = None
+
+        self._init_initial_coordinates()
+
+    def _init_initial_coordinates(self) -> None:
+        try:
+            min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
+            primary = next((m for m in self.node.topology.monitors if m.isPrimary), self.node.topology.monitors[0] if self.node.topology.monitors else None)
+            if primary:
+                self.cur_x = primary.virtualX + primary.width // 2
+                self.cur_y = primary.virtualY + primary.height // 2
+            else:
+                self.cur_x = min_x + vw // 2
+                self.cur_y = min_y + vh // 2
+        except Exception:
+            self.cur_x = 960
+            self.cur_y = 540
+
+    def sync_cursor(self, x: int, y: int) -> None:
+        """Called by GUI or sentinels to calibrate absolute pointer coordinates."""
+        if self.is_active:
+            return
+        with self._coord_lock:
+            self.cur_x = int(x)
+            self.cur_y = int(y)
+
+    def sync_cursor_at_edge(self, edge: int, norm_pos: float = 0.5) -> None:
+        """Sets cursor coordinates just inside the returned edge upon handoff back to Linux."""
+        min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
+        norm = max(0.02, min(0.98, float(norm_pos)))
+        with self._coord_lock:
+            if edge == EDGE_RIGHT:
+                self.cur_x = min_x + vw - 40
+                self.cur_y = min_y + int(vh * norm)
+            elif edge == EDGE_LEFT:
+                self.cur_x = min_x + 40
+                self.cur_y = min_y + int(vh * norm)
+            elif edge == EDGE_TOP:
+                self.cur_x = min_x + int(vw * norm)
+                self.cur_y = min_y + 40
+            elif edge == EDGE_BOTTOM:
+                self.cur_x = min_x + int(vw * norm)
+                self.cur_y = min_y + vh - 40
+            else:
+                self.cur_x = min_x + vw // 2
+                self.cur_y = min_y + vh // 2
+        self._edge_cooldown_until = time.time() + 1.2
 
     def can_grab(self) -> bool:
         """Returns True if evdev is importable and at least one physical pointer is accessible."""
@@ -1094,63 +1156,68 @@ class LinuxHardwareInputGrabber:
         except Exception:
             return False
 
-    def activate(self, peer: dict, exit_edge: int, norm_pos: float = 0.5) -> bool:
-        if self.is_active:
-            self.deactivate(notify_peer=False)
+    def start_monitoring(self) -> None:
+        """Starts background monitoring loop for hot-plugged devices and edge tracking."""
+        if self._supervisor_thread is not None and self._supervisor_thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._supervisor_thread = threading.Thread(target=self._supervisor_loop, daemon=True)
+        self._supervisor_thread.start()
 
+    def _supervisor_loop(self) -> None:
+        while not self._stop_event.is_set():
+            if not self.is_active:
+                self._refresh_and_start_device_threads()
+            for _ in range(35):
+                if self._stop_event.is_set():
+                    break
+                time.sleep(0.1)
+
+    def _refresh_and_start_device_threads(self) -> None:
         try:
             import evdev
             from evdev import ecodes, InputDevice, list_devices
         except ImportError:
-            return False
+            return
 
-        pointer_devs = []
-        kbd_devs = []
+        active_paths = {getattr(d, "path", None) for d in (self._pointer_devs + self._kbd_devs) if d is not None}
+        new_pointers = []
+        new_kbds = []
 
-        for path in list_devices():
-            try:
-                dev = InputDevice(path)
-                caps = dev.capabilities()
-                if "Connect-Me" in dev.name or "ydotoold" in dev.name:
+        try:
+            for path in list_devices():
+                if path in active_paths:
                     continue
-                # Is pointer?
-                if ecodes.EV_REL in caps and ecodes.REL_X in caps[ecodes.EV_REL]:
-                    pointer_devs.append(dev)
-                # Is keyboard?
-                elif ecodes.EV_KEY in caps and ecodes.KEY_A in caps[ecodes.EV_KEY] and ecodes.KEY_ENTER in caps[ecodes.EV_KEY]:
-                    kbd_devs.append(dev)
-            except Exception:
-                pass
+                try:
+                    dev = InputDevice(path)
+                    caps = dev.capabilities()
+                    if "Connect-Me" in dev.name or "ydotoold" in dev.name:
+                        dev.close()
+                        continue
+                    if ecodes.EV_REL in caps and ecodes.REL_X in caps[evdev.ecodes.EV_REL]:
+                        new_pointers.append(dev)
+                    elif ecodes.EV_KEY in caps and ecodes.KEY_A in caps[ecodes.EV_KEY] and ecodes.KEY_ENTER in caps[ecodes.EV_KEY]:
+                        new_kbds.append(dev)
+                    else:
+                        dev.close()
+                except Exception:
+                    pass
+        except Exception:
+            return
 
-        if not pointer_devs:
-            return False
-
-        self._grabbed_devices = []
-        for dev in pointer_devs + kbd_devs:
-            try:
-                dev.grab()
-                self._grabbed_devices.append(dev)
-            except Exception:
-                pass
-
-        if not self._grabbed_devices:
-            return False
-
-        self.active_peer = peer
-        self.exit_edge = exit_edge
-        self.is_active = True
-        self._stop_event.clear()
-        self._threads = []
-
-        for dev in self._grabbed_devices:
-            t = threading.Thread(target=self._read_loop, args=(dev,), daemon=True)
+        for dev in new_pointers:
+            self._pointer_devs.append(dev)
+            t = threading.Thread(target=self._device_read_loop, args=(dev, True), daemon=True)
             self._threads.append(t)
             t.start()
 
-        self.node.log(f"[Donanım Yakalama] 🎯 Fiziksel fare ve klavye ({len(self._grabbed_devices)} donanım aygıtı) çekirdek seviyesinde başarıyla yakalandı.")
-        return True
+        for dev in new_kbds:
+            self._kbd_devs.append(dev)
+            t = threading.Thread(target=self._device_read_loop, args=(dev, False), daemon=True)
+            self._threads.append(t)
+            t.start()
 
-    def _read_loop(self, dev: Any) -> None:
+    def _device_read_loop(self, dev: Any, is_pointer: bool) -> None:
         try:
             import evdev
             from evdev import ecodes
@@ -1162,64 +1229,214 @@ class LinuxHardwareInputGrabber:
 
         try:
             for event in dev.read_loop():
-                if self._stop_event.is_set() or not self.is_active:
+                if self._stop_event.is_set():
                     break
 
-                if event.type == ecodes.EV_REL:
-                    if event.code == ecodes.REL_X:
-                        acc_dx += event.value
-                    elif event.code == ecodes.REL_Y:
-                        acc_dy += event.value
-                    elif event.code == ecodes.REL_WHEEL:
-                        if self.active_peer:
-                            self.node.send_mouse_scroll(self.active_peer, 0, event.value * 120)
-                    elif event.code == ecodes.REL_HWHEEL:
-                        if self.active_peer:
-                            self.node.send_mouse_scroll(self.active_peer, event.value * 120, 0)
+                # Case A: Remote control active (Devices grabbed, forwarding to remote peer)
+                if self.is_active:
+                    if event.type == ecodes.EV_REL:
+                        if event.code == ecodes.REL_X:
+                            acc_dx += event.value
+                        elif event.code == ecodes.REL_Y:
+                            acc_dy += event.value
+                        elif event.code == ecodes.REL_WHEEL:
+                            if self.active_peer:
+                                self.node.send_mouse_scroll(self.active_peer, 0, event.value * 120)
+                        elif event.code == ecodes.REL_HWHEEL:
+                            if self.active_peer:
+                                self.node.send_mouse_scroll(self.active_peer, event.value * 120, 0)
 
-                elif event.type == ecodes.EV_KEY:
-                    # Emergency return hotkey: ESC or Scroll Lock
-                    if event.code in (ecodes.KEY_ESC, ecodes.KEY_SCROLLLOCK) and event.value == 1:
-                        self.node.log("[Donanım Yakalama] ⬅️ [ESC / ScrollLock] tuşuna basıldı, kontrol Linux'a geri alınıyor.")
-                        threading.Thread(target=self.deactivate, args=(True,), daemon=True).start()
-                        break
+                    elif event.type == ecodes.EV_KEY:
+                        # Emergency return hotkey: ESC or Scroll Lock
+                        if event.code in (ecodes.KEY_ESC, ecodes.KEY_SCROLLLOCK) and event.value == 1:
+                            self.node.log("[Donanım Yakalama] ⬅️ [ESC / ScrollLock] tuşuna basıldı, kontrol Linux'a geri alınıyor.")
+                            threading.Thread(target=self.deactivate, args=(True,), daemon=True).start()
+                            break
 
-                    # Mouse buttons
-                    if event.code == ecodes.BTN_LEFT:
-                        if self.active_peer:
-                            self.node.send_mouse_button(self.active_peer, BUTTON_LEFT, event.value == 1)
-                    elif event.code == ecodes.BTN_RIGHT:
-                        if self.active_peer:
-                            self.node.send_mouse_button(self.active_peer, BUTTON_RIGHT, event.value == 1)
-                    elif event.code == ecodes.BTN_MIDDLE:
-                        if self.active_peer:
-                            self.node.send_mouse_button(self.active_peer, BUTTON_MIDDLE, event.value == 1)
-                    else:
-                        # Keyboard key
-                        vk = self.node.injector._evdev_code_to_vk(event.code)
-                        if vk and self.active_peer:
-                            self.node.send_key_event(self.active_peer, vk, event.code, event.value in (1, 2), 0, 0)
+                        # Mouse buttons
+                        if event.code == ecodes.BTN_LEFT:
+                            if self.active_peer:
+                                self.node.send_mouse_button(self.active_peer, BUTTON_LEFT, event.value == 1)
+                        elif event.code == ecodes.BTN_RIGHT:
+                            if self.active_peer:
+                                self.node.send_mouse_button(self.active_peer, BUTTON_RIGHT, event.value == 1)
+                        elif event.code == ecodes.BTN_MIDDLE:
+                            if self.active_peer:
+                                self.node.send_mouse_button(self.active_peer, BUTTON_MIDDLE, event.value == 1)
+                        else:
+                            # Keyboard key
+                            vk = self.node.injector._evdev_code_to_vk(event.code)
+                            if vk and self.active_peer:
+                                self.node.send_key_event(self.active_peer, vk, event.code, event.value in (1, 2), 0, 0)
 
-                elif event.type == ecodes.EV_SYN:
-                    if (acc_dx != 0 or acc_dy != 0) and self.active_peer:
-                        self.node.send_mouse_move(self.active_peer, acc_dx, acc_dy)
-                        acc_dx = 0
-                        acc_dy = 0
+                    elif event.type == ecodes.EV_SYN:
+                        if (acc_dx != 0 or acc_dy != 0) and self.active_peer:
+                            self.node.send_mouse_move(self.active_peer, acc_dx, acc_dy)
+                            acc_dx = 0
+                            acc_dy = 0
+
+                # Case B: Local Linux desktop mode (Passive background edge tracking)
+                else:
+                    if is_pointer and event.type == ecodes.EV_REL:
+                        dx = event.value if event.code == ecodes.REL_X else 0
+                        dy = event.value if event.code == ecodes.REL_Y else 0
+                        if dx != 0 or dy != 0:
+                            self._process_local_mouse_move(dx, dy)
         except Exception:
             pass
+        finally:
+            try:
+                if dev in self._pointer_devs:
+                    self._pointer_devs.remove(dev)
+                if dev in self._kbd_devs:
+                    self._kbd_devs.remove(dev)
+                dev.close()
+            except Exception:
+                pass
+
+    def _process_local_mouse_move(self, dx: int, dy: int) -> None:
+        if self.is_active or time.time() < self._edge_cooldown_until:
+            return
+
+        active_edge_peers: Dict[int, dict] = {}
+        for p in self.node.peers.values():
+            if p.get("isMutuallyPaired"):
+                edge = p.get("assignedEdge", EDGE_RIGHT)
+                if edge not in active_edge_peers:
+                    active_edge_peers[edge] = p
+
+        if not active_edge_peers:
+            self._accum_push = 0.0
+            return
+
+        with self._coord_lock:
+            self.cur_x += dx
+            self.cur_y += dy
+
+            min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
+            max_x = min_x + vw - 1
+            max_y = min_y + vh - 1
+
+            self.cur_x = max(min_x, min(max_x, self.cur_x))
+            self.cur_y = max(min_y, min(max_y, self.cur_y))
+
+            cur_x = self.cur_x
+            cur_y = self.cur_y
+
+        mon = self.node.topology.find_monitor_at(cur_x, cur_y)
+        if not mon:
+            return
+
+        rel_x = cur_x - mon.virtualX
+        rel_y = cur_y - mon.virtualY
+
+        dead_zone = 24
+        in_v_corner = rel_y < dead_zone or rel_y > (mon.height - dead_zone)
+        in_h_corner = rel_x < dead_zone or rel_x > (mon.width - dead_zone)
+
+        hit_edge = EDGE_NONE
+        outward_push = 0.0
+
+        if rel_x >= mon.width - 2 and dx > 0 and not in_v_corner:
+            hit_edge = EDGE_RIGHT
+            outward_push = dx
+        elif rel_x <= 1 and dx < 0 and not in_v_corner:
+            hit_edge = EDGE_LEFT
+            outward_push = -dx
+        elif rel_y <= 1 and dy < 0 and not in_h_corner:
+            hit_edge = EDGE_TOP
+            outward_push = -dy
+        elif rel_y >= mon.height - 2 and dy > 0 and not in_h_corner:
+            hit_edge = EDGE_BOTTOM
+            outward_push = dy
+
+        if hit_edge == EDGE_NONE:
+            if rel_x > 10 and rel_x < mon.width - 10 and rel_y > 10 and rel_y < mon.height - 10:
+                self._accum_push = 0.0
+                self._push_edge = EDGE_NONE
+            return
+
+        if self.node.topology.is_internal_seam(mon, hit_edge, cur_x, cur_y):
+            self._accum_push = 0.0
+            self._push_edge = EDGE_NONE
+            return
+
+        target_peer = active_edge_peers.get(hit_edge)
+        if not target_peer:
+            self._accum_push = 0.0
+            self._push_edge = EDGE_NONE
+            return
+
+        if self._push_edge != hit_edge:
+            self._push_edge = hit_edge
+            self._accum_push = 0.0
+
+        self._accum_push += outward_push
+
+        if self._accum_push >= 15.0:
+            self._accum_push = 0.0
+            self._push_edge = EDGE_NONE
+            self._edge_cooldown_until = time.time() + 1.2
+
+            if hit_edge in (EDGE_LEFT, EDGE_RIGHT):
+                norm_pos = max(0.02, min(0.98, rel_y / float(max(1, mon.height))))
+            else:
+                norm_pos = max(0.02, min(0.98, rel_x / float(max(1, mon.width))))
+
+            peer_name = target_peer.get("deviceName", "Cihaz")
+            self.node.log(f"[Otomatik Kenar Geçişi] 🎯 İmleç {hit_edge}. kenardan '{peer_name}' cihazına otomatik aktarılıyor (norm={norm_pos:.2f}).")
+
+            threading.Thread(
+                target=self.node.switch_control_to_peer,
+                args=(target_peer, hit_edge, norm_pos),
+                daemon=True
+            ).start()
+
+    def activate(self, peer: dict, exit_edge: int, norm_pos: float = 0.5) -> bool:
+        if self.is_active:
+            self.deactivate(notify_peer=False)
+
+        if not self._pointer_devs:
+            self._refresh_and_start_device_threads()
+
+        if not self._pointer_devs:
+            return False
+
+        self.active_peer = peer
+        self.exit_edge = exit_edge
+        self.is_active = True
+        self._accum_push = 0.0
+        self._push_edge = EDGE_NONE
+
+        grabbed_count = 0
+        for dev in list(self._pointer_devs + self._kbd_devs):
+            try:
+                dev.grab()
+                grabbed_count += 1
+            except Exception:
+                pass
+
+        if grabbed_count == 0:
+            self.is_active = False
+            return False
+
+        self.node.log(f"[Donanım Yakalama] 🎯 Fiziksel fare ve klavye ({grabbed_count} donanım aygıtı) çekirdek seviyesinde başarıyla yakalandı.")
+        return True
 
     def deactivate(self, notify_peer: bool = True):
         if not self.is_active:
             return
         self.is_active = False
-        self._stop_event.set()
+        self.active_peer = None
+        self._accum_push = 0.0
+        self._push_edge = EDGE_NONE
+        self._edge_cooldown_until = time.time() + 1.2
 
-        for dev in self._grabbed_devices:
+        for dev in list(self._pointer_devs + self._kbd_devs):
             try:
                 dev.ungrab()
             except Exception:
                 pass
-        self._grabbed_devices.clear()
 
         if notify_peer:
             self.node.return_host_control_to_local(notify_peer=True)
@@ -1229,6 +1446,17 @@ class LinuxHardwareInputGrabber:
                 self.on_deactivated()
             except Exception:
                 pass
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self.deactivate(notify_peer=False)
+        for dev in list(self._pointer_devs + self._kbd_devs):
+            try:
+                dev.close()
+            except Exception:
+                pass
+        self._pointer_devs.clear()
+        self._kbd_devs.clear()
 
 
 class ConnectMeLinuxNode:
@@ -1242,6 +1470,7 @@ class ConnectMeLinuxNode:
         self.topology = LinuxMultiMonitorTopology()
         self.injector = LinuxInputInjector()
         self.hardware_grabber = LinuxHardwareInputGrabber(self)
+        self.hardware_grabber.start_monitoring()
 
         self.shelf_dir = Path.home() / "Downloads" / "ConnectMe-Shelf"
         self.shelf_dir.mkdir(parents=True, exist_ok=True)
@@ -1440,10 +1669,14 @@ class ConnectMeLinuxNode:
                 pass
         return True
 
-    def return_host_control_to_local(self, notify_peer: bool = True) -> None:
+    def return_host_control_to_local(self, notify_peer: bool = True, return_edge: int = EDGE_NONE, norm_pos: float = 0.5) -> None:
         """Returns mouse/keyboard control back from remote peer to Linux host."""
         if hasattr(self, "hardware_grabber") and self.hardware_grabber.is_active:
             self.hardware_grabber.deactivate(notify_peer=False)
+
+        if hasattr(self, "hardware_grabber"):
+            eff_edge = return_edge if return_edge != EDGE_NONE else getattr(self, "controlling_exit_edge", EDGE_RIGHT)
+            self.hardware_grabber.sync_cursor_at_edge(eff_edge, norm_pos)
 
         peer = self.controlling_remote_peer
         if not peer:
@@ -1739,8 +1972,8 @@ class ConnectMeLinuxNode:
     def stop(self) -> None:
         """Stops the daemon background loops, releases sockets, and cleans up."""
         self.running = False
-        if hasattr(self, "hardware_grabber") and self.hardware_grabber.is_active:
-            self.hardware_grabber.deactivate(notify_peer=False)
+        if hasattr(self, "hardware_grabber"):
+            self.hardware_grabber.stop()
         for s in (
             getattr(self, "discovery_sock", None),
             getattr(self, "tcp_srv", None),
@@ -2389,7 +2622,7 @@ class ConnectMeLinuxNode:
                 norm_pos = float(header.get("normalizedPosition", 0.5))
                 self.log(f"[Kenar Dönüşü] '{header.get('senderName')}' ({remote_ip}) TCP sinyaliyle yerel masaüstüne dönüş yaptı.")
                 if self.controlling_remote_peer is not None:
-                    self.return_host_control_to_local(notify_peer=False)
+                    self.return_host_control_to_local(notify_peer=False, return_edge=edge, norm_pos=norm_pos)
                 else:
                     self.return_control_to_local(edge, norm_pos)
 
@@ -2472,7 +2705,7 @@ class ConnectMeLinuxNode:
                     edge, dragging, norm_pos = struct.unpack("<BBf", data[4:10])
                     if self.controlling_remote_peer is not None and (self.controlling_remote_peer.get("ipAddress") == addr[0] or self.controlling_remote_peer.get("deviceId") == addr[0]):
                         self.log(f"[Kenar Dönüşü] '{self.controlling_remote_peer.get('deviceName')}' imleci Linux'a geri bıraktı.")
-                        self.return_host_control_to_local(notify_peer=False)
+                        self.return_host_control_to_local(notify_peer=False, return_edge=edge, norm_pos=norm_pos)
                         continue
 
                     min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()

@@ -171,6 +171,8 @@ class ScreenEdgeSentinels:
             return
         if hasattr(self, "host_capture_overlay") and getattr(self.host_capture_overlay, "is_active", False):
             return
+        if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.is_active:
+            return
 
         active_edge_peers: Dict[int, dict] = {}
         for p in self.node.peers.values():
@@ -186,6 +188,9 @@ class ScreenEdgeSentinels:
             cur_x, cur_y = self.root.winfo_pointerxy()
         except Exception:
             return
+
+        if hasattr(self.node, "hardware_grabber"):
+            self.node.hardware_grabber.sync_cursor(cur_x, cur_y)
 
         try:
             scr_w = self.root.winfo_screenwidth()
@@ -267,8 +272,11 @@ class HostCaptureOverlay:
 
         # Try kernel-level hardware grabber (evdev) first
         grab_ok = False
-        if hasattr(self.node, "hardware_grabber") and not self.node.hardware_grabber.is_active:
-            grab_ok = self.node.hardware_grabber.activate(peer, exit_edge, norm_pos)
+        if hasattr(self.node, "hardware_grabber"):
+            if not self.node.hardware_grabber.is_active:
+                grab_ok = self.node.hardware_grabber.activate(peer, exit_edge, norm_pos)
+            else:
+                grab_ok = True
 
         # Create Top Floating HUD Banner (Compact, never covers the user's screen or traps clicks)
         min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
@@ -476,6 +484,7 @@ class ConnectMeLinuxGui:
         self.root.bind_all("<Scroll_Lock>", lambda e: self._toggle_host_capture())
         self.root.bind_all("<Control-Alt-Right>", lambda e: self._switch_to_edge_peer(EDGE_RIGHT))
         self.root.bind_all("<Control-Alt-Left>", lambda e: self._switch_to_edge_peer(EDGE_LEFT))
+        self.root.bind_all("<Motion>", lambda e: getattr(self.node, "hardware_grabber", None) and self.node.hardware_grabber.sync_cursor(e.x_root, e.y_root), add="+")
 
         self._apply_dark_theme()
         self._build_ui()

@@ -1,3 +1,27 @@
+# Connect Me v1.8.1 — Linux Otomatik Ekran Kenarı Geçişi (Kesintisiz Donanım KVM) & Çoklu Monitör İyileştirmeleri
+
+Bu sürüm; Linux'tan Windows'a veya Android'e geçerken fare imlecini ekrandan aktarmak için GUI üzerindeki "🎯 Fareyi Bu Cihaza Aktar" butonuna basma zorunluluğunu tamamen ortadan kaldırır. Fare imleci ekran sınırına ulaştığında ve karşı cihaza doğru itildiğinde geçiş %100 otomatik ve anında gerçekleşir.
+
+---
+
+### 🌟 v1.8.1 Yenilikleri ve Düzeltmeleri:
+
+* **🖱️ Linux Arka Plan Donanım Seviyesi Kenar İzleme (Continuous evdev Edge Tracker):**
+  - **Sorunun Kök Nedeni:** Linux (Nobara KDE Plasma Wayland) üzerinde Tkinter GUI uygulamaları XWayland altında çalışır. Wayland güvenlik mimarisi gereği, fare imleci Tkinter penceresinin dışındayken (masaüstü, tarayıcı veya diğer uygulamalar üzerinde) X11 pencereleri küresel imleç koordinatlarını (`winfo_pointerxy`) sorgulayamaz veya koordinatlar donar. Bu sebeple ekran kenarı algılanamıyor ve kullanıcının mutlaka GUI butonuna basması gerekiyordu.
+  - **Çözüm:** `LinuxHardwareInputGrabber` mimarisi baştan aşağı yenilendi. Artık Linux çekirdeğindeki `/dev/input/event*` aygıtlarını arka planda pasif olarak izleyen sürekli bir donanım takip motoru eklendi.
+  - **Sıfır Arayüz Bağımlılığı & Mavi Çizgisiz:** Ekran üzerine herhangi bir pencere, canvas veya mavi çizgi çizilmez; imlecin hızlı veya yavaş hareket etmesinden etkilenmez ve tam 1000Hz hassasiyetle çalışır.
+  - **Otomatik Geçiş Eşiği (Edge Resistance):** Fare ekran sınırına ulaşıp karşı cihaza doğru 15 piksel itildiğinde geçiş otomatik olarak tetiklenir, `dev.grab()` devreye girer ve kontrol kesintisizce karşı ekrana aktarılır.
+
+* **🖥️ Çoklu Monitör İç Birleşim Koruması & En Yakın Ekran Eşlemesi:**
+  - `find_monitor_at` fonksiyonu geliştirildi; imleç monitörün en uç piksel sınırındayken dahi en yakın fiziksel ekran karesi doğru tespit edilir.
+  - İki yerel monitör arasındaki iç birleşim noktalarından geçerken (`is_internal_seam`) imleç yerel ekranlar arasında serbestçe gezinir, yalnızca dış sınırda eşleşen uzak cihaza geçiş yapar.
+
+* **🔄 Çift Yönlü Koordinat ve Bekleme Süresi (Cooldown) Senkronizasyonu:**
+  - Karşı cihazdan (Windows veya Android) Linux'a geri dönüş yapıldığında (`PACKET_EDGE_HANDOFF` / `EDGE_RETURN`) imleç koordinatları giriş kenarının hemen içine hizalanır ve 1.2 saniyelik geri sekme koruması (`cooldown`) uygulanır.
+  - GUI üzerinden fare hareketi yapıldığında donanımsal koordinat takipçisi pencere koordinatlarıyla otomatik olarak kalibre edilir.
+
+---
+
 # Connect Me v1.8.0 — Çift Kanallı Eşleşme (TCP + UDP Hızlı Yol), Windows Güvenlik Duvarı Otomasyonu & Canlı Ağ Tanılama
 
 Bu sürüm; Linux'tan Windows'a bağlanırken Windows 6 haneli PIN kodu girildiğinde isteğin Windows'a ulaşmaması veya yanıtsız kalması sorununu kökten çözer. Windows Güvenlik Duvarı (Windows Defender Firewall) otomatik kural kurulumunu, UDP port 42849 ve TCP port 42851 üzerinden çift kanallı (dual-channel) eşleşme motorunu, IPv6-mapped IPv4 normalizasyonunu ve Linux GUI canlı kullanıcı teşhis geri bildirimlerini sunar.
