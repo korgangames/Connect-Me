@@ -68,6 +68,23 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     public string ActiveSourceDescription => _activeSourceDescription;
     public long TotalAudioBytesReceived => _totalAudioBytesReceived;
 
+    private string? _selectedSinkId;
+    public string? SelectedSinkId
+    {
+        get => _selectedSinkId;
+        set
+        {
+            if (_selectedSinkId != value)
+            {
+                _selectedSinkId = value;
+                lock (_lock)
+                {
+                    CloseWaveOut();
+                }
+            }
+        }
+    }
+
     public event Action<string>? AudioStatusChanged;
 
     public WindowsAudioPlaybackEngine(ConnectMeNetworkNode network)
@@ -161,17 +178,26 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         };
         format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
 
-        int res = waveOutOpen(out _hWaveOut, unchecked((uint)WAVE_MAPPER), ref format, IntPtr.Zero, IntPtr.Zero, CALLBACK_NULL);
+        uint devId = unchecked((uint)WAVE_MAPPER);
+        if (!string.IsNullOrEmpty(_selectedSinkId) && _selectedSinkId.StartsWith("winmm:"))
+        {
+            if (int.TryParse(_selectedSinkId["winmm:".Length..], out int parsedId) && parsedId >= 0)
+            {
+                devId = (uint)parsedId;
+            }
+        }
+
+        int res = waveOutOpen(out _hWaveOut, devId, ref format, IntPtr.Zero, IntPtr.Zero, CALLBACK_NULL);
         if (res == MMSYSERR_NOERROR)
         {
             _currentSampleRate = sampleRate;
             _currentChannels = channels;
             _currentBitsPerSample = bitsPerSample;
-            _network.Log($"[Ses & Kulaklık Köprüsü] WinMM ses çıkışı başarıyla açıldı ({sampleRate} Hz, {channels} kanal, {bitsPerSample} bit).");
+            _network.Log($"[Ses & Kulaklık Köprüsü] WinMM ses çıkışı başarıyla açıldı ({sampleRate} Hz, {channels} kanal, {bitsPerSample} bit, Cihaz #{devId}).");
         }
         else
         {
-            _network.Log($"[Ses Hata] WinMM waveOut açılamadı (Hata: {res}). Varsayılan ses çıkış aygıtınızı kontrol edin.");
+            _network.Log($"[Ses Hata] WinMM waveOut açılamadı (Hata: {res}, Cihaz #{devId}). Varsayılan ses çıkış aygıtınızı kontrol edin.");
             _hWaveOut = IntPtr.Zero;
         }
     }
@@ -306,4 +332,66 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
 
     [DllImport("winmm.dll")]
     private static extern int waveOutClose(IntPtr hWaveOut);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct WAVEOUTCAPS
+    {
+        public ushort wMid;
+        public ushort wPid;
+        public uint vDriverVersion;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string szPname;
+        public uint dwFormats;
+        public ushort wChannels;
+        public ushort wReserved1;
+        public uint dwSupport;
+    }
+
+    [DllImport("winmm.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern uint waveOutGetNumDevs();
+
+    [DllImport("winmm.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern int waveOutGetDevCaps(IntPtr uDeviceID, out WAVEOUTCAPS pwoc, uint cbwoc);
+
+    public static List<AudioSinkDescriptor> EnumerateLocalAudioSinks(string deviceId, string deviceName)
+    {
+        var sinks = new List<AudioSinkDescriptor>
+        {
+            new()
+            {
+                DeviceId = deviceId,
+                DeviceName = deviceName,
+                Platform = "windows",
+                SinkId = "winmm:-1",
+                SinkName = "Varsayılan Windows Ses Çıkışı",
+                IsDefault = true
+            }
+        };
+
+        try
+        {
+            uint count = waveOutGetNumDevs();
+            for (uint i = 0; i < count; i++)
+            {
+                var caps = new WAVEOUTCAPS();
+                int res = waveOutGetDevCaps((IntPtr)i, out caps, (uint)Marshal.SizeOf<WAVEOUTCAPS>());
+                if (res == MMSYSERR_NOERROR && !string.IsNullOrWhiteSpace(caps.szPname))
+                {
+                    sinks.Add(new AudioSinkDescriptor
+                    {
+                        DeviceId = deviceId,
+                        DeviceName = deviceName,
+                        Platform = "windows",
+                        SinkId = $"winmm:{i}",
+                        SinkName = caps.szPname.Trim(),
+                        IsDefault = false
+                    });
+                }
+            }
+        }
+        catch { }
+
+        return sinks;
+    }
 }
+

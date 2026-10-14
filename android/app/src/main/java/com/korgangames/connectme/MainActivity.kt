@@ -30,10 +30,13 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.korgangames.connectme.audio.AudioStreamEngine
 import com.korgangames.connectme.audio.AudioStreamService
 import com.korgangames.connectme.network.ConnectMeService
 import com.korgangames.connectme.network.DiscoveredPcPeer
+import com.korgangames.connectme.protocol.AudioRouteTarget
+import com.korgangames.connectme.protocol.AudioSinkDescriptor
 import com.korgangames.connectme.protocol.ProtocolConstants
 import com.korgangames.connectme.service.CursorAccessibilityService
 import com.korgangames.connectme.updater.AppUpdateManager
@@ -67,34 +70,48 @@ class MainActivity : AppCompatActivity() {
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val targetPc = pendingAudioTarget ?: resolveTargetPc()
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            val projection = mediaProjectionManager.getMediaProjection(result.resultCode, result.data!!)
-            if (targetPc != null) {
-                AudioStreamService.activeProjection = projection
-                val intent = Intent(this, AudioStreamService::class.java).apply {
-                    action = AudioStreamService.ACTION_START_AUDIO
-                    putExtra("hostIp", targetPc.ipAddress)
-                }
+        val targetIp = ConnectMeService.activeAudioRoute?.targetIp
+            ?: pendingAudioTarget?.ipAddress
+            ?: resolveTargetPc()?.ipAddress
+
+        if (result.resultCode == Activity.RESULT_OK && result.data != null && !targetIp.isNullOrBlank()) {
+            val intent = Intent(this, AudioStreamService::class.java).apply {
+                action = AudioStreamService.ACTION_START_AUDIO
+                putExtra("hostIp", targetIp)
+                putExtra("resultCode", result.resultCode)
+                putExtra("resultData", result.data)
+            }
+            try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     startForegroundService(intent)
                 } else {
                     startService(intent)
                 }
                 updateAudioUi()
-                Toast.makeText(this, "🎧 Sesler '${targetPc.deviceName}' bilgisayarına aktarılıyor!", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Hedef bilgisayar adresi bulunamadı.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "🎧 Ses başarıyla yönlendirildi!", Toast.LENGTH_SHORT).show()
+            } catch (t: Throwable) {
+                android.util.Log.e("ConnectMe", "Failed to start AudioStreamService: ${t.message}", t)
+                updateAudioUi()
+            }
+        } else if (!targetIp.isNullOrBlank()) {
+            val intent = Intent(this, AudioStreamService::class.java).apply {
+                action = AudioStreamService.ACTION_START_AUDIO
+                putExtra("hostIp", targetIp)
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+                updateAudioUi()
+                Toast.makeText(this, "Mikrofon ses aktarımı başlatıldı", Toast.LENGTH_SHORT).show()
+            } catch (t: Throwable) {
+                android.util.Log.e("ConnectMe", "Failed to start fallback AudioStreamService: ${t.message}", t)
+                updateAudioUi()
             }
         } else {
-            if (targetPc != null) {
-                AudioStreamEngine.instance.start(targetPc.ipAddress, null)
-                updateAudioUi()
-                Toast.makeText(this, "Mikrofon ses aktarımı başlatıldı -> ${targetPc.deviceName}", Toast.LENGTH_SHORT).show()
-            } else {
-                updateAudioUi()
-            }
+            updateAudioUi()
         }
     }
 
@@ -161,6 +178,12 @@ class MainActivity : AppCompatActivity() {
         ConnectMeService.onStateUpdated = {
             runOnUiThread { refreshUiState() }
         }
+        ConnectMeService.onAudioSinksUpdated = {
+            runOnUiThread { updateAudioUi() }
+        }
+        ConnectMeService.onAudioRouteChanged = {
+            runOnUiThread { updateAudioUi() }
+        }
         AudioStreamEngine.instance.onStatusChanged = { _, _ ->
             runOnUiThread { updateAudioUi() }
         }
@@ -170,6 +193,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         ConnectMeService.onStateUpdated = null
+        ConnectMeService.onAudioSinksUpdated = null
+        ConnectMeService.onAudioRouteChanged = null
         AudioStreamEngine.instance.onStatusChanged = null
         super.onPause()
     }
@@ -738,12 +763,12 @@ class MainActivity : AppCompatActivity() {
         pcCard.addView(connectBtn)
         root.addView(pcCard)
 
-        // 🎧 Merkezi Kulaklık & Ses Yönlendirme (Audio Hub) Card
+        // 🎧 Çoklu Cihaz Ses Matrisi (Audio Matrix) Card
         val audioCard = createCardLayout()
-        audioCard.addView(createSectionTitle("🎧 3. Merkezi Kulaklık & Ses Köprüsü (Audio Hub)"))
+        audioCard.addView(createSectionTitle("🎧 3. Çoklu Cihaz Ses Matrisi (Audio Matrix)"))
 
         val audioInfoText = TextView(this).apply {
-            text = "Telefonunuzun tüm seslerini (YouTube, Spotify, oyunlar, bildirimler) bilgisayara ve ona bağlı kulaklığınıza aktarır."
+            text = "Tüm bağlı cihazların (Windows, Linux, Android) ses çıkışlarını tek listede görür ve seçtiğiniz hoparlör/kulaklığa tüm cihazların seslerini yönlendirir."
             textSize = 12f
             setTextColor(Color.parseColor("#94A3B8"))
             setPadding(0, 6, 0, 10)
@@ -751,16 +776,16 @@ class MainActivity : AppCompatActivity() {
         audioCard.addView(audioInfoText)
 
         audioStatusText = TextView(this).apply {
-            text = if (AudioStreamEngine.instance.isStreaming) "🟢 Sesi Bilgisayara Aktarılıyor (48kHz Stereo)" else "⚪ Ses aktarımı kapalı"
+            text = "⚪ Ses: Yerel Mod (Her cihaz kendi sesini bağımsız çalıyor)"
             textSize = 12.5f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(if (AudioStreamEngine.instance.isStreaming) Color.parseColor("#4ADE80") else Color.parseColor("#9CA3AF"))
+            setTextColor(Color.parseColor("#94A3B8"))
             setPadding(0, 4, 0, 10)
         }
         audioCard.addView(audioStatusText)
 
-        audioToggleBtn = createStyledButton(if (AudioStreamEngine.instance.isStreaming) "⏹️ Bilgisayara Ses Aktarımını Durdur" else "🎧 Sesi Bilgisayara / Kulaklığa Aktar", if (AudioStreamEngine.instance.isStreaming) "#DC2626" else "#059669") {
-            toggleAudioStreaming()
+        audioToggleBtn = createStyledButton("🎧 Ses Çıkışını Seç (Tüm Cihazlar)...", "#1E293B") {
+            showAudioSinkSelectionDialog()
         }
         audioCard.addView(audioToggleBtn)
         root.addView(audioCard)
@@ -1125,20 +1150,128 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun showAudioSinkSelectionDialog() {
+        val pairedPeers = ConnectMeService.discoveredPeers.filter { it.isMutuallyPaired }
+        val currentRoute = ConnectMeService.activeAudioRoute
+
+        val items = mutableListOf<String>()
+        val targets = mutableListOf<AudioRouteTarget?>()
+
+        // 1. Yerel Mod / Devre Dışı
+        items.add("🔘 Yerel Çalma / Devre Dışı (Telefon Hoparlörü)")
+        targets.add(null)
+
+        // 2. Bu telefonun kendi çıkışları
+        val localSinks = ConnectMeService.instance?.getLocalAudioSinks() ?: emptyList()
+        val localDevId = ConnectMeService.instance?.localDeviceId ?: ""
+        val localDevName = ConnectMeService.instance?.localDeviceName ?: "Bu Telefon"
+        val localIp = ConnectMeService.instance?.getLocalIpv4Address() ?: ""
+        for (s in localSinks) {
+            items.add("📱 [$localDevName] ${s.sinkName} (Bu Cihaz)")
+            targets.add(AudioRouteTarget(
+                targetDeviceId = localDevId,
+                targetDeviceName = localDevName,
+                targetSinkId = s.sinkId,
+                targetSinkName = s.sinkName,
+                targetIp = localIp,
+                targetUdpPort = ProtocolConstants.AUDIO_STREAM_UDP_PORT
+            ))
+        }
+
+        // 3. Karşı cihazların (Windows, Linux vb.) tüm ses çıkışları
+        for (peer in pairedPeers) {
+            if (peer.remoteAudioSinks.isEmpty()) {
+                val icon = if (peer.platform.contains("win", ignoreCase = true)) "🪟" else "🐧"
+                items.add("$icon [${peer.deviceName}] Varsayılan Ses Çıkışı")
+                targets.add(AudioRouteTarget(
+                    targetDeviceId = peer.deviceId,
+                    targetDeviceName = peer.deviceName,
+                    targetSinkId = "default",
+                    targetSinkName = "Varsayılan Ses Çıkışı",
+                    targetIp = peer.ipAddress,
+                    targetUdpPort = ProtocolConstants.AUDIO_STREAM_UDP_PORT
+                ))
+            } else {
+                for (sink in peer.remoteAudioSinks) {
+                    val icon = if (peer.platform.contains("win", ignoreCase = true)) "🪟" else "🐧"
+                    val defTag = if (sink.isDefault) " (Varsayılan)" else ""
+                    items.add("$icon [${peer.deviceName}] ${sink.sinkName}$defTag")
+                    targets.add(AudioRouteTarget(
+                        targetDeviceId = peer.deviceId,
+                        targetDeviceName = peer.deviceName,
+                        targetSinkId = sink.sinkId,
+                        targetSinkName = sink.sinkName,
+                        targetIp = peer.ipAddress,
+                        targetUdpPort = ProtocolConstants.AUDIO_STREAM_UDP_PORT
+                    ))
+                }
+            }
+        }
+
+        // Find current selection index
+        var checkedIndex = 0
+        if (currentRoute != null) {
+            for (i in targets.indices) {
+                val t = targets[i]
+                if (t != null && t.targetDeviceId == currentRoute.targetDeviceId && t.targetSinkId == currentRoute.targetSinkId) {
+                    checkedIndex = i
+                    break
+                }
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("🎧 Ses Çıkış Matrisi (Tüm Cihazlar)")
+            .setSingleChoiceItems(items.toTypedArray(), checkedIndex) { dialog, which ->
+                dialog.dismiss()
+                val selectedTarget = targets[which]
+                ConnectMeService.instance?.setAndBroadcastAudioRoute(selectedTarget)
+                updateAudioUi()
+
+                if (selectedTarget == null) {
+                    Toast.makeText(this, "Ses yerel moda döndü", Toast.LENGTH_SHORT).show()
+                } else if (selectedTarget.targetDeviceId == localDevId) {
+                    Toast.makeText(this, "Diğer cihazların sesleri bu telefondan çalınacak", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "Ses '${selectedTarget.targetDeviceName}' (${selectedTarget.targetSinkName}) hedefine yönlendirildi!", Toast.LENGTH_SHORT).show()
+                    // Prompt for projection if not already streaming on Android 10+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && AudioStreamService.activeProjection == null) {
+                        try {
+                            val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                            mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+                        } catch (t: Throwable) {
+                            android.util.Log.e("ConnectMe", "Failed to launch screen capture: ${t.message}", t)
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
     private fun updateAudioUi() {
         if (!::audioStatusText.isInitialized || !::audioToggleBtn.isInitialized) return
+        val currentRoute = ConnectMeService.activeAudioRoute
+        val localDevId = ConnectMeService.instance?.localDeviceId ?: ""
         val isStreaming = AudioStreamEngine.instance.isStreaming
-        val targetIp = AudioStreamEngine.instance.targetHostIp ?: ""
-        audioStatusText.text = if (isStreaming) {
-            "🟢 Ses Bilgisayara Aktarılıyor (48kHz 16-bit Stereo, <15ms)\nBilgisayara takılı kulaklıktan dinleniyor${if (targetIp.isNotEmpty()) " -> $targetIp" else ""}."
+
+        if (currentRoute == null || currentRoute.targetDeviceId in listOf("", "NONE")) {
+            audioStatusText.text = "⚪ Ses: Yerel Mod\n(Her cihaz kendi yerel sesini bağımsız çalıyor)"
+            audioStatusText.setTextColor(Color.parseColor("#94A3B8"))
+            audioToggleBtn.text = "🎧 Ses Çıkışını Seç (Tüm Cihazlar)..."
+            (audioToggleBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#1E293B"))
+        } else if (currentRoute.targetDeviceId == localDevId) {
+            audioStatusText.text = "🟢 Aktif Alıcı: Diğer cihazların sesleri bu telefondan (${currentRoute.targetSinkName}) çalınıyor."
+            audioStatusText.setTextColor(Color.parseColor("#4ADE80"))
+            audioToggleBtn.text = "🎧 Aktif Çıkış: Bu Telefon (${currentRoute.targetSinkName})"
+            (audioToggleBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#065F46"))
         } else {
-            "⚪ Ses aktarımı kapalı. Başlatıldığında tüm telefon sesleri bilgisayar kulaklığından gelir."
+            val streamTag = if (isStreaming) " (Canlı Akıyor 48kHz Stereo)" else " (Bağlanıyor...)"
+            audioStatusText.text = "📡 Ses Yayını -> [${currentRoute.targetDeviceName}] ${currentRoute.targetSinkName}$streamTag"
+            audioStatusText.setTextColor(Color.parseColor("#F59E0B"))
+            audioToggleBtn.text = "📡 Hedef: [${currentRoute.targetDeviceName}] ${currentRoute.targetSinkName}"
+            (audioToggleBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#2563EB"))
         }
-        audioStatusText.setTextColor(if (isStreaming) Color.parseColor("#4ADE80") else Color.parseColor("#9CA3AF"))
-        audioToggleBtn.text = if (isStreaming) "⏹️ Bilgisayara Ses Aktarımını Durdur" else "🎧 Sesi Bilgisayara / Kulaklığa Aktar"
-        (audioToggleBtn.background as? GradientDrawable)?.setColor(
-            Color.parseColor(if (isStreaming) "#DC2626" else "#059669")
-        )
     }
 
     private fun resolveTargetPc(): DiscoveredPcPeer? {
@@ -1196,40 +1329,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleAudioStreaming() {
-        val engine = AudioStreamEngine.instance
-        if (engine.isStreaming) {
-            val intent = Intent(this, AudioStreamService::class.java).apply {
-                action = AudioStreamService.ACTION_STOP_AUDIO
-            }
-            startService(intent)
-            engine.stop()
-            updateAudioUi()
-            Toast.makeText(this, "Ses aktarımı durduruldu", Toast.LENGTH_SHORT).show()
-        } else {
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissionsLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
-                return
-            }
-
-            val targetPc = resolveTargetPc()
-            if (targetPc == null) {
-                Toast.makeText(this, "Bağlı veya keşfedilen bir bilgisayar bulunamadı. Lütfen bilgisayarınızın açık ve aynı Wi-Fi ağında olduğundan emin olun veya IP adresini girin.", Toast.LENGTH_LONG).show()
-                return
-            }
-            pendingAudioTarget = targetPc
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-            } else {
-                val intent = Intent(this, AudioStreamService::class.java).apply {
-                    action = AudioStreamService.ACTION_START_AUDIO
-                    putExtra("hostIp", targetPc.ipAddress)
-                }
-                startService(intent)
-                updateAudioUi()
-                Toast.makeText(this, "🎧 Sesler '${targetPc.deviceName}' bilgisayarına aktarılıyor!", Toast.LENGTH_SHORT).show()
-            }
-        }
+        showAudioSinkSelectionDialog()
     }
 }

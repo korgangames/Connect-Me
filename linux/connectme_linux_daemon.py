@@ -1525,6 +1525,14 @@ class ConnectMeLinuxNode:
         self.audio_rx_last_sender: str = ""
         self.audio_rx_last_player: str = ""
 
+        # Audio Matrix & Cross-Device Routing
+        self.local_audio_sinks: List[Dict[str, Any]] = []
+        self.remote_audio_sinks: Dict[str, List[Dict[str, Any]]] = {}
+        self.active_audio_route: Optional[Dict[str, Any]] = None
+        self.audio_rx_target_sink: Optional[str] = None
+        self.on_audio_sinks_updated: Optional[Any] = None
+        self.on_audio_route_changed: Optional[Any] = None
+
     def log(self, text: str) -> None:
         line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
         try:
@@ -1793,6 +1801,15 @@ class ConnectMeLinuxNode:
         peer["out_ok"] = False
         peer["isMutuallyPaired"] = False
 
+        self.remote_audio_sinks.pop(dev_id, None)
+        if self.active_audio_route and self.active_audio_route.get("targetDeviceId") == dev_id:
+            self.set_and_broadcast_audio_route(None)
+        if self.on_audio_sinks_updated:
+            try:
+                self.on_audio_sinks_updated()
+            except Exception:
+                pass
+
         if self.active_remote_peer and (self.active_remote_peer.get("deviceId") == dev_id or self.active_remote_peer.get("ipAddress") == peer.get("ipAddress")):
             self.return_control_to_local(0, 0.5)
 
@@ -1842,6 +1859,7 @@ class ConnectMeLinuxNode:
         peer["in_ok"] = True
         peer["out_ok"] = True
         peer["isMutuallyPaired"] = True
+        self.on_peer_mutually_paired(peer)
 
         trust_token = f"trust-{self.device_id}-{os.urandom(8).hex()}" if remember else ""
         if remember and trust_token:
@@ -1959,6 +1977,14 @@ class ConnectMeLinuxNode:
         for m in mons:
             prim_str = " [BİRİNCİL]" if m.isPrimary else ""
             self.log(f"   • {m.monitorId}: {m.width}x{m.height} @ ({m.virtualX}, {m.virtualY}) ölçek={m.scaleFactor}{prim_str}")
+
+        # Enumerate and cache local audio sinks
+        self.local_audio_sinks = self.enumerate_local_audio_sinks()
+        self.log(f" Algılanan Ses Çıkışları : {len(self.local_audio_sinks)} adet")
+        for s in self.local_audio_sinks:
+            def_str = " [VARSAYILAN]" if s.get("isDefault") else ""
+            self.log(f"   • Ses Çıkışı: {s.get('sinkName')} ({s.get('sinkId')}){def_str}")
+
         self.log("=" * 72)
 
         # Start Discovery Receiver & Broadcaster
@@ -2086,6 +2112,7 @@ class ConnectMeLinuxNode:
                                 self._save_trusted_devices()
                                 peer["is_trusted"] = True
                                 self.log(f"[Güvenlik] ⭐ '{sender_name}' karşılıklı doğrulandı ve güvenilir cihaz olarak kaydedildi.")
+                            self.on_peer_mutually_paired(peer)
                         else:
                             peer["pending_trust_token"] = trust_token if req_trust else ""
                             peer["pending_req_trust"] = req_trust
@@ -2143,6 +2170,7 @@ class ConnectMeLinuxNode:
                                 }
                                 self._save_trusted_devices()
                                 peer["is_trusted"] = True
+                            self.on_peer_mutually_paired(peer)
                             self.log(f"[Hızlı Eşleşme - UDP] ✅ '{peer.get('deviceName')}' ile karşılıklı eşleşme tamamlandı!")
                         else:
                             self.log(f"[PIN Onayı - UDP] 🔔 '{peer.get('deviceName')}' kodunuzu onayladı! Bağlantıyı tamamlamak için o da sizin kodunuzu ({self.local_pin}) girmeli.")
@@ -2170,6 +2198,7 @@ class ConnectMeLinuxNode:
                     peer["in_ok"] = True
                     peer["out_ok"] = True
                     peer["isMutuallyPaired"] = True
+                    self.on_peer_mutually_paired(peer)
                     self.suppressed_autoconnect.discard(sender_id)
 
                     req_trust = bool(payload.get("requestTrust", False))
@@ -2219,6 +2248,7 @@ class ConnectMeLinuxNode:
                         peer["in_ok"] = True
                         peer["out_ok"] = True
                         peer["isMutuallyPaired"] = True
+                        self.on_peer_mutually_paired(peer)
                         if self.on_peer_updated:
                             try:
                                 self.on_peer_updated(peer)
@@ -2487,6 +2517,7 @@ class ConnectMeLinuxNode:
                             self._save_trusted_devices()
                             peer["is_trusted"] = True
                             self.log(f"[Güvenlik] ⭐ '{sender_name}' karşılıklı doğrulandı ve güvenilir cihaz olarak kaydedildi.")
+                        self.on_peer_mutually_paired(peer)
                     else:
                         peer["pending_trust_token"] = trust_token if req_trust else ""
                         peer["pending_req_trust"] = req_trust
@@ -2560,6 +2591,7 @@ class ConnectMeLinuxNode:
                 }
                 self._send_tcp_frame(conn, ack)
                 self.log(f"[Çift Taraflı Eşleşme] ✅ '{sender_name}' ({remote_ip}) bağlantı isteğinizi tek tıkla kabul etti! Karşılıklı bağlantı aktif.")
+                self.on_peer_mutually_paired(peer)
                 if self.on_peer_updated:
                     try:
                         self.on_peer_updated(peer)
@@ -2579,6 +2611,7 @@ class ConnectMeLinuxNode:
                     peer["in_ok"] = True
                     peer["out_ok"] = True
                     peer["isMutuallyPaired"] = True
+                    self.on_peer_mutually_paired(peer)
                     if self.on_peer_updated:
                         try:
                             self.on_peer_updated(peer)
@@ -2604,6 +2637,7 @@ class ConnectMeLinuxNode:
                     peer["is_trusted"] = True
                     peer["isMutuallyPaired"] = True
                     peer["monitors"] = header.get("senderMonitors", peer.get("monitors", []))
+                    self.on_peer_mutually_paired(peer)
                     ack = {
                         "type": "TRUSTED_RECONNECT_ACK",
                         "senderId": self.device_id,
@@ -2642,6 +2676,14 @@ class ConnectMeLinuxNode:
                     peer["isMutuallyPaired"] = False
                     if self.active_remote_peer and (self.active_remote_peer.get("deviceId") == peer.get("deviceId") or self.active_remote_peer.get("ipAddress") == remote_ip):
                         self.return_control_to_local(0, 0.5)
+                    self.remote_audio_sinks.pop(sender_id, None)
+                    if self.active_audio_route and self.active_audio_route.get("targetDeviceId") == sender_id:
+                        self.set_and_broadcast_audio_route(None)
+                    if self.on_audio_sinks_updated:
+                        try:
+                            self.on_audio_sinks_updated()
+                        except Exception:
+                            pass
                     if self.on_peer_updated:
                         try:
                             self.on_peer_updated(peer)
@@ -2673,6 +2715,30 @@ class ConnectMeLinuxNode:
                 self.log(f"[Ortak Cep] 📥 '{fname}' ({bin_len} B) -> {dest} kaydedildi!")
                 if shutil.which("notify-send"):
                     subprocess.run(["notify-send", "Connect Me: Ortak Cep", f"Yeni dosya alındı:\n{fname}"], check=False)
+
+            elif msg_type == "AUDIO_SINKS_ANNOUNCE":
+                sender_id = header.get("senderId", remote_ip)
+                sender_name = header.get("senderName", remote_ip)
+                sinks = header.get("audioSinks", [])
+                if isinstance(sinks, list):
+                    self.remote_audio_sinks[sender_id] = sinks
+                    self.log(f"[Ses Matrisi] 🔍 '{sender_name}' ({len(sinks)} ses çıkış aygıtı) duyuruldu.")
+                    if self.on_audio_sinks_updated:
+                        try:
+                            self.on_audio_sinks_updated()
+                        except Exception:
+                            pass
+
+            elif msg_type == "AUDIO_ROUTE_CHANGE":
+                sender_name = header.get("senderName", remote_ip)
+                route = header.get("audioRoute")
+                self.active_audio_route = route
+                self._apply_audio_route(route)
+                if self.on_audio_route_changed:
+                    try:
+                        self.on_audio_route_changed(route)
+                    except Exception:
+                        pass
 
     def _udp_input_loop(self) -> None:
         try:
@@ -2983,6 +3049,164 @@ class ConnectMeLinuxNode:
 
         return success
 
+    def broadcast_tcp_control(self, hdr: Dict[str, Any]) -> None:
+        """Broadcasts a framed TCP control header to all mutually paired peers."""
+        targets = [p for p in self.peers.values() if p.get("isMutuallyPaired")]
+        jb = json.dumps(hdr).encode("utf-8")
+        prefix = struct.pack("<iq", len(jb), 0)
+        for peer in targets:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(2.5)
+                s.connect((peer["ipAddress"], peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+                s.sendall(prefix + jb)
+                s.close()
+            except Exception:
+                pass
+
+    def send_tcp_control_to_peer(self, peer: Dict[str, Any], hdr: Dict[str, Any]) -> None:
+        """Sends a framed TCP control header to a specific peer."""
+        try:
+            jb = json.dumps(hdr).encode("utf-8")
+            prefix = struct.pack("<iq", len(jb), 0)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2.5)
+            s.connect((peer["ipAddress"], peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+            s.sendall(prefix + jb)
+            s.close()
+        except Exception:
+            pass
+
+    def enumerate_local_audio_sinks(self) -> List[Dict[str, Any]]:
+        """Queries PipeWire / PulseAudio to discover all physical and virtual audio output devices."""
+        sinks: List[Dict[str, Any]] = [
+            {
+                "deviceId": self.device_id,
+                "deviceName": self.device_name,
+                "platform": "linux",
+                "sinkId": "default",
+                "sinkName": "Varsayılan Linux Ses Çıkışı",
+                "isDefault": True
+            }
+        ]
+
+        if shutil.which("pactl"):
+            try:
+                res = subprocess.run(["pactl", "-f", "json", "list", "sinks"], capture_output=True, text=True, timeout=2.0)
+                if res.returncode == 0 and res.stdout.strip():
+                    data = json.loads(res.stdout)
+                    if isinstance(data, list):
+                        for s in data:
+                            name = s.get("name", "")
+                            desc = s.get("description", "")
+                            if not desc and "properties" in s:
+                                desc = s["properties"].get("device.description", s["properties"].get("node.description", name))
+                            if not desc:
+                                desc = name
+                            if name:
+                                sinks.append({
+                                    "deviceId": self.device_id,
+                                    "deviceName": self.device_name,
+                                    "platform": "linux",
+                                    "sinkId": name,
+                                    "sinkName": desc.strip(),
+                                    "isDefault": False
+                                })
+            except Exception:
+                pass
+
+            if len(sinks) == 1:
+                try:
+                    res = subprocess.run(["pactl", "list", "sinks", "short"], capture_output=True, text=True, timeout=2.0)
+                    if res.returncode == 0 and res.stdout.strip():
+                        for line in res.stdout.strip().splitlines():
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                s_id = parts[1]
+                                sinks.append({
+                                    "deviceId": self.device_id,
+                                    "deviceName": self.device_name,
+                                    "platform": "linux",
+                                    "sinkId": s_id,
+                                    "sinkName": s_id,
+                                    "isDefault": False
+                                })
+                except Exception:
+                    pass
+
+        return sinks
+
+    def broadcast_local_audio_sinks(self) -> None:
+        """Broadcasts this machine's audio output devices to all paired peers."""
+        if not self.local_audio_sinks:
+            self.local_audio_sinks = self.enumerate_local_audio_sinks()
+        hdr = {
+            "type": "AUDIO_SINKS_ANNOUNCE",
+            "senderId": self.device_id,
+            "senderName": self.device_name,
+            "senderPlatform": "linux",
+            "audioSinks": self.local_audio_sinks
+        }
+        self.broadcast_tcp_control(hdr)
+
+    def set_and_broadcast_audio_route(self, route: Optional[Dict[str, Any]]) -> None:
+        """Sets the ecosystem-wide active audio route and broadcasts to all peers."""
+        self.active_audio_route = route
+        hdr = {
+            "type": "AUDIO_ROUTE_CHANGE",
+            "senderId": self.device_id,
+            "senderName": self.device_name,
+            "senderPlatform": "linux",
+            "audioRoute": route
+        }
+        self.broadcast_tcp_control(hdr)
+        self._apply_audio_route(route)
+
+    def _apply_audio_route(self, route: Optional[Dict[str, Any]]) -> None:
+        """Applies an audio route locally: either becomes a transmitter, receiver, or idles."""
+        if not route or route.get("targetDeviceId") in ("NONE", None, ""):
+            if self.audio_streaming:
+                self.stop_audio_streaming()
+            self.audio_rx_target_sink = None
+            self.log("[Ses Matrisi] ⚪ Ses yönlendirme devre dışı. Her cihaz kendi yerel sesini çalıyor.")
+        elif route.get("targetDeviceId") == self.device_id:
+            # This Linux PC is the selected audio sink
+            if self.audio_streaming:
+                self.stop_audio_streaming()
+            sink_id = route.get("targetSinkId")
+            self.audio_rx_target_sink = None if sink_id == "default" else sink_id
+            self.log(f"[Ses Matrisi] 🟢 Aktif Ses Alıcısı: {route.get('targetSinkName', 'Varsayılan')} (Diğer cihazların sesleri buraya yönlendiriliyor).")
+        else:
+            # Remote machine is the selected audio sink
+            target_ip = route.get("targetIp")
+            if target_ip:
+                self.audio_rx_target_sink = None
+                self.start_audio_streaming(target_ip)
+                self.log(f"[Ses Matrisi] 📡 Ses Akışı Başlatıldı -> {route.get('targetDeviceName')} ({target_ip}:{AUDIO_STREAM_UDP_PORT})")
+
+    def on_peer_mutually_paired(self, peer: Dict[str, Any]) -> None:
+        """Invoked when a peer completes mutual pairing; exchanges audio sinks and current route."""
+        if not self.local_audio_sinks:
+            self.local_audio_sinks = self.enumerate_local_audio_sinks()
+        if self.local_audio_sinks:
+            hdr_sinks = {
+                "type": "AUDIO_SINKS_ANNOUNCE",
+                "senderId": self.device_id,
+                "senderName": self.device_name,
+                "senderPlatform": "linux",
+                "audioSinks": self.local_audio_sinks
+            }
+            self.send_tcp_control_to_peer(peer, hdr_sinks)
+        if self.active_audio_route:
+            hdr_route = {
+                "type": "AUDIO_ROUTE_CHANGE",
+                "senderId": self.device_id,
+                "senderName": self.device_name,
+                "senderPlatform": "linux",
+                "audioRoute": self.active_audio_route
+            }
+            self.send_tcp_control_to_peer(peer, hdr_route)
+
     def start_audio_streaming(self, target_ip: str) -> bool:
         """Starts real-time PipeWire / PulseAudio recording and streams 48kHz S16LE stereo PCM to target Windows PC."""
         if self.audio_streaming:
@@ -2990,9 +3214,9 @@ class ConnectMeLinuxNode:
 
         rec_cmd = None
         if shutil.which("pw-record"):
-            rec_cmd = ["pw-record", "--format=s16", "--rate=48000", "--channels=2", "-"]
+            rec_cmd = ["pw-record", "--target=@DEFAULT_AUDIO_SINK@.monitor", "--format=s16", "--rate=48000", "--channels=2", "-"]
         elif shutil.which("parec"):
-            rec_cmd = ["parec", "--format=s16le", "--rate=48000", "--channels=2"]
+            rec_cmd = ["parec", "-d", "@DEFAULT_MONITOR@", "--format=s16le", "--rate=48000", "--channels=2"]
 
         if not rec_cmd:
             self.log("[Ses Hatası] ❌ pw-record veya parec bulunamadı (PipeWire/PulseAudio gereklidir).")
@@ -3005,6 +3229,22 @@ class ConnectMeLinuxNode:
                 stderr=subprocess.DEVNULL,
                 bufsize=3840,
             )
+            time.sleep(0.05)
+            if self.audio_proc.poll() is not None:
+                if shutil.which("pw-record"):
+                    self.audio_proc = subprocess.Popen(
+                        ["pw-record", "--format=s16", "--rate=48000", "--channels=2", "-"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        bufsize=3840,
+                    )
+                elif shutil.which("parec"):
+                    self.audio_proc = subprocess.Popen(
+                        ["parec", "--format=s16le", "--rate=48000", "--channels=2"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        bufsize=3840,
+                    )
             self.audio_streaming = True
             self.audio_target_ip = target_ip
             self.audio_seq = 0
@@ -3119,12 +3359,21 @@ class ConnectMeLinuxNode:
                             pass
 
                     play_cmd = None
+                    target_arg = []
+                    if self.audio_rx_target_sink:
+                        if shutil.which("pw-play"):
+                            target_arg = [f"--target={self.audio_rx_target_sink}"]
+                        elif shutil.which("paplay"):
+                            target_arg = ["-d", self.audio_rx_target_sink]
+                        elif shutil.which("aplay"):
+                            target_arg = ["-D", self.audio_rx_target_sink]
+
                     if shutil.which("pw-play"):
-                        play_cmd = ["pw-play", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]
+                        play_cmd = ["pw-play"] + target_arg + ["--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]
                     elif shutil.which("paplay"):
-                        play_cmd = ["paplay", "--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}"]
+                        play_cmd = ["paplay"] + target_arg + ["--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}"]
                     elif shutil.which("aplay"):
-                        play_cmd = ["aplay", "-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q"]
+                        play_cmd = ["aplay"] + target_arg + ["-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q"]
 
                     if play_cmd:
                         try:

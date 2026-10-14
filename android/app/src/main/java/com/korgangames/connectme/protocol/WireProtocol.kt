@@ -62,6 +62,24 @@ data class ColonyMember(
     val udpPort: Int
 )
 
+data class AudioSinkDescriptor(
+    val deviceId: String,
+    val deviceName: String,
+    val platform: String,
+    val sinkId: String,
+    val sinkName: String,
+    val isDefault: Boolean
+)
+
+data class AudioRouteTarget(
+    val targetDeviceId: String,
+    val targetDeviceName: String,
+    val targetSinkId: String,
+    val targetSinkName: String,
+    val targetIp: String,
+    val targetUdpPort: Int = ProtocolConstants.AUDIO_STREAM_UDP_PORT
+)
+
 object WirePacketCodec {
 
     fun isValidHeader(buf: ByteArray, length: Int): Boolean {

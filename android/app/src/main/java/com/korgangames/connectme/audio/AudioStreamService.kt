@@ -1,5 +1,6 @@
 package com.korgangames.connectme.audio
 
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,8 +10,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.korgangames.connectme.MainActivity
 
@@ -22,6 +27,7 @@ import com.korgangames.connectme.MainActivity
 class AudioStreamService : Service() {
 
     companion object {
+        private const val TAG = "AudioStreamService"
         const val ACTION_START_AUDIO = "com.korgangames.connectme.START_AUDIO"
         const val ACTION_STOP_AUDIO = "com.korgangames.connectme.STOP_AUDIO"
         private const val CHANNEL_ID = "connect_me_audio_channel"
@@ -34,23 +40,48 @@ class AudioStreamService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        val action = intent?.action ?: return START_NOT_STICKY
+
+        when (action) {
             ACTION_STOP_AUDIO -> {
-                AudioStreamEngine.instance.stop()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                } else {
-                    @Suppress("DEPRECATION")
-                    stopForeground(true)
-                }
-                stopSelf()
+                stopAudioStreaming()
                 return START_NOT_STICKY
             }
             ACTION_START_AUDIO -> {
                 val hostIp = intent.getStringExtra("hostIp")
+                val resultCode = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED)
+                val resultData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra("resultData", Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra("resultData")
+                }
+
+                // 1. In Android 14+ (API 34+), startForeground with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                // MUST be called before calling MediaProjectionManager.getMediaProjection().
+                startForegroundAudio()
+
                 if (hostIp != null) {
-                    startForegroundAudio()
-                    AudioStreamEngine.instance.start(hostIp, activeProjection)
+                    var projection = activeProjection
+                    if (resultCode == Activity.RESULT_OK && resultData != null) {
+                        try {
+                            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                            projection = mpm.getMediaProjection(resultCode, resultData)
+                            activeProjection = projection
+
+                            projection?.registerCallback(object : MediaProjection.Callback() {
+                                override fun onStop() {
+                                    Log.i(TAG, "MediaProjection stopped by system")
+                                    stopAudioStreaming()
+                                }
+                            }, Handler(Looper.getMainLooper()))
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "Failed to initialize MediaProjection: ${t.message}", t)
+                            projection = null
+                        }
+                    }
+
+                    AudioStreamEngine.instance.start(hostIp, projection)
                 }
             }
         }
@@ -58,53 +89,76 @@ class AudioStreamService : Service() {
     }
 
     private fun startForegroundAudio() {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val chan = NotificationChannel(
-                CHANNEL_ID,
-                "Connect Me Ses Aktarımı",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            nm.createNotificationChannel(chan)
-        }
-
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Connect Me — Ses Aktarımı Aktif 🎧")
-            .setContentText("Telefon sesleri ultra-düşük gecikmeyle bilgisayar kulaklığından çalınıyor.")
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .build()
-
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, notification)
-                }
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val chan = NotificationChannel(
+                    CHANNEL_ID,
+                    "Connect Me Ses Aktarımı",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+                nm.createNotificationChannel(chan)
+            }
+
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Connect Me — Ses Aktarımı Aktif 🎧")
+                .setContentText("Telefon sesleri ultra-düşük gecikmeyle hedef cihaza aktarılıyor.")
+                .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+                .setContentIntent(pendingIntent)
+                .setOngoing(true)
+                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                )
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-        } catch (e: Exception) {
-            android.util.Log.e("AudioStreamService", "startForeground failed: ${e.message}", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "startForegroundAudio error: ${t.message}", t)
         }
     }
 
-    override fun onDestroy() {
-        AudioStreamEngine.instance.stop()
+    private fun stopAudioStreaming() {
+        try {
+            AudioStreamEngine.instance.stop()
+        } catch (_: Throwable) {}
+
+        try {
+            activeProjection?.stop()
+        } catch (_: Throwable) {}
         activeProjection = null
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Throwable) {}
+
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        stopAudioStreaming()
         super.onDestroy()
     }
 }

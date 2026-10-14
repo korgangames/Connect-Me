@@ -47,6 +47,13 @@ import java.util.HashSet
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import com.korgangames.connectme.audio.AndroidAudioPlaybackEngine
+import com.korgangames.connectme.audio.AudioStreamEngine
+import com.korgangames.connectme.audio.AudioStreamService
+import com.korgangames.connectme.protocol.AudioRouteTarget
+import com.korgangames.connectme.protocol.AudioSinkDescriptor
 import com.korgangames.connectme.protocol.ColonyMember
 
 data class DiscoveredPcPeer(
@@ -61,6 +68,7 @@ data class DiscoveredPcPeer(
     var colonyId: String? = null,
     var colonyName: String? = null,
     var colonyMembers: MutableList<ColonyMember> = mutableListOf(),
+    var remoteAudioSinks: MutableList<AudioSinkDescriptor> = mutableListOf(),
     var lastSeenMs: Long = System.currentTimeMillis()
 ) {
     val isMutuallyPaired: Boolean
@@ -90,7 +98,13 @@ class ConnectMeService : Service() {
         val shelfItems = CopyOnWriteArrayList<AndroidShelfItem>()
         val telemetryLogs = CopyOnWriteArrayList<String>()
 
+        val remoteAudioSinks = java.util.concurrent.ConcurrentHashMap<String, List<AudioSinkDescriptor>>()
+        @Volatile
+        var activeAudioRoute: AudioRouteTarget? = null
+
         var onStateUpdated: (() -> Unit)? = null
+        var onAudioRouteChanged: ((AudioRouteTarget?) -> Unit)? = null
+        var onAudioSinksUpdated: (() -> Unit)? = null
 
         @Volatile
         var activePcAddress: InetAddress? = null
@@ -451,6 +465,7 @@ class ConnectMeService : Service() {
 
                     if (peer.isMutuallyPaired) {
                         introduceNewMemberToColony(peer)
+                        announceLocalAudioSinksToPeer(peer)
                         log("[Çift Taraflı Eşleşme] ✅ '${peer.deviceName}' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!")
                     } else {
                         log("[PIN Doğrulama] ✅ '${peer.deviceName}' kodu doğrulandı! Şimdi karşı cihazda da sizin kodunuzu ($localPairingPin) girin.")
@@ -472,6 +487,11 @@ class ConnectMeService : Service() {
         if (activePcAddress?.hostAddress == peer.ipAddress) {
             activePcAddress = null
         }
+        remoteAudioSinks.remove(peer.deviceId)
+        if (activeAudioRoute?.targetDeviceId == peer.deviceId) {
+            setAndBroadcastAudioRoute(null)
+        }
+        onAudioSinksUpdated?.invoke()
         CursorAccessibilityService.instance?.deactivateCursor()
 
         scope.launch {
@@ -541,6 +561,7 @@ class ConnectMeService : Service() {
             }
 
             introduceNewMemberToColony(peer)
+            announceLocalAudioSinksToPeer(peer)
             log("[Çift Taraflı Eşleşme] ✅ '${peer.deviceName}' bağlantı isteği onaylandı ve karşılıklı eşleşme sağlandı!")
             onStateUpdated?.invoke()
         }
@@ -1096,6 +1117,7 @@ class ConnectMeService : Service() {
                         val trustTag = if (reqTrust) " (⭐ Cihaz hatırlandı)" else ""
                         if (peer.isMutuallyPaired) {
                             introduceNewMemberToColony(peer)
+                            announceLocalAudioSinksToPeer(peer)
                             log("[Çift Taraflı Eşleşme] ✅ '$senderName' ile karşılıklı 6 haneli PIN doğrulaması tamamlandı!$trustTag")
                         } else {
                             log("[PIN İsteği] 🔔 '$senderName' sizin kodunuzu ($localPairingPin) doğruladı!$trustTag Bağlantıyı tamamlamak için siz de onun 6 haneli kodunu girin veya 'Kabul Et'e basın.")
@@ -1188,6 +1210,7 @@ class ConnectMeService : Service() {
 
                     log("[Çift Taraflı Eşleşme] ✅ '$senderName' ($remoteIp) doğrudan kabul ile eşleşti!")
                     introduceNewMemberToColony(peer)
+                    announceLocalAudioSinksToPeer(peer)
                     onStateUpdated?.invoke()
                 }
 
@@ -1317,6 +1340,7 @@ class ConnectMeService : Service() {
                         }
                         TcpFrameCodec.writeFrame(output, ack)
                         log("[Otomatik Bağlantı] ⭐ Güvenilir cihaz '$senderName' ($remoteIp) PIN'siz otomatik bağlandı!")
+                        announceLocalAudioSinksToPeer(peer)
                         val initReturnEdge = header.optInt("returnEdge", ProtocolConstants.EDGE_NONE.toInt()).toByte()
                         if (initReturnEdge != ProtocolConstants.EDGE_NONE) {
                             CursorAccessibilityService.instance?.activeEntranceEdge = initReturnEdge
@@ -1339,9 +1363,15 @@ class ConnectMeService : Service() {
                         suppressedAutoConnectDeviceIds.add(peer.deviceId)
                         peer.myEnteredPinVerifiedByRemote = false
                         peer.remoteEnteredMyPinVerified = false
+                        remoteAudioSinks.remove(peer.deviceId)
                     } else if (senderId.isNotEmpty()) {
                         suppressedAutoConnectDeviceIds.add(senderId)
+                        remoteAudioSinks.remove(senderId)
                     }
+                    if (activeAudioRoute?.targetDeviceId == (peer?.deviceId ?: senderId)) {
+                        setAndBroadcastAudioRoute(null)
+                    }
+                    onAudioSinksUpdated?.invoke()
                     if (activePcAddress?.hostAddress == remoteIp) {
                         activePcAddress = null
                     }
@@ -1418,6 +1448,52 @@ class ConnectMeService : Service() {
                         )
                     )
                     log("[Drop Shelf] $senderName -> '$safeName' Android ortak cebine indi!")
+                }
+
+                "AUDIO_SINKS_ANNOUNCE" -> {
+                    val sId = header.optString("senderId", remoteIp)
+                    val sName = header.optString("senderName", remoteIp)
+                    val arr = header.optJSONArray("audioSinks")
+                    if (arr != null) {
+                        val list = mutableListOf<AudioSinkDescriptor>()
+                        for (i in 0 until arr.length()) {
+                            val o = arr.getJSONObject(i)
+                            list.add(AudioSinkDescriptor(
+                                deviceId = o.optString("deviceId", sId),
+                                deviceName = o.optString("deviceName", sName),
+                                platform = o.optString("platform", "windows"),
+                                sinkId = o.optString("sinkId", "default"),
+                                sinkName = o.optString("sinkName", "Ses Çıkışı"),
+                                isDefault = o.optBoolean("isDefault", false)
+                            ))
+                        }
+                        remoteAudioSinks[sId] = list
+                        val p = discoveredPeers.find { it.deviceId == sId || it.ipAddress == remoteIp }
+                        if (p != null) {
+                            p.remoteAudioSinks.clear()
+                            p.remoteAudioSinks.addAll(list)
+                        }
+                        log("[Ses Matrisi] 🔍 '$sName' (${list.size} ses çıkışı) duyurdu.")
+                        onAudioSinksUpdated?.invoke()
+                        onStateUpdated?.invoke()
+                    }
+                }
+
+                "AUDIO_ROUTE_CHANGE" -> {
+                    val rObj = header.optJSONObject("audioRoute")
+                    activeAudioRoute = if (rObj != null && rObj.optString("targetDeviceId") !in listOf("", "NONE")) {
+                        AudioRouteTarget(
+                            targetDeviceId = rObj.optString("targetDeviceId"),
+                            targetDeviceName = rObj.optString("targetDeviceName"),
+                            targetSinkId = rObj.optString("targetSinkId"),
+                            targetSinkName = rObj.optString("targetSinkName"),
+                            targetIp = rObj.optString("targetIp"),
+                            targetUdpPort = rObj.optInt("targetUdpPort", ProtocolConstants.AUDIO_STREAM_UDP_PORT)
+                        )
+                    } else null
+                    applyAudioRouteLocally(activeAudioRoute)
+                    onAudioRouteChanged?.invoke(activeAudioRoute)
+                    onStateUpdated?.invoke()
                 }
 
                 else -> {
@@ -1500,5 +1576,179 @@ class ConnectMeService : Service() {
         } catch (_: Exception) {
         }
         return "0.0.0.0"
+    }
+
+    fun getLocalAudioSinks(): List<AudioSinkDescriptor> {
+        val list = mutableListOf<AudioSinkDescriptor>()
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            if (audioManager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                for (d in devices) {
+                    val typeName = when (d.type) {
+                        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Dahili Hoparlör"
+                        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Kablolu Kulaklık (Mikrofonlu)"
+                        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Kablolu Kulaklık"
+                        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "Bluetooth Ses / Kulaklık"
+                        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth Kulaklık (Mono)"
+                        AudioDeviceInfo.TYPE_USB_DEVICE -> "USB Ses Aygıtı"
+                        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB Kulaklık"
+                        else -> "Ses Çıkışı"
+                    }
+                    val prodName = d.productName?.toString()?.trim() ?: ""
+                    val sinkName = if (prodName.isNotEmpty() && prodName != typeName) "$typeName ($prodName)" else typeName
+                    val isDef = d.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                    list.add(AudioSinkDescriptor(
+                        deviceId = localDeviceId,
+                        deviceName = localDeviceName,
+                        platform = "android",
+                        sinkId = "android:${d.id}",
+                        sinkName = sinkName,
+                        isDefault = isDef
+                    ))
+                }
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("ConnectMeService", "Failed to enumerate audio sinks: ${t.message}", t)
+        }
+
+        if (list.isEmpty()) {
+            list.add(AudioSinkDescriptor(
+                deviceId = localDeviceId,
+                deviceName = localDeviceName,
+                platform = "android",
+                sinkId = "android:speaker",
+                sinkName = "Telefon Hoparlörü",
+                isDefault = true
+            ))
+        }
+        return list
+    }
+
+    fun announceLocalAudioSinksToPeer(peer: DiscoveredPcPeer) {
+        scope.launch {
+            try {
+                val sinks = getLocalAudioSinks()
+                val sinksArr = org.json.JSONArray().apply {
+                    sinks.forEach { s ->
+                        put(JSONObject().apply {
+                            put("deviceId", s.deviceId)
+                            put("deviceName", s.deviceName)
+                            put("platform", s.platform)
+                            put("sinkId", s.sinkId)
+                            put("sinkName", s.sinkName)
+                            put("isDefault", s.isDefault)
+                        })
+                    }
+                }
+                Socket().use { sock ->
+                    sock.connect(InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 3000)
+                    val header = JSONObject().apply {
+                        put("type", "AUDIO_SINKS_ANNOUNCE")
+                        put("senderId", localDeviceId)
+                        put("senderName", localDeviceName)
+                        put("senderPlatform", "android")
+                        put("audioSinks", sinksArr)
+                    }
+                    TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
+                }
+                log("[Ses Matrisi] 📢 Yerel ses çıkışları '${peer.deviceName}' cihazına duyuruldu.")
+            } catch (t: Throwable) {
+                // Silently ignore or retry
+            }
+        }
+    }
+
+    fun announceLocalAudioSinksToAll() {
+        for (peer in discoveredPeers.filter { it.isMutuallyPaired }) {
+            announceLocalAudioSinksToPeer(peer)
+        }
+    }
+
+    fun setAndBroadcastAudioRoute(target: AudioRouteTarget?) {
+        activeAudioRoute = target
+        applyAudioRouteLocally(target)
+        onAudioRouteChanged?.invoke(target)
+        onStateUpdated?.invoke()
+
+        scope.launch {
+            val paired = discoveredPeers.filter { it.isMutuallyPaired }
+            for (p in paired) {
+                try {
+                    Socket().use { sock ->
+                        sock.connect(InetSocketAddress(p.ipAddress, p.tcpControlPort), 3000)
+                        val header = JSONObject().apply {
+                            put("type", "AUDIO_ROUTE_CHANGE")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                            if (target != null) {
+                                put("audioRoute", JSONObject().apply {
+                                    put("targetDeviceId", target.targetDeviceId)
+                                    put("targetDeviceName", target.targetDeviceName)
+                                    put("targetSinkId", target.targetSinkId)
+                                    put("targetSinkName", target.targetSinkName)
+                                    put("targetIp", target.targetIp)
+                                    put("targetUdpPort", target.targetUdpPort)
+                                })
+                            } else {
+                                put("audioRoute", JSONObject().apply {
+                                    put("targetDeviceId", "NONE")
+                                })
+                            }
+                        }
+                        TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    fun applyAudioRouteLocally(target: AudioRouteTarget?) {
+        try {
+            if (target == null || target.targetDeviceId in listOf("", "NONE")) {
+                // 1. Yerel Mod: Akışları durdur, alıcıyı durdur
+                AndroidAudioPlaybackEngine.instance.stop()
+                if (AudioStreamEngine.instance.isStreaming) {
+                    val intent = Intent(this, AudioStreamService::class.java).apply {
+                        action = AudioStreamService.ACTION_STOP_AUDIO
+                    }
+                    startService(intent)
+                    AudioStreamEngine.instance.stop()
+                }
+                log("[Ses Matrisi] ⚪ Ses yerel moda döndü (Her cihaz kendi sesini çalıyor).")
+            } else if (target.targetDeviceId == localDeviceId) {
+                // 2. Bu telefon hedef seçildi: Diğer cihazlar buraya ses gönderiyor!
+                if (AudioStreamEngine.instance.isStreaming) {
+                    val intent = Intent(this, AudioStreamService::class.java).apply {
+                        action = AudioStreamService.ACTION_STOP_AUDIO
+                    }
+                    startService(intent)
+                    AudioStreamEngine.instance.stop()
+                }
+                AndroidAudioPlaybackEngine.instance.start()
+                log("[Ses Matrisi] 🟢 Aktif Alıcı: Diğer cihazların sesleri bu telefondan (${target.targetSinkName}) çalınıyor.")
+            } else {
+                // 3. Karşı cihaz hedef seçildi: Telefon seslerini karşıya akıt!
+                AndroidAudioPlaybackEngine.instance.stop()
+                if (target.targetIp.isNotEmpty()) {
+                    val intent = Intent(this, AudioStreamService::class.java).apply {
+                        action = AudioStreamService.ACTION_START_AUDIO
+                        putExtra("hostIp", target.targetIp)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            startForegroundService(intent)
+                        } catch (t: Throwable) {
+                            startService(intent)
+                        }
+                    } else {
+                        startService(intent)
+                    }
+                    log("[Ses Matrisi] 📡 Ses Yayını -> '${target.targetDeviceName}' (${target.targetSinkName}) hedefine akıyor.")
+                }
+            }
+        } catch (t: Throwable) {
+            log("[Ses Hata] applyAudioRouteLocally: ${t.message}")
+        }
     }
 }

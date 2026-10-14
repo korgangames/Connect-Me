@@ -49,8 +49,6 @@ class AudioStreamEngine private constructor() {
 
     var onStatusChanged: ((Boolean, String) -> Unit)? = null
 
-    private var currentProjectionCallback: MediaProjection.Callback? = null
-
     @SuppressLint("MissingPermission")
     fun start(hostIp: String, mediaProjection: MediaProjection? = null): Boolean {
         if (isRunning.get()) {
@@ -78,16 +76,6 @@ class AudioStreamEngine private constructor() {
             // In Android 10+ (API 29+), try AudioPlaybackCaptureConfiguration
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaProjection != null) {
                 try {
-                    // Android 14+ (API 34+) REQUIRES a callback registered before using MediaProjection
-                    val callback = object : MediaProjection.Callback() {
-                        override fun onStop() {
-                            Log.i(TAG, "MediaProjection stopped by system")
-                            stop()
-                        }
-                    }
-                    currentProjectionCallback = callback
-                    mediaProjection.registerCallback(callback, android.os.Handler(android.os.Looper.getMainLooper()))
-
                     val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
                         .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                         .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -109,31 +97,46 @@ class AudioStreamEngine private constructor() {
 
             // Fallback to high-quality audio source if mediaProjection wasn't used or failed
             if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
-                record?.release()
-                record = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE,
-                    channelConfig,
-                    audioEncoding,
-                    bufferSize
-                )
-                Log.i(TAG, "Initialized microphone audio source fallback")
+                try {
+                    record?.release()
+                } catch (_: Throwable) {}
+                try {
+                    record = AudioRecord(
+                        MediaRecorder.AudioSource.MIC,
+                        SAMPLE_RATE,
+                        channelConfig,
+                        audioEncoding,
+                        bufferSize
+                    )
+                    Log.i(TAG, "Initialized microphone audio source fallback")
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Microphone fallback failed: ${t.message}", t)
+                    record = null
+                }
             }
 
             audioRecord = record
 
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            if (audioRecord == null || audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                 Log.e(TAG, "AudioRecord initialization failed!")
                 stop()
                 onStatusChanged?.invoke(false, "Ses yakalama motoru başlatılamadı")
                 return false
             }
 
-            audioRecord?.startRecording()
+            try {
+                audioRecord?.startRecording()
+            } catch (t: Throwable) {
+                Log.e(TAG, "AudioRecord startRecording failed: ${t.message}", t)
+                stop()
+                onStatusChanged?.invoke(false, "Ses kaydı başlatılamadı: ${t.message}")
+                return false
+            }
+
             udpSocket = DatagramSocket()
 
             isStreaming = true
-            onStatusChanged?.invoke(true, "🟢 Sesi Bilgisayara Aktarılıyor ($SAMPLE_RATE Hz Stereo)")
+            onStatusChanged?.invoke(true, "🟢 Sesi Hedefe Aktarılıyor ($SAMPLE_RATE Hz Stereo)")
 
             streamThread = Thread({
                 streamAudioLoop(hostIp)
@@ -143,7 +146,7 @@ class AudioStreamEngine private constructor() {
             }
 
             return true
-        } catch (ex: Exception) {
+        } catch (ex: Throwable) {
             Log.e(TAG, "Failed to start audio streaming: ${ex.message}", ex)
             stop()
             onStatusChanged?.invoke(false, "Hata: ${ex.message}")
@@ -154,7 +157,7 @@ class AudioStreamEngine private constructor() {
     private fun streamAudioLoop(hostIp: String) {
         val targetAddr = try {
             InetAddress.getByName(hostIp)
-        } catch (ex: Exception) {
+        } catch (ex: Throwable) {
             Log.e(TAG, "Invalid host IP $hostIp: ${ex.message}")
             stop()
             return
@@ -162,7 +165,7 @@ class AudioStreamEngine private constructor() {
 
         // 20ms audio frame @ 48kHz Stereo 16-bit:
         // 48000 samples/sec * 0.02s = 960 samples/channel * 2 channels * 2 bytes = 3840 bytes
-        // Using 960 bytes (10ms) or 1920 bytes (10ms stereo) for lower latency
+        // Using 1920 bytes (10ms stereo) for lower latency
         val pcmChunkSize = 1920
         val pcmBuffer = ByteArray(pcmChunkSize)
         val packetBuffer = ByteArray(14 + pcmChunkSize)
@@ -170,17 +173,12 @@ class AudioStreamEngine private constructor() {
 
         while (isRunning.get()) {
             val record = audioRecord ?: break
-            val bytesRead = record.read(pcmBuffer, 0, pcmChunkSize)
+            val bytesRead = try {
+                record.read(pcmBuffer, 0, pcmChunkSize)
+            } catch (t: Throwable) {
+                -1
+            }
             if (bytesRead > 0) {
-                // Build Connect Me Wire Protocol AudioChunkPacket:
-                // Header (14 bytes):
-                // 0: 'C', 1: 'M', 2: 0x01, 3: 0x08 (AudioChunk)
-                // 4: Channels (2)
-                // 5..8: SampleRate LE (48000)
-                // 9: BitsPerSample (16)
-                // 10..11: Sequence LE
-                // 12..13: PayloadLen LE
-                // 14..: PCM Data
                 val bb = ByteBuffer.wrap(packetBuffer).order(ByteOrder.LITTLE_ENDIAN)
                 bb.put(ProtocolConstants.MAGIC_0)
                 bb.put(ProtocolConstants.MAGIC_1)
@@ -197,7 +195,7 @@ class AudioStreamEngine private constructor() {
                 try {
                     val datagram = DatagramPacket(packetBuffer, packetLength, targetAddr, AUDIO_UDP_PORT)
                     udpSocket?.send(datagram)
-                } catch (ex: Exception) {
+                } catch (ex: Throwable) {
                     if (!isRunning.get()) break
                 }
             } else {
@@ -216,22 +214,22 @@ class AudioStreamEngine private constructor() {
 
         try {
             audioRecord?.stop()
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
 
         try {
             audioRecord?.release()
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
         audioRecord = null
 
         try {
             udpSocket?.close()
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
         udpSocket = null
 
         try {
             streamThread?.interrupt()
             streamThread?.join(200)
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
         streamThread = null
 
         onStatusChanged?.invoke(false, "⚪ Ses aktarımı durduruldu")

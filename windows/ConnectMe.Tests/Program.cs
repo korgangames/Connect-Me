@@ -35,6 +35,8 @@ public static class Program
         await TestTrustedDeviceZeroPinAutoReconnectFlowAsync();
         await TestInboundPairingRequestAndEdgeConfigAsync();
         await TestColonyBeaconAndSinglePinColonyMeshAsync();
+        TestWasapiAudioLoopback();
+        await TestAudioMatrixAndRoutingAsync();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -792,4 +794,167 @@ public static class Program
 
         try { Directory.Delete(tempShelf, true); } catch { }
     }
+
+    [System.Runtime.InteropServices.ComImport]
+    [System.Runtime.InteropServices.Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+    private class MMDeviceEnumeratorComObject { }
+
+    [System.Runtime.InteropServices.Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
+    [System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMMDeviceEnumerator
+    {
+        [System.Runtime.InteropServices.PreserveSig]
+        int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr ppDevices);
+        [System.Runtime.InteropServices.PreserveSig]
+        int GetDefaultAudioEndpoint(int dataFlow, int role, out IntPtr ppDevice);
+    }
+
+    [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]
+    private delegate int ActivateDelegate(IntPtr thisPtr, ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IntPtr ppInterface);
+
+    private static void TestWasapiAudioLoopback()
+    {
+        try
+        {
+            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+            int hr = enumerator.GetDefaultAudioEndpoint(0 /* eRender */, 1 /* eMultimedia */, out IntPtr pDevice);
+            AssertTrue(hr == 0 && pDevice != IntPtr.Zero, "WASAPI: Varsayılan Ses Çıkış Cihazı (IMMDevice) başarıyla alındı");
+
+            if (pDevice != IntPtr.Zero)
+            {
+                IntPtr vtbl = System.Runtime.InteropServices.Marshal.ReadIntPtr(pDevice);
+                IntPtr activatePtr = System.Runtime.InteropServices.Marshal.ReadIntPtr(vtbl, 3 * IntPtr.Size);
+                var activate = System.Runtime.InteropServices.Marshal.GetDelegateForFunctionPointer<ActivateDelegate>(activatePtr);
+
+                Guid iidAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
+                int actHr = activate(pDevice, ref iidAudioClient, 1 /* CLSCTX_INPROC_SERVER */, IntPtr.Zero, out IntPtr pAudioClient);
+                AssertTrue(actHr == 0 && pAudioClient != IntPtr.Zero, "WASAPI: IAudioClient arabirimi başarıyla aktifleştirildi");
+
+                if (pAudioClient != IntPtr.Zero)
+                {
+                    IntPtr acVtbl = System.Runtime.InteropServices.Marshal.ReadIntPtr(pAudioClient);
+                    
+                    // vtable[8]: GetMixFormat(IntPtr thisPtr, out IntPtr ppFormat)
+                    IntPtr getMixFormatPtr = System.Runtime.InteropServices.Marshal.ReadIntPtr(acVtbl, 8 * IntPtr.Size);
+                    var getMixFormat = System.Runtime.InteropServices.Marshal.GetDelegateForFunctionPointer<GetMixFormatDelegate>(getMixFormatPtr);
+                    int gmfHr = getMixFormat(pAudioClient, out IntPtr pFormat);
+                    AssertTrue(gmfHr == 0 && pFormat != IntPtr.Zero, "WASAPI: GetMixFormat ses formatı başarıyla alındı");
+
+                    // vtable[3]: Initialize(IntPtr thisPtr, int shareMode, uint streamFlags, long hnsBuffer, long hnsPeriod, IntPtr pFormat, ref Guid sessionGuid)
+                    IntPtr initPtr = System.Runtime.InteropServices.Marshal.ReadIntPtr(acVtbl, 3 * IntPtr.Size);
+                    var init = System.Runtime.InteropServices.Marshal.GetDelegateForFunctionPointer<InitializeDelegate>(initPtr);
+                    Guid emptyGuid = Guid.Empty;
+                    const uint AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000;
+                    int initHr = init(pAudioClient, 0 /* SHARED */, AUDCLNT_STREAMFLAGS_LOOPBACK, 1000000 /* 100ms */, 0, pFormat, ref emptyGuid);
+                    AssertTrue(initHr == 0, $"WASAPI: Loopback yakalama modu başarıyla başlatıldı (hr=0x{initHr:X})");
+
+                    // vtable[14]: GetService(IntPtr thisPtr, ref Guid riid, out IntPtr ppv)
+                    IntPtr getServicePtr = System.Runtime.InteropServices.Marshal.ReadIntPtr(acVtbl, 14 * IntPtr.Size);
+                    var getService = System.Runtime.InteropServices.Marshal.GetDelegateForFunctionPointer<GetServiceDelegate>(getServicePtr);
+                    Guid iidCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
+                    int gsHr = getService(pAudioClient, ref iidCaptureClient, out IntPtr pCaptureClient);
+                    AssertTrue(gsHr == 0 && pCaptureClient != IntPtr.Zero, "WASAPI: IAudioCaptureClient başarıyla elde edildi");
+
+                    if (pCaptureClient != IntPtr.Zero)
+                    {
+                        System.Runtime.InteropServices.Marshal.Release(pCaptureClient);
+                    }
+                    if (pFormat != IntPtr.Zero)
+                    {
+                        System.Runtime.InteropServices.Marshal.FreeCoTaskMem(pFormat);
+                    }
+                    System.Runtime.InteropServices.Marshal.Release(pAudioClient);
+                }
+                System.Runtime.InteropServices.Marshal.Release(pDevice);
+            }
+        }
+        catch (Exception ex)
+        {
+            AssertTrue(false, $"WASAPI testi hata verdi: {ex.Message}");
+        }
+    }
+
+    [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]
+    private delegate int GetMixFormatDelegate(IntPtr thisPtr, out IntPtr ppFormat);
+
+    [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]
+    private delegate int InitializeDelegate(IntPtr thisPtr, int shareMode, uint streamFlags, long hnsBuffer, long hnsPeriod, IntPtr pFormat, ref Guid sessionGuid);
+
+    [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]
+    private delegate int GetServiceDelegate(IntPtr thisPtr, ref Guid riid, out IntPtr ppv);
+
+    private static async Task TestAudioMatrixAndRoutingAsync()
+    {
+        string tempShelf = Path.Combine(Path.GetTempPath(), "ConnectMe_AudioTest_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempShelf);
+
+        await using var nodeA = new ConnectMeNetworkNode("node-a-id", "Windows Masaüstü", "windows", tempShelf, fixedPin: "111222");
+        await using var nodeB = new ConnectMeNetworkNode("node-b-id", "Nobara Linux", "linux", tempShelf, fixedPin: "333444");
+
+        nodeA.Start(discoveryPort: 43250, inputUdpPort: 43251, controlTcpPort: 43252);
+        nodeB.Start(discoveryPort: 43260, inputUdpPort: 43261, controlTcpPort: 43262);
+
+        // Define local audio sinks on both nodes
+        var nodeASinks = new List<AudioSinkDescriptor>
+        {
+            new() { DeviceId = "node-a-id", DeviceName = "Windows Masaüstü", Platform = "windows", SinkId = "winmm:0", SinkName = "Hoparlörler (Realtek(R) Audio)", IsDefault = true },
+            new() { DeviceId = "node-a-id", DeviceName = "Windows Masaüstü", Platform = "windows", SinkId = "winmm:1", SinkName = "SteelSeries Arctis Nova 7 (Kulaklık)", IsDefault = false }
+        };
+        nodeA.SetLocalAudioSinks(nodeASinks);
+
+        var nodeBSinks = new List<AudioSinkDescriptor>
+        {
+            new() { DeviceId = "node-b-id", DeviceName = "Nobara Linux", Platform = "linux", SinkId = "pulse:alsa_output.pci-0000_00_1f.3.analog-stereo", SinkName = "Dahili Analog Ses (Hoparlör)", IsDefault = true },
+            new() { DeviceId = "node-b-id", DeviceName = "Nobara Linux", Platform = "linux", SinkId = "pulse:alsa_output.usb-DAC", SinkName = "USB Kulaklık Çıkışı", IsDefault = false }
+        };
+        nodeB.SetLocalAudioSinks(nodeBSinks);
+
+        var peerBOnA = nodeA.RegisterManualPeer("127.0.0.1", "Nobara Linux", "linux", udpPort: 43261, tcpPort: 43262, customDeviceId: "node-b-id");
+        var peerAOnB = nodeB.RegisterManualPeer("127.0.0.1", "Windows Masaüstü", "windows", udpPort: 43251, tcpPort: 43252, customDeviceId: "node-a-id");
+
+        // Mutual pairing
+        await nodeA.SubmitRemotePinForPairingAsync(peerBOnA, "333444", rememberDevice: false);
+        await nodeB.SubmitRemotePinForPairingAsync(peerAOnB, "111222", rememberDevice: false);
+        await Task.Delay(250);
+
+        AssertTrue(peerBOnA.IsMutuallyPaired && peerAOnB.IsMutuallyPaired,
+            "Ses Matrisi Hazırlık: Node A ve Node B karşılıklı eşleşti");
+
+        // Check if sinks were exchanged
+        bool bHasASinks = nodeB.RemoteAudioSinks.TryGetValue("node-a-id", out var aSinksOnB) && aSinksOnB.Count == 2;
+        bool aHasBSinks = nodeA.RemoteAudioSinks.TryGetValue("node-b-id", out var bSinksOnA) && bSinksOnA.Count == 2;
+
+        AssertTrue(bHasASinks && aHasBSinks,
+            "Ses Matrisi (AUDIO_SINKS_ANNOUNCE): Node A ve Node B birbirinin tüm ses çıkışlarını başarıyla aldı");
+
+        // Now Node A selects Node B's USB Kulaklık as the central audio sink
+        AudioRouteTarget? receivedRouteOnB = null;
+        nodeB.AudioRouteChanged += r => receivedRouteOnB = r;
+
+        var route = new AudioRouteTarget
+        {
+            TargetDeviceId = "node-b-id",
+            TargetDeviceName = "Nobara Linux",
+            TargetSinkId = "pulse:alsa_output.usb-DAC",
+            TargetSinkName = "USB Kulaklık Çıkışı",
+            TargetIp = "127.0.0.1",
+            TargetUdpPort = ProtocolConstants.AudioStreamUdpPort
+        };
+
+        await nodeA.SetAndBroadcastAudioRouteAsync(route);
+        await Task.Delay(200);
+
+        AssertTrue(receivedRouteOnB != null && receivedRouteOnB.TargetDeviceId == "node-b-id" && receivedRouteOnB.TargetSinkId == "pulse:alsa_output.usb-DAC",
+            "Ses Yönlendirme (AUDIO_ROUTE_CHANGE): Node B seçilen hedef ses çıkışını (USB Kulaklık Çıkışı) aldı");
+
+        // Node A resets route to NONE
+        await nodeA.SetAndBroadcastAudioRouteAsync(null);
+        await Task.Delay(150);
+
+        AssertTrue(receivedRouteOnB == null,
+            "Ses Sıfırlama: Yönlendirme devre dışı bırakıldığında tüm cihazlar yerel moda döndü");
+
+        try { Directory.Delete(tempShelf, true); } catch { }
+    }
 }
+

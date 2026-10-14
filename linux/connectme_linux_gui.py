@@ -451,6 +451,8 @@ class ConnectMeLinuxGui:
         self.node.on_cursor_update = self._on_cursor_update
         self.node.on_pin_request_received = self._on_pin_request_received
         self.node.on_peer_updated = lambda p: self.root.after(0, self._refresh_state)
+        self.node.on_audio_sinks_updated = lambda: self.root.after(0, self._refresh_audio_sinks_dropdown)
+        self.node.on_audio_route_changed = lambda r: self.root.after(0, lambda: self._on_audio_route_changed_gui(r))
         self.node.start()
 
         # Ekran üstü imleç göstergesi (Client modu)
@@ -749,79 +751,203 @@ class ConnectMeLinuxGui:
 
     def _build_tab_audio(self):
         tab = ttk.Frame(self.notebook, padding=16)
-        self.notebook.add(tab, text="🎧 Ses Yönlendirme")
+        self.notebook.add(tab, text="🎧 Ses Matrisi")
 
-        # 1. Gelen Ses Alıcısı (Android & Windows -> Linux Kulaklığı)
+        # 1. Ses Yönlendirme Kartı (Matrix Control)
+        matrix_card = ttk.Frame(tab, style="Card.TFrame", padding=14)
+        matrix_card.pack(fill=tk.X, pady=(0, 8))
+
+        ttk.Label(matrix_card, text="🎧 Çoklu Cihaz Ses Matrisi (Audio Routing Matrix)", font=("Segoe UI", 12, "bold"), foreground="#4ADE80").pack(anchor=tk.W)
+        ttk.Label(matrix_card, text="Ağdaki tüm bağlı cihazların (Windows, Linux, Android) ses çıkışları (hoparlör/kulaklık) aşağıda listelenir. Seçtiğiniz ses çıkışına tüm bağlı cihazların sesleri anında yönlendirilir.",
+                  foreground="#94A3B8", wraplength=720).pack(anchor=tk.W, pady=(4, 8))
+
+        # Dropdown selection row
+        sel_row = ttk.Frame(matrix_card, style="Card.TFrame")
+        sel_row.pack(fill=tk.X, pady=4)
+        ttk.Label(sel_row, text="Hedef Ses Çıkışı:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+
+        self.audio_target_var = tk.StringVar()
+        self.audio_target_combo = ttk.Combobox(sel_row, textvariable=self.audio_target_var, state="readonly", width=48, font=("Segoe UI", 10))
+        self.audio_target_combo.pack(side=tk.LEFT, padx=4)
+
+        # Buttons row
+        btn_row = ttk.Frame(matrix_card, style="Card.TFrame")
+        btn_row.pack(fill=tk.X, pady=(8, 4))
+
+        self.audio_apply_btn = ttk.Button(btn_row, text="🎯 Seçili Çıkışa Yönlendir", style="Success.TButton", command=self._apply_audio_route_click)
+        self.audio_apply_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.audio_reset_btn = ttk.Button(btn_row, text="🔄 Sıfırla (Yerel Mod)", style="Danger.TButton", command=self._reset_audio_route_click)
+        self.audio_reset_btn.pack(side=tk.LEFT, padx=6)
+
+        self.audio_refresh_sinks_btn = ttk.Button(btn_row, text="🔍 Çıkışları Yenile", command=self._refresh_audio_sinks_click)
+        self.audio_refresh_sinks_btn.pack(side=tk.LEFT, padx=6)
+
+        # Status badge / indicator
+        self.audio_matrix_status_lbl = ttk.Label(matrix_card, text="Durum: ⚪ Boşta (Her cihaz kendi yerel sesini çalıyor)", font=("Segoe UI", 10, "bold"), foreground="#A5B4FC")
+        self.audio_matrix_status_lbl.pack(anchor=tk.W, pady=(8, 2))
+
+        # 2. Canlı Ses Alıcısı & Telemetri Kartı
         rx_card = ttk.Frame(tab, style="Card.TFrame", padding=14)
-        rx_card.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(rx_card, text="🎧 Merkezi Ses Alıcısı (Kulaklık & Hoparlör Köprüsü)", font=("Segoe UI", 12, "bold"), foreground="#4ADE80").pack(anchor=tk.W)
-        ttk.Label(rx_card, text="Android telefonunuzdan veya diğer bilgisayarlardan gelen tüm sesler (YouTube, Spotify, oyunlar) UDP 42852 portundan alınır ve Linux kulaklığınıza/hoparlörünüze anında (<15ms) aktarılır.",
-                  foreground="#94A3B8", wraplength=700).pack(anchor=tk.W, pady=4)
-
-        self.audio_rx_status_lbl = ttk.Label(rx_card, text="Durum: 🎧 Dinliyor (UDP Port: 42852) — 0 bayt alındı", font=("Segoe UI", 10, "bold"), foreground="#38BDF8")
+        rx_card.pack(fill=tk.X, pady=6)
+        ttk.Label(rx_card, text="📡 Canlı Ses Telemetrisi & Alıcı Durumu", font=("Segoe UI", 11, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
+        self.audio_rx_status_lbl = ttk.Label(rx_card, text="Durum: 🎧 Dinliyor (UDP Port: 42852) — 0 bayt alındı", font=("Segoe UI", 10), foreground="#94A3B8")
         self.audio_rx_status_lbl.pack(anchor=tk.W, pady=2)
 
-        # 2. Giden Ses Vericisi (Linux -> Windows PC)
-        card = ttk.Frame(tab, style="Card.TFrame", padding=14)
-        card.pack(fill=tk.X, pady=6)
-        ttk.Label(card, text="📤 Merkez Bilgisayara (Kulaklığa) Ses Aktarımı", font=("Segoe UI", 12, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
-        ttk.Label(card, text="Bu Linux bilgisayarının tüm seslerini (müzik, video, oyun, sistem sesleri) ağ üzerinden merkez Windows bilgisayarına ve ona bağlı kulaklığa aktarır.",
-                  foreground="#94A3B8", wraplength=700).pack(anchor=tk.W, pady=4)
-
-        row = ttk.Frame(card, style="Card.TFrame")
-        row.pack(fill=tk.X, pady=8)
-        ttk.Label(row, text="Hedef Windows PC IP:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=4)
-
-        self.audio_ip_entry = tk.Entry(
-            row,
-            width=16,
-            font=("Consolas", 10),
-            bg="#1E293B",
-            fg="#38BDF8",
-            insertbackground="#38BDF8",
-            selectbackground="#0284C7",
-            selectforeground="#FFFFFF",
-            relief="solid",
-            bd=1,
-            highlightthickness=1,
-            highlightbackground="#38BDF8"
-        )
-        self.audio_ip_entry.pack(side=tk.LEFT, padx=6)
-
-        self.audio_stream_btn = ttk.Button(row, text="🎧 Ses Akışını Başlat", style="Success.TButton", command=self._toggle_audio_stream)
-        self.audio_stream_btn.pack(side=tk.LEFT, padx=8)
-
-        self.audio_status_lbl = ttk.Label(card, text="Durum: Boşta (Ses gönderilmiyor)", foreground="#A5B4FC")
-        self.audio_status_lbl.pack(anchor=tk.W, pady=4)
-
+        # 3. Bilgi Kartı
         info_card = ttk.Frame(tab, style="InnerCard.TFrame", padding=12)
         info_card.pack(fill=tk.X, pady=8)
-        ttk.Label(info_card, text="💡 Ses Motoru Bilgisi:", font=("Segoe UI", 10, "bold"), foreground="#F8FAFC").pack(anchor=tk.W)
-        pipewire_str = "Aktif (pw-record bulundu)" if shutil.which("pw-record") else ("Aktif (PulseAudio parec bulundu)" if shutil.which("parec") else "Bulunamadı")
-        ttk.Label(info_card, text=f"• Ses Yakalayıcı: {pipewire_str}\n• Format: 48,000 Hz, 16-bit Stereo PCM (S16LE)\n• Port: UDP 42852 (<15ms gecikme)\n• Tüm sesler Windows'taki kulaklık çıkışından net ve senkron olarak çalınır.", foreground="#94A3B8").pack(anchor=tk.W, pady=2)
+        ttk.Label(info_card, text="💡 Ses Matrisi Çalışma Mantığı:", font=("Segoe UI", 10, "bold"), foreground="#F8FAFC").pack(anchor=tk.W)
+        pipewire_str = "Aktif (pw-record / pw-play)" if shutil.which("pw-record") else ("Aktif (PulseAudio parec / paplay)" if shutil.which("parec") else "Bulunamadı")
+        ttk.Label(info_card, text=f"• Linux Ses Motoru: {pipewire_str}\n"
+                                  "• Format: 48,000 Hz, 16-bit Stereo PCM (S16LE) (<15ms gecikme)\n"
+                                  "• Hedef bir çıkış seçildiğinde: O makine alıcı olup seçilen hoparlör/kulaklığa çalar, diğer tüm bağlı cihazlar ise masaüstü seslerini UDP 42852 üzerinden oraya canlı yayınlar.\n"
+                                  "• Sıfırla / Yerel Mod seçildiğinde: Tüm akışlar durur ve her cihaz kendi sesini yerel çalar.",
+                  foreground="#94A3B8").pack(anchor=tk.W, pady=2)
 
-    def _toggle_audio_stream(self):
-        if self.node.audio_streaming:
-            self.node.stop_audio_streaming()
-            self.audio_stream_btn.configure(text="🎧 Ses Akışını Başlat", style="Success.TButton")
-            self.audio_status_lbl.configure(text="Durum: Boşta (Ses gönderilmiyor)", foreground="#A5B4FC")
-        else:
-            target_ip = self.audio_ip_entry.get().strip()
-            if not target_ip:
-                paired = [p for p in self.node.peers.values() if p.get("isMutuallyPaired")]
-                if paired:
-                    target_ip = paired[0].get("ipAddress", "")
-            if not target_ip:
-                messagebox.showwarning("Hedef IP Gerekli", "Lütfen sesin aktarılacağı Windows bilgisayarın IP adresini girin.")
-                return
-            self.audio_ip_entry.delete(0, tk.END)
-            self.audio_ip_entry.insert(0, target_ip)
-            ok = self.node.start_audio_streaming(target_ip)
-            if ok:
-                self.audio_stream_btn.configure(text="⏹️ Ses Akışını Durdur", style="Danger.TButton")
-                self.audio_status_lbl.configure(text=f"Durum: Aktif -> {target_ip}:42852 (Ses kulaklığa akıyor)", foreground="#4ADE80")
+        self._audio_sink_items: List[Dict[str, Any]] = []
+        self._refresh_audio_sinks_dropdown()
+
+    def _refresh_audio_sinks_dropdown(self):
+        if not hasattr(self, "audio_target_combo"):
+            return
+
+        items: List[Dict[str, Any]] = [
+            {
+                "displayText": "⚪ Yerel Mod / Devre Dışı (Herkes kendi sesini çalsın)",
+                "deviceId": "NONE",
+                "deviceName": "Yerel Mod",
+                "sinkId": "NONE",
+                "sinkName": "Devre Dışı",
+                "ipAddress": "",
+                "isDisable": True
+            }
+        ]
+
+        # 1. Local Linux Sinks
+        local_sinks = getattr(self.node, "local_audio_sinks", [])
+        if not local_sinks:
+            local_sinks = self.node.enumerate_local_audio_sinks()
+            self.node.local_audio_sinks = local_sinks
+
+        for s in local_sinks:
+            def_str = " (Varsayılan)" if s.get("isDefault") else ""
+            items.append({
+                "displayText": f"[Bu Bilgisayar] {s.get('sinkName', 'Ses Çıkışı')}{def_str}",
+                "deviceId": self.node.device_id,
+                "deviceName": self.node.device_name,
+                "sinkId": s.get("sinkId", "default"),
+                "sinkName": s.get("sinkName", "Varsayılan Ses Çıkışı"),
+                "ipAddress": "127.0.0.1",
+                "isDisable": False
+            })
+
+        # 2. Remote Paired Peers' Sinks
+        for peer in self.node.peers.values():
+            if not peer.get("isMutuallyPaired"):
+                continue
+            dev_id = peer.get("deviceId", "")
+            dev_name = peer.get("deviceName", dev_id)
+            dev_ip = peer.get("ipAddress", "")
+            remote_sinks = self.node.remote_audio_sinks.get(dev_id, [])
+
+            if remote_sinks:
+                for rs in remote_sinks:
+                    def_str = " (Varsayılan)" if rs.get("isDefault") else ""
+                    items.append({
+                        "displayText": f"[{dev_name}] {rs.get('sinkName', 'Ses Çıkışı')}{def_str}",
+                        "deviceId": dev_id,
+                        "deviceName": dev_name,
+                        "sinkId": rs.get("sinkId", "default"),
+                        "sinkName": rs.get("sinkName", "Ses Çıkışı"),
+                        "ipAddress": dev_ip,
+                        "isDisable": False
+                    })
             else:
-                messagebox.showerror("Hata", "Ses akışı başlatılamadı. PipeWire (pw-record) veya PulseAudio (parec) yüklü olduğundan emin olun.")
+                items.append({
+                    "displayText": f"[{dev_name}] Varsayılan Ses Çıkışı",
+                    "deviceId": dev_id,
+                    "deviceName": dev_name,
+                    "sinkId": "default",
+                    "sinkName": "Varsayılan Ses Çıkışı",
+                    "ipAddress": dev_ip,
+                    "isDisable": False
+                })
+
+        self._audio_sink_items = items
+        display_names = [it["displayText"] for it in items]
+        self.audio_target_combo["values"] = display_names
+
+        # Preserve or reflect current route selection
+        curr_route = self.node.active_audio_route
+        match_idx = 0
+        if curr_route and curr_route.get("targetDeviceId") not in (None, "", "NONE"):
+            tgt_dev = curr_route.get("targetDeviceId")
+            tgt_sink = curr_route.get("targetSinkId")
+            for idx, it in enumerate(items):
+                if it["deviceId"] == tgt_dev and (it["sinkId"] == tgt_sink or tgt_sink in ("default", None)):
+                    match_idx = idx
+                    break
+
+        self.audio_target_combo.current(match_idx)
+        self._on_audio_route_changed_gui(curr_route)
+
+    def _apply_audio_route_click(self):
+        idx = self.audio_target_combo.current()
+        if idx < 0 or idx >= len(self._audio_sink_items):
+            return
+
+        item = self._audio_sink_items[idx]
+        if item.get("isDisable"):
+            self.node.set_and_broadcast_audio_route(None)
+            self._log("[Ses Matrisi] ⚪ Ses yönlendirme devre dışı bırakıldı. Her cihaz kendi sesini çalıyor.")
+        else:
+            route = {
+                "targetDeviceId": item["deviceId"],
+                "targetDeviceName": item["deviceName"],
+                "targetSinkId": item["sinkId"],
+                "targetSinkName": item["sinkName"],
+                "targetIp": item["ipAddress"],
+                "targetUdpPort": 42852
+            }
+            self.node.set_and_broadcast_audio_route(route)
+            self._log(f"[Ses Matrisi] 🎧 Tüm sesler -> '{item['deviceName']}' ({item['sinkName']}) hedefine yönlendirildi.")
+
+        self._on_audio_route_changed_gui(self.node.active_audio_route)
+
+    def _reset_audio_route_click(self):
+        self.node.set_and_broadcast_audio_route(None)
+        self._log("[Ses Matrisi] 🔄 Ses matrisi sıfırlandı. Yerel çalma moduna dönüldü.")
+        self._refresh_audio_sinks_dropdown()
+
+    def _refresh_audio_sinks_click(self):
+        self.node.local_audio_sinks = self.node.enumerate_local_audio_sinks()
+        self.node.broadcast_local_audio_sinks()
+        self._refresh_audio_sinks_dropdown()
+        self._log(f"[Ses Matrisi] 🔍 Yerel ses çıkışları tarandı ({len(self.node.local_audio_sinks)} aygıt).")
+
+    def _on_audio_route_changed_gui(self, route: Optional[Dict[str, Any]]):
+        if not hasattr(self, "audio_matrix_status_lbl"):
+            return
+
+        if not route or route.get("targetDeviceId") in (None, "", "NONE"):
+            self.audio_matrix_status_lbl.configure(
+                text="Durum: ⚪ Boşta (Her cihaz kendi yerel sesini çalıyor)",
+                foreground="#A5B4FC"
+            )
+        elif route.get("targetDeviceId") == self.node.device_id:
+            sink_str = route.get("targetSinkName", "Varsayılan")
+            self.audio_matrix_status_lbl.configure(
+                text=f"Durum: 🟢 Aktif Alıcı — Diğer cihazların sesleri bu Linux'a ({sink_str}) akıyor.",
+                foreground="#4ADE80"
+            )
+        else:
+            dev_str = route.get("targetDeviceName", "Merkez Cihaz")
+            sink_str = route.get("targetSinkName", "Kulaklık/Hoparlör")
+            self.audio_matrix_status_lbl.configure(
+                text=f"Durum: 📡 Ses Yayını Aktif — Bu Linux'un sesi -> {dev_str} ({sink_str}) hedefine canlı akıyor.",
+                foreground="#FBBF24"
+            )
 
     def _build_tab_settings(self):
         tab = ttk.Frame(self.notebook, padding=16)
@@ -1023,6 +1149,9 @@ class ConnectMeLinuxGui:
                     text=f"Durum: 🎧 Dinliyor (UDP Port: 42852){bytes_info}",
                     foreground="#38BDF8"
                 )
+
+        if hasattr(self, "_refresh_audio_sinks_dropdown"):
+            self._refresh_audio_sinks_dropdown()
 
     def _reset_canvas_layout(self):
         self.peer_canvas_coords.clear()
@@ -1833,6 +1962,7 @@ class ConnectMeLinuxGui:
                             }
                             self.node._save_trusted_devices()
                             peer["is_trusted"] = True
+                        self.node.on_peer_mutually_paired(peer)
                         self._log(f"✅ '{peer.get('deviceName')}' ile karşılıklı eşleşme tamamlandı! [⭐ Cihaz Hatırlandı]")
                         self.root.after(0, lambda: messagebox.showinfo(
                             "Bağlantı Başarılı",

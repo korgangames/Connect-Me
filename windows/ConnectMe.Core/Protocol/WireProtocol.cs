@@ -429,6 +429,8 @@ public sealed class TcpControlHeader
     // - "CLIPBOARD_TEXT": Universal clipboard text sync
     // - "CLIPBOARD_IMAGE": Universal clipboard PNG sync
     // - "SHELF_FILE": Drop Shelf file transfer
+    // - "AUDIO_SINKS_ANNOUNCE": Device broadcasts its local available audio output endpoints
+    // - "AUDIO_ROUTE_CHANGE": User changes active audio sink; all nodes redirect audio
 
     [JsonPropertyName("senderId")]
     public string SenderId { get; set; } = string.Empty;
@@ -495,6 +497,62 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("normalizedPosition")]
     public double? NormalizedPosition { get; set; }
+
+    [JsonPropertyName("audioSinks")]
+    public List<AudioSinkDescriptor>? AudioSinks { get; set; }
+
+    [JsonPropertyName("audioRoute")]
+    public AudioRouteTarget? AudioRoute { get; set; }
+}
+
+/// <summary>
+/// Describes a single physical or virtual audio output device (speaker, headphones, HDMI, etc.)
+/// on a connected device in the mesh.
+/// </summary>
+public sealed class AudioSinkDescriptor
+{
+    [JsonPropertyName("deviceId")]
+    public string DeviceId { get; set; } = string.Empty;
+
+    [JsonPropertyName("deviceName")]
+    public string DeviceName { get; set; } = string.Empty;
+
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = "windows"; // "windows", "linux", "android"
+
+    [JsonPropertyName("sinkId")]
+    public string SinkId { get; set; } = string.Empty;
+
+    [JsonPropertyName("sinkName")]
+    public string SinkName { get; set; } = string.Empty;
+
+    [JsonPropertyName("isDefault")]
+    public bool IsDefault { get; set; }
+}
+
+/// <summary>
+/// Current active audio routing target for the connected mesh colony.
+/// All audio from connected devices is captured and directed to this target sink.
+/// </summary>
+public sealed class AudioRouteTarget
+{
+    [JsonPropertyName("targetDeviceId")]
+    public string TargetDeviceId { get; set; } = "NONE"; // "NONE" (disabled/local), or deviceId
+
+    [JsonPropertyName("targetDeviceName")]
+    public string TargetDeviceName { get; set; } = string.Empty;
+
+    [JsonPropertyName("targetSinkId")]
+    public string TargetSinkId { get; set; } = string.Empty;
+
+    [JsonPropertyName("targetSinkName")]
+    public string TargetSinkName { get; set; } = string.Empty;
+
+    [JsonPropertyName("targetIp")]
+    public string TargetIp { get; set; } = string.Empty;
+
+    [JsonPropertyName("targetUdpPort")]
+    public int TargetUdpPort { get; set; } = ProtocolConstants.AudioStreamUdpPort;
 }
 
 public static class TcpFrameCodec
