@@ -16,11 +16,11 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
 
 | İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.7.6.zip` | [⬇️ **ConnectMe-Windows-x64-v1.7.6.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.6/ConnectMe-Windows-x64-v1.7.6.zip) |
-| 📱 **Android** | `.apk` | `ConnectMe-v1.7.6.apk` | [⬇️ **ConnectMe-v1.7.6.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.6/ConnectMe-v1.7.6.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.7.6.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.7.6.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.6/ConnectMe-Linux-x64-v1.7.6.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.7.7.zip` | [⬇️ **ConnectMe-Windows-x64-v1.7.7.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.7/ConnectMe-Windows-x64-v1.7.7.zip) |
+| 📱 **Android** | `.apk` | `ConnectMe-v1.7.7.apk` | [⬇️ **ConnectMe-v1.7.7.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.7/ConnectMe-v1.7.7.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.7.7.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.7.7.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.7/ConnectMe-Linux-x64-v1.7.7.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.7.6 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.7.6)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.7.7 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.7.7)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
@@ -74,7 +74,7 @@ python3 linux/connectme_linux_gui.py
 * Detaylı Linux talimatları için [**`linux/README.md`**](linux/README.md) dosyasına göz atabilirsiniz.
 
 ### 3. Android Uygulamasını Kurma
-* Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-v1.7.6.apk`** dosyasını derler.
+* Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-v1.7.7.apk`** dosyasını derler.
 
 ### 4. Test Paketi Çalıştırma (51/51 Test — %100 Başarı)
 ```powershell

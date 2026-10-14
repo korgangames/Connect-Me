@@ -313,6 +313,27 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         return peer;
     }
 
+    /// <summary>
+    /// Recalculates effective peer desktop bounds when physical monitors are provided.
+    /// </summary>
+    public static void UpdatePeerDimensionsFromMonitors(PeerDeviceNode peer, List<PhysicalMonitorDescriptor>? monitors)
+    {
+        if (monitors is not { Count: > 0 })
+            return;
+
+        peer.RemoteMonitors = monitors;
+        int minX = monitors.Min(m => m.VirtualX);
+        int minY = monitors.Min(m => m.VirtualY);
+        int maxX = monitors.Max(m => m.VirtualX + m.Width);
+        int maxY = monitors.Max(m => m.VirtualY + m.Height);
+        int totalWidth = maxX - minX;
+        int totalHeight = maxY - minY;
+        if (totalWidth > 0)
+            peer.ScreenWidth = Math.Max(peer.ScreenWidth, totalWidth);
+        if (totalHeight > 0)
+            peer.ScreenHeight = Math.Max(peer.ScreenHeight, totalHeight);
+    }
+
     // =========================================================================
     // Mutual 6-Digit PIN Handshake Engine
     // =========================================================================
@@ -421,7 +442,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 if (respHeader.SenderScreenHeight.HasValue) peer.ScreenHeight = respHeader.SenderScreenHeight.Value;
                 if (respHeader.SenderMonitors != null && respHeader.SenderMonitors.Count > 0)
                 {
-                    peer.RemoteMonitors = respHeader.SenderMonitors;
+                    UpdatePeerDimensionsFromMonitors(peer, respHeader.SenderMonitors);
                 }
                 if (respHeader.IsMutualComplete == true)
                 {
@@ -844,7 +865,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 peer.TrustToken = trustToken;
                 if (resp.SenderMonitors is { Count: > 0 })
                 {
-                    peer.RemoteMonitors = resp.SenderMonitors;
+                    UpdatePeerDimensionsFromMonitors(peer, resp.SenderMonitors);
                 }
 
                 if (TrustStore.IsDeviceTrusted(peer.DeviceId, out var rec) && rec != null)
@@ -1296,21 +1317,25 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
                 var peer = _peers.AddOrUpdate(
                     beacon.DeviceId,
-                    _ => new PeerDeviceNode
+                    _ =>
                     {
-                        DeviceId = beacon.DeviceId,
-                        DeviceName = beacon.DeviceName,
-                        Platform = beacon.Platform,
-                        IpAddress = senderIp,
-                        UdpInputPort = beacon.UdpInputPort,
-                        TcpControlPort = beacon.TcpControlPort,
-                        ScreenWidth = beacon.ScreenWidth,
-                        ScreenHeight = beacon.ScreenHeight,
-                        RemoteMonitors = beacon.Monitors ?? new List<PhysicalMonitorDescriptor>(),
-                        ColonyId = beacon.ColonyId,
-                        ColonyName = beacon.ColonyName,
-                        ColonyMembers = beacon.ColonyMembers ?? new List<ColonyMemberDescriptor>(),
-                        LastSeen = DateTimeOffset.UtcNow
+                        var np = new PeerDeviceNode
+                        {
+                            DeviceId = beacon.DeviceId,
+                            DeviceName = beacon.DeviceName,
+                            Platform = beacon.Platform,
+                            IpAddress = senderIp,
+                            UdpInputPort = beacon.UdpInputPort,
+                            TcpControlPort = beacon.TcpControlPort,
+                            ScreenWidth = beacon.ScreenWidth,
+                            ScreenHeight = beacon.ScreenHeight,
+                            ColonyId = beacon.ColonyId,
+                            ColonyName = beacon.ColonyName,
+                            ColonyMembers = beacon.ColonyMembers ?? new List<ColonyMemberDescriptor>(),
+                            LastSeen = DateTimeOffset.UtcNow
+                        };
+                        UpdatePeerDimensionsFromMonitors(np, beacon.Monitors);
+                        return np;
                     },
                     (_, existing) =>
                     {
@@ -1323,7 +1348,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         existing.ScreenHeight = beacon.ScreenHeight;
                         if (beacon.Monitors is { Count: > 0 })
                         {
-                            existing.RemoteMonitors = beacon.Monitors;
+                            UpdatePeerDimensionsFromMonitors(existing, beacon.Monitors);
                         }
                         if (!string.IsNullOrEmpty(beacon.ColonyId))
                         {
@@ -1580,18 +1605,22 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
                     var peer = _peers.AddOrUpdate(
                         peerId,
-                        _ => new PeerDeviceNode
+                        _ =>
                         {
-                            DeviceId = peerId,
-                            DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
-                            Platform = header.SenderPlatform ?? "android",
-                            IpAddress = remoteIp,
-                            UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
-                            TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
-                            ScreenWidth = header.SenderScreenWidth ?? 1080,
-                            ScreenHeight = header.SenderScreenHeight ?? 2400,
-                            RemoteMonitors = header.SenderMonitors ?? new List<PhysicalMonitorDescriptor>(),
-                            LastSeen = DateTimeOffset.UtcNow
+                            var np = new PeerDeviceNode
+                            {
+                                DeviceId = peerId,
+                                DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
+                                Platform = header.SenderPlatform ?? "android",
+                                IpAddress = remoteIp,
+                                UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
+                                TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
+                                ScreenWidth = header.SenderScreenWidth ?? 1080,
+                                ScreenHeight = header.SenderScreenHeight ?? 2400,
+                                LastSeen = DateTimeOffset.UtcNow
+                            };
+                            UpdatePeerDimensionsFromMonitors(np, header.SenderMonitors);
+                            return np;
                         },
                         (_, existing) =>
                         {
@@ -1609,7 +1638,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                             if (header.SenderScreenHeight.HasValue)
                                 existing.ScreenHeight = header.SenderScreenHeight.Value;
                             if (header.SenderMonitors is { Count: > 0 })
-                                existing.RemoteMonitors = header.SenderMonitors;
+                                UpdatePeerDimensionsFromMonitors(existing, header.SenderMonitors);
                             existing.LastSeen = DateTimeOffset.UtcNow;
                             return existing;
                         });
@@ -1738,20 +1767,24 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
                     var peer = _peers.AddOrUpdate(
                         peerId,
-                        _ => new PeerDeviceNode
+                        _ =>
                         {
-                            DeviceId = peerId,
-                            DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
-                            Platform = header.SenderPlatform ?? "android",
-                            IpAddress = remoteIp,
-                            UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
-                            TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
-                            ScreenWidth = header.SenderScreenWidth ?? 1080,
-                            ScreenHeight = header.SenderScreenHeight ?? 2400,
-                            RemoteMonitors = header.SenderMonitors ?? new List<PhysicalMonitorDescriptor>(),
-                            LastSeen = DateTimeOffset.UtcNow,
-                            MyEnteredPinVerifiedByRemote = true,
-                            RemoteEnteredMyPinVerified = true
+                            var np = new PeerDeviceNode
+                            {
+                                DeviceId = peerId,
+                                DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
+                                Platform = header.SenderPlatform ?? "android",
+                                IpAddress = remoteIp,
+                                UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
+                                TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
+                                ScreenWidth = header.SenderScreenWidth ?? 1080,
+                                ScreenHeight = header.SenderScreenHeight ?? 2400,
+                                LastSeen = DateTimeOffset.UtcNow,
+                                MyEnteredPinVerifiedByRemote = true,
+                                RemoteEnteredMyPinVerified = true
+                            };
+                            UpdatePeerDimensionsFromMonitors(np, header.SenderMonitors);
+                            return np;
                         },
                         (_, existing) =>
                         {
@@ -1762,7 +1795,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                             if (header.SenderTcpPort.HasValue) existing.TcpControlPort = header.SenderTcpPort.Value;
                             if (header.SenderScreenWidth.HasValue) existing.ScreenWidth = header.SenderScreenWidth.Value;
                             if (header.SenderScreenHeight.HasValue) existing.ScreenHeight = header.SenderScreenHeight.Value;
-                            if (header.SenderMonitors is { Count: > 0 }) existing.RemoteMonitors = header.SenderMonitors;
+                            if (header.SenderMonitors is { Count: > 0 }) UpdatePeerDimensionsFromMonitors(existing, header.SenderMonitors);
                             existing.MyEnteredPinVerifiedByRemote = true;
                             existing.RemoteEnteredMyPinVerified = true;
                             existing.LastSeen = DateTimeOffset.UtcNow;
@@ -1970,29 +2003,33 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     {
                         var peer = _peers.AddOrUpdate(
                             peerId,
-                            _ => new PeerDeviceNode
+                            _ =>
                             {
-                                DeviceId = peerId,
-                                DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
-                                Platform = header.SenderPlatform ?? "android",
-                                IpAddress = remoteIp,
-                                UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
-                                TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
-                                ScreenWidth = header.SenderScreenWidth ?? 1080,
-                                ScreenHeight = header.SenderScreenHeight ?? 2400,
-                                RemoteMonitors = header.SenderMonitors ?? new List<PhysicalMonitorDescriptor>(),
-                                IsTrusted = true,
-                                TrustToken = header.TrustToken ?? string.Empty,
-                                MyEnteredPinVerifiedByRemote = true,
-                                RemoteEnteredMyPinVerified = true,
-                                AssignedEdgeOnLocal = rec.AssignedEdge,
-                                EdgeOffsetStart = rec.EdgeOffsetStart,
-                                EdgeOffsetEnd = rec.EdgeOffsetEnd,
-                                AttachedLocalMonitorId = rec.AttachedLocalMonitorId,
-                                CanvasX = rec.CanvasX,
-                                CanvasY = rec.CanvasY,
-                                HasCustomCanvasPosition = rec.HasCustomCanvasPosition,
-                                LastSeen = DateTimeOffset.UtcNow
+                                var np = new PeerDeviceNode
+                                {
+                                    DeviceId = peerId,
+                                    DeviceName = string.IsNullOrEmpty(header.SenderName) ? remoteIp : header.SenderName,
+                                    Platform = header.SenderPlatform ?? "android",
+                                    IpAddress = remoteIp,
+                                    UdpInputPort = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort,
+                                    TcpControlPort = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort,
+                                    ScreenWidth = header.SenderScreenWidth ?? 1080,
+                                    ScreenHeight = header.SenderScreenHeight ?? 2400,
+                                    IsTrusted = true,
+                                    TrustToken = header.TrustToken ?? string.Empty,
+                                    MyEnteredPinVerifiedByRemote = true,
+                                    RemoteEnteredMyPinVerified = true,
+                                    AssignedEdgeOnLocal = rec.AssignedEdge,
+                                    EdgeOffsetStart = rec.EdgeOffsetStart,
+                                    EdgeOffsetEnd = rec.EdgeOffsetEnd,
+                                    AttachedLocalMonitorId = rec.AttachedLocalMonitorId,
+                                    CanvasX = rec.CanvasX,
+                                    CanvasY = rec.CanvasY,
+                                    HasCustomCanvasPosition = rec.HasCustomCanvasPosition,
+                                    LastSeen = DateTimeOffset.UtcNow
+                                };
+                                UpdatePeerDimensionsFromMonitors(np, header.SenderMonitors);
+                                return np;
                             },
                             (_, existing) =>
                             {
@@ -2010,7 +2047,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                                 if (header.SenderScreenHeight.HasValue)
                                     existing.ScreenHeight = header.SenderScreenHeight.Value;
                                 if (header.SenderMonitors is { Count: > 0 })
-                                    existing.RemoteMonitors = header.SenderMonitors;
+                                    UpdatePeerDimensionsFromMonitors(existing, header.SenderMonitors);
                                 existing.IsTrusted = true;
                                 existing.TrustToken = header.TrustToken ?? string.Empty;
                                 existing.MyEnteredPinVerifiedByRemote = true;
@@ -2080,7 +2117,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         var peer = _peers.Values.FirstOrDefault(p => p.DeviceId == header.SenderId || p.IpAddress == remoteIp);
                         if (peer != null)
                         {
-                            peer.RemoteMonitors = header.SenderMonitors;
+                            UpdatePeerDimensionsFromMonitors(peer, header.SenderMonitors);
                             peer.LastSeen = DateTimeOffset.UtcNow;
                             Log($"[Çoklu Monitör Senk] '{peer.DeviceName}' {peer.RemoteMonitors.Count} fiziksel ekran düzenini bildirdi.");
                             PeerDiscoveredOrUpdated?.Invoke(peer);

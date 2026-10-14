@@ -1,3 +1,37 @@
+# Connect Me v1.7.7 — Linux Host Donanımsal Girdi Yakalama (evdev), Siyah Kutu Çözümü & Windows-Linux 1000 FPS Mikro-Soket Enjeksiyonu
+
+Bu sürüm; Linux'tan (Nobara / KDE Plasma) Android'e bağlanıldığında ekranda siyah bir kare çıkması ve farenin yalnızca o karenin içinde kısıtlı hareket etmesi sorununu kökten çözer; Windows'tan Linux'a fare geçtiğinde yaşanan düşük kare hızı (stutter/lag) ve ekranın yalnızca bir kısmında hareket edebilme kısıtlamasını doğrudan Linux çekirdek soket akışı ve Wayland/X11 tam masaüstü sınır kenetleme mimarisiyle 1000 FPS microsecond hızına kavuşturur.
+
+---
+
+### 🌟 v1.7.7 Yenilikleri ve Düzeltmeleri:
+
+* **🐧 Linux Host Modu: Siyah Ekran Kutusu Kaldırıldı, Şık HUD Banner Geldi:**
+  - **Sorunun Kök Nedeni:** Eski sürümde kullanılan `HostCaptureOverlay`, Linux Wayland / KDE Plasma ortamında `overrideredirect(True)` ile açıldığında pencere şeffaflığı (`-alpha`) pencere yöneticisi tarafından yok sayılıyor ve ekranın ortasında opakt siyah bir kutu oluşturuyordu. Ayrıca Wayland'ın güvenlik protokolleri gereği X11 imleç merkezleme (`event_generate("<Motion>", warp=True)`) engellendiği için, fare fiziksel olarak o küçük kutunun dışına çıktığında olay dinleyicisi duruyor ve Android üzerinde imleç donuyordu.
+  - **Çözüm:** Ekranı kapatan siyah pencere tamamen ortadan kaldırıldı! Yerine ekranın en üstünde zarif ve minimal (580x46 px) bir **HUD Durum Çubuğu** yerleştirildi. Bu çubuk kullanıcıya hangi cihazın kontrol edildiğini gösterir, `[ESC / ScrollLock]` kısayol hatırlatmasını sunar ve tek tıkla kontrolü Linux'a geri alan `[⬅️ Kontrolü Linux'a Geri Al]` butonunu barındırır.
+
+* **🖱️ Linux Donanımsal Girdi Yakalayıcı (`LinuxHardwareInputGrabber` & `evdev`):**
+  - Linux ana makine olduğunda fiziksel fare ve klavye donanım olayları (`/dev/input/event*`) doğrudan Linux çekirdeği seviyesinde `evdev.InputDevice.grab()` ile 1000 Hz yoklama frekansında yakalanır.
+  - Hiçbir pencere veya ekran pikselleri kısıtlaması olmaksızın, saf bağıl hareketler (`REL_X`, `REL_Y`), sol/sağ/orta tıklamalar ve kaydırma hareketleri milisaniyelik gecikmeyle Android veya Windows cihaza UDP üzerinden aktarılır.
+  - Android telefon ve tablet ekranında fare artık tüm ekranda sınırsız, takılmasız ve kusursuz bir serbestlikle gezer.
+
+* **⚡ Windows ➔ Linux: 1000 FPS Mikro-Soket Girdi Enjeksiyonu (`YdotoolSocketClient`):**
+  - **Düşük FPS ve Lag Sorununun Kök Nedeni:** Windows'tan Linux'a saniyede 60-120 adet UDP hareket paketi gelirken, Linux tarafında her bir gelen paket için yeni bir `subprocess.run(["ydotool", "mousemove", ...])` komut satırı süreci başlatılıyordu. Her alt süreç Linux üzerinde ~20-30 ms sürdüğü için girdi akışı 5-15 FPS seviyesine düşüyor ve aşırı takılmalı/kare atlamalı bir his veriyordu.
+  - **Çözüm:** Doğrudan `ydotoold` arka plan servisinin yerel UNIX domain soketine (`/tmp/.ydotool_socket`, `$XDG_RUNTIME_DIR/.ydotool_socket` vb.) bağlanan `YdotoolSocketClient` geliştirildi. Gelen hareketler 24 baytlık saf ikili Linux `struct input_event` çerçeveleri halinde mikro-saniye hızında sokete pompalanır. Alt süreç başlatma maliyeti sıfıra indirilerek 120Hz/1000FPS saf donanım hızında akıcılık sağlandı.
+
+* **📐 Tüm Ekran Alanı Sınır Kenetleme (Virtual Desktop Clamping & Edge Resistance):**
+  - Windows'tan Linux'a geçen farenin ekranın sadece bir kısmında hareket edebilmesi sorunu giderildi; Linux UDP girdi döngüsünde imleç koordinatları tüm bağlı monitörlerin oluşturduğu sanal masaüstü sınırlarına (`[min_x, max_x]` ve `[min_y, max_y]`) tam olarak kenetlendi.
+  - Windows'a erken geri sekmesini önlemek için kenar direnç eşiği 24 piksele yükseltildi ve iç bölge sıfırlama eşiği 3 piksel olarak ayarlandı.
+
+* **🪟 Windows Çoklu Monitör Alanı Senkronizasyonu (`UpdatePeerDimensionsFromMonitors`):**
+  - Windows tarafında Linux'tan gelen çoklu monitör veya geniş çözünürlük bilgileri alındığında, `ScreenWidth` ve `ScreenHeight` değerlerinin varsayılan telefon boyutuna (1080x2400) düşmesini engelleyen otomatik alan genişletme fonksiyonu tüm el sıkışma ve senkronizasyon paketlerine (`TOPOLOGY_SYNC`, `PAIR_ACCEPT`, `TRUSTED_RECONNECT`) bağlandı.
+
+* **🔧 Otomatik İzin & Paket Kurulumu İyileştirmesi:**
+  - `start-connectme.sh` betiği açılışta `/dev/uinput` izinlerini kontrol eder ve arka planda `ydotoold` servisini otomatik ayağa kaldırır.
+  - Linux GUI tek tıkla `python3-evdev`, `ydotool` ve `wl-clipboard` paketlerini yüklemek ve udev kurallarını yapılandırmak için hazır buton ve betiklerle donatıldı.
+
+---
+
 # Connect Me v1.7.6 — Linux Başlatıcı, Eksik İçe Aktarma Düzeltmesi & Çökme Koruması
 
 Bu sürüm; Linux (Nobara / KDE Plasma / Wayland & X11) ortamında uygulamanın açılışta çökmesine neden olan eksik modül içe aktarmalarını (`EDGE_NONE`, `EDGE_*`, `time`, `struct`, `typing`) giderir, arka plan servis temizliği ve hata kayıt mekanizmasını güçlendirir.

@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.7.6"
+VERSION = "1.7.7"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -434,13 +434,136 @@ class LinuxMultiMonitorTopology:
         return result
 
 
+class YdotoolSocketClient:
+    """Direct Unix domain socket client for ydotoold daemon to achieve zero-overhead 1000Hz injection."""
+
+    def __init__(self):
+        self.sock: Optional[socket.socket] = None
+        self._last_connect_try = 0.0
+
+    def _find_socket(self) -> Optional[str]:
+        candidates = []
+        if os.environ.get("YDOTOOL_SOCKET"):
+            candidates.append(os.environ["YDOTOOL_SOCKET"])
+        xdg_rt = os.environ.get("XDG_RUNTIME_DIR")
+        if xdg_rt:
+            candidates.append(os.path.join(xdg_rt, ".ydotool_socket"))
+            candidates.append(os.path.join(xdg_rt, ".ydotoold_socket"))
+            candidates.append(os.path.join(xdg_rt, "ydotoold.socket"))
+        uid = os.getuid() if hasattr(os, "getuid") else 1000
+        candidates.extend([
+            f"/run/user/{uid}/.ydotool_socket",
+            f"/run/user/{uid}/.ydotoold_socket",
+            "/tmp/.ydotool_socket",
+            "/tmp/.ydotoold_socket",
+        ])
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        return None
+
+    def connect(self) -> bool:
+        if self.sock is not None:
+            return True
+        now = time.time()
+        if now - self._last_connect_try < 1.0:
+            return False
+        self._last_connect_try = now
+
+        sock_path = self._find_socket()
+        if not sock_path:
+            return False
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            s.connect(sock_path)
+            s.setblocking(False)
+            self.sock = s
+            return True
+        except Exception:
+            self.sock = None
+            return False
+
+    def close(self):
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+
+    def move_relative(self, dx: int, dy: int) -> bool:
+        if not self.connect() or not self.sock:
+            return False
+        try:
+            pkt = (
+                struct.pack("@qqHHi", 0, 0, 0x02, 0x00, int(dx)) +
+                struct.pack("@qqHHi", 0, 0, 0x02, 0x01, int(dy)) +
+                struct.pack("@qqHHi", 0, 0, 0x00, 0x00, 0)
+            )
+            self.sock.sendall(pkt)
+            return True
+        except Exception:
+            self.close()
+            return False
+
+    def mouse_button(self, btn: int, is_pressed: bool) -> bool:
+        if not self.connect() or not self.sock:
+            return False
+        try:
+            code = 0x110 if btn == BUTTON_LEFT else (0x111 if btn == BUTTON_RIGHT else 0x112)
+            val = 1 if is_pressed else 0
+            pkt = (
+                struct.pack("@qqHHi", 0, 0, 0x01, code, val) +
+                struct.pack("@qqHHi", 0, 0, 0x00, 0x00, 0)
+            )
+            self.sock.sendall(pkt)
+            return True
+        except Exception:
+            self.close()
+            return False
+
+    def mouse_scroll(self, sx: int, sy: int) -> bool:
+        if not self.connect() or not self.sock:
+            return False
+        try:
+            val = 1 if sy > 0 else (-1 if sy < 0 else 0)
+            if val == 0:
+                return True
+            pkt = (
+                struct.pack("@qqHHi", 0, 0, 0x02, 0x08, val) +
+                struct.pack("@qqHHi", 0, 0, 0x00, 0x00, 0)
+            )
+            self.sock.sendall(pkt)
+            return True
+        except Exception:
+            self.close()
+            return False
+
+    def key_event(self, code: int, is_pressed: bool) -> bool:
+        if not self.connect() or not self.sock:
+            return False
+        try:
+            val = 1 if is_pressed else 0
+            pkt = (
+                struct.pack("@qqHHi", 0, 0, 0x01, code, val) +
+                struct.pack("@qqHHi", 0, 0, 0x00, 0x00, 0)
+            )
+            self.sock.sendall(pkt)
+            return True
+        except Exception:
+            self.close()
+            return False
+
+
 class LinuxInputInjector:
     """
-    High-performance Linux input injector with 4 fallback tiers:
+    High-performance Linux input injector with 5 fallback tiers:
     1. evdev.UInput (Linux kernel virtual device - <0.2ms latency, recognized by KDE Wayland as real mouse)
     2. Pure-Python /dev/uinput ioctl device (zero external dependencies)
-    3. ydotoold daemon + ydotool (Wayland compatible with auto-starting daemon)
-    4. xdotool (X11 / XWayland compatibility)
+    3. ydotoold daemon via direct UNIX socket (1000Hz zero-overhead Wayland injection)
+    4. ydotool CLI fallback
+    5. xdotool & pynput (X11 / XWayland fallback)
     """
 
     def __init__(self, on_log: Optional[Callable[[str], None]] = None) -> None:
@@ -449,6 +572,7 @@ class LinuxInputInjector:
         self.evdev_mouse = None
         self.evdev_kbd = None
         self.uinput_fd = None
+        self.ydotool_client = YdotoolSocketClient()
         self._ensure_uinput_accessible()
         self._init_injector()
 
@@ -526,8 +650,8 @@ class LinuxInputInjector:
         except Exception:
             pass
 
-        # Tier 3: Try ydotool with ydotoold auto-start
-        if shutil.which("ydotool"):
+        # Tier 3: Try ydotool with ydotoold daemon (socket connection for 1000Hz performance)
+        if shutil.which("ydotool") or shutil.which("ydotoold"):
             self._ensure_ydotoold()
             self.mode = "ydotool"
             return
@@ -597,10 +721,10 @@ class LinuxInputInjector:
             res2 = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, text=True)
             if res2.returncode != 0 and shutil.which("ydotoold"):
                 try:
-                    sock_path = "/tmp/.ydotoold_socket"
+                    sock_path = "/tmp/.ydotool_socket"
                     subprocess.Popen(["ydotoold", f"--socket-path={sock_path}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     os.environ["YDOTOOL_SOCKET"] = sock_path
-                    time.sleep(0.2)
+                    time.sleep(0.15)
                 except Exception:
                     pass
 
@@ -617,7 +741,9 @@ class LinuxInputInjector:
             self._write_raw_event(0x02, 0x01, dy)  # EV_REL, REL_Y
             self._write_raw_event(0x00, 0x00, 0)   # EV_SYN, SYN_REPORT
         elif self.mode == "ydotool":
-            subprocess.run(["ydotool", "mousemove", "-x", str(dx), "-y", str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if self.ydotool_client.move_relative(dx, dy):
+                return
+            subprocess.run(["ydotool", "mousemove", "--", str(dx), str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "xdotool":
             subprocess.run(["xdotool", "mousemove_relative", "--", str(dx), str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "pynput" and hasattr(self, "pynput_mouse") and self.pynput_mouse:
@@ -640,6 +766,8 @@ class LinuxInputInjector:
             self._write_raw_event(0x01, code, 1 if is_pressed else 0)
             self._write_raw_event(0x00, 0x00, 0)
         elif self.mode == "ydotool":
+            if self.ydotool_client.mouse_button(btn, is_pressed):
+                return
             ydo_code = "0xC0" if btn == BUTTON_LEFT else ("0xC1" if btn == BUTTON_RIGHT else "0xC2")
             subprocess.run(["ydotool", "click", f"{ydo_code}{'d' if is_pressed else 'u'}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "xdotool":
@@ -670,13 +798,15 @@ class LinuxInputInjector:
             if val != 0:
                 self._write_raw_event(0x02, 0x08, val)  # REL_WHEEL
                 self._write_raw_event(0x00, 0x00, 0)
+        elif self.mode == "ydotool":
+            if self.ydotool_client.mouse_scroll(sx, sy):
+                return
+            wheel_arg = f"-w{sy}"
+            subprocess.run(["ydotool", "mousemove", wheel_arg], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "xdotool":
             btn = "4" if sy > 0 else "5"
             clicks = max(1, abs(sy) // 40)
             subprocess.run(["xdotool", "click", "--repeat", str(clicks), btn], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif self.mode == "ydotool":
-            wheel_arg = f"-w{sy}"
-            subprocess.run(["ydotool", "mousemove", wheel_arg], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "pynput" and hasattr(self, "pynput_mouse") and self.pynput_mouse:
             try:
                 self.pynput_mouse.scroll(sx, sy)
@@ -726,6 +856,51 @@ class LinuxInputInjector:
         except Exception:
             return None
 
+    def _evdev_code_to_vk(self, code: int) -> Optional[int]:
+        try:
+            import evdev
+            from evdev import ecodes
+            for c in range(ord('A'), ord('Z') + 1):
+                if getattr(ecodes, f"KEY_{chr(c)}", None) == code:
+                    return c
+            for i in range(10):
+                if getattr(ecodes, f"KEY_{i}", None) == code:
+                    return 0x30 + i
+            for i in range(1, 13):
+                if getattr(ecodes, f"KEY_F{i}", None) == code:
+                    return 0x6F + i
+
+            reverse_map = {
+                ecodes.KEY_BACKSPACE: 0x08,
+                ecodes.KEY_TAB: 0x09,
+                ecodes.KEY_ENTER: 0x0D,
+                ecodes.KEY_ESC: 0x1B,
+                ecodes.KEY_SPACE: 0x20,
+                ecodes.KEY_PAGEUP: 0x21,
+                ecodes.KEY_PAGEDOWN: 0x22,
+                ecodes.KEY_END: 0x23,
+                ecodes.KEY_HOME: 0x24,
+                ecodes.KEY_LEFT: 0x25,
+                ecodes.KEY_UP: 0x26,
+                ecodes.KEY_RIGHT: 0x27,
+                ecodes.KEY_DOWN: 0x28,
+                ecodes.KEY_INSERT: 0x2D,
+                ecodes.KEY_DELETE: 0x2E,
+                ecodes.KEY_LEFTMETA: 0x5B,
+                ecodes.KEY_RIGHTMETA: 0x5C,
+                ecodes.KEY_LEFTSHIFT: 0xA0,
+                ecodes.KEY_RIGHTSHIFT: 0xA1,
+                ecodes.KEY_LEFTCTRL: 0xA2,
+                ecodes.KEY_RIGHTCTRL: 0xA3,
+                ecodes.KEY_LEFTALT: 0xA4,
+                ecodes.KEY_RIGHTALT: 0xA5,
+                ecodes.KEY_CAPSLOCK: 0x14,
+                ecodes.KEY_SCROLLLOCK: 0x91,
+            }
+            return reverse_map.get(code)
+        except Exception:
+            return None
+
     def key_event(self, vk: int, is_pressed: bool, ch: str) -> None:
         dev = self.evdev_kbd or self.evdev_mouse or self.evdev_device
         if self.mode == "evdev" and dev:
@@ -735,6 +910,11 @@ class LinuxInputInjector:
             if code is not None:
                 dev.write(ecodes.EV_KEY, code, 1 if is_pressed else 0)
                 dev.syn()
+                return
+
+        if self.mode == "ydotool":
+            code = self._vk_to_evdev_code(vk)
+            if code is not None and self.ydotool_client.key_event(code, is_pressed):
                 return
 
         if not is_pressed:
@@ -766,6 +946,173 @@ class LinuxInputInjector:
             subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+class LinuxHardwareInputGrabber:
+    """Hardware-level input capture for Linux as Host KVM using evdev device grabbing."""
+
+    def __init__(self, node: 'ConnectMeLinuxNode'):
+        self.node = node
+        self.is_active = False
+        self.active_peer: Optional[dict] = None
+        self.exit_edge: int = EDGE_NONE
+        self._grabbed_devices: List[Any] = []
+        self._threads: List[threading.Thread] = []
+        self._stop_event = threading.Event()
+        self.on_deactivated: Optional[Callable[[], None]] = None
+
+    def can_grab(self) -> bool:
+        """Returns True if evdev is importable and at least one physical pointer is accessible."""
+        try:
+            import evdev
+            for path in evdev.list_devices():
+                try:
+                    dev = evdev.InputDevice(path)
+                    caps = dev.capabilities()
+                    if evdev.ecodes.EV_REL in caps and evdev.ecodes.REL_X in caps[evdev.ecodes.EV_REL]:
+                        if "Connect-Me" not in dev.name and "ydotoold" not in dev.name:
+                            return True
+                except Exception:
+                    pass
+            return False
+        except Exception:
+            return False
+
+    def activate(self, peer: dict, exit_edge: int, norm_pos: float = 0.5) -> bool:
+        if self.is_active:
+            self.deactivate(notify_peer=False)
+
+        try:
+            import evdev
+            from evdev import ecodes, InputDevice, list_devices
+        except ImportError:
+            return False
+
+        pointer_devs = []
+        kbd_devs = []
+
+        for path in list_devices():
+            try:
+                dev = InputDevice(path)
+                caps = dev.capabilities()
+                if "Connect-Me" in dev.name or "ydotoold" in dev.name:
+                    continue
+                # Is pointer?
+                if ecodes.EV_REL in caps and ecodes.REL_X in caps[ecodes.EV_REL]:
+                    pointer_devs.append(dev)
+                # Is keyboard?
+                elif ecodes.EV_KEY in caps and ecodes.KEY_A in caps[ecodes.EV_KEY] and ecodes.KEY_ENTER in caps[ecodes.EV_KEY]:
+                    kbd_devs.append(dev)
+            except Exception:
+                pass
+
+        if not pointer_devs:
+            return False
+
+        self._grabbed_devices = []
+        for dev in pointer_devs + kbd_devs:
+            try:
+                dev.grab()
+                self._grabbed_devices.append(dev)
+            except Exception:
+                pass
+
+        if not self._grabbed_devices:
+            return False
+
+        self.active_peer = peer
+        self.exit_edge = exit_edge
+        self.is_active = True
+        self._stop_event.clear()
+        self._threads = []
+
+        for dev in self._grabbed_devices:
+            t = threading.Thread(target=self._read_loop, args=(dev,), daemon=True)
+            self._threads.append(t)
+            t.start()
+
+        self.node.log(f"[Donanım Yakalama] 🎯 Fiziksel fare ve klavye ({len(self._grabbed_devices)} donanım aygıtı) çekirdek seviyesinde başarıyla yakalandı.")
+        return True
+
+    def _read_loop(self, dev: Any) -> None:
+        try:
+            import evdev
+            from evdev import ecodes
+        except ImportError:
+            return
+
+        acc_dx = 0
+        acc_dy = 0
+
+        try:
+            for event in dev.read_loop():
+                if self._stop_event.is_set() or not self.is_active:
+                    break
+
+                if event.type == ecodes.EV_REL:
+                    if event.code == ecodes.REL_X:
+                        acc_dx += event.value
+                    elif event.code == ecodes.REL_Y:
+                        acc_dy += event.value
+                    elif event.code == ecodes.REL_WHEEL:
+                        if self.active_peer:
+                            self.node.send_mouse_scroll(self.active_peer, 0, event.value * 120)
+                    elif event.code == ecodes.REL_HWHEEL:
+                        if self.active_peer:
+                            self.node.send_mouse_scroll(self.active_peer, event.value * 120, 0)
+
+                elif event.type == ecodes.EV_KEY:
+                    # Emergency return hotkey: ESC or Scroll Lock
+                    if event.code in (ecodes.KEY_ESC, ecodes.KEY_SCROLLLOCK) and event.value == 1:
+                        self.node.log("[Donanım Yakalama] ⬅️ [ESC / ScrollLock] tuşuna basıldı, kontrol Linux'a geri alınıyor.")
+                        threading.Thread(target=self.deactivate, args=(True,), daemon=True).start()
+                        break
+
+                    # Mouse buttons
+                    if event.code == ecodes.BTN_LEFT:
+                        if self.active_peer:
+                            self.node.send_mouse_button(self.active_peer, BUTTON_LEFT, event.value == 1)
+                    elif event.code == ecodes.BTN_RIGHT:
+                        if self.active_peer:
+                            self.node.send_mouse_button(self.active_peer, BUTTON_RIGHT, event.value == 1)
+                    elif event.code == ecodes.BTN_MIDDLE:
+                        if self.active_peer:
+                            self.node.send_mouse_button(self.active_peer, BUTTON_MIDDLE, event.value == 1)
+                    else:
+                        # Keyboard key
+                        vk = self.node.injector._evdev_code_to_vk(event.code)
+                        if vk and self.active_peer:
+                            self.node.send_key_event(self.active_peer, vk, event.code, event.value in (1, 2), 0, 0)
+
+                elif event.type == ecodes.EV_SYN:
+                    if (acc_dx != 0 or acc_dy != 0) and self.active_peer:
+                        self.node.send_mouse_move(self.active_peer, acc_dx, acc_dy)
+                        acc_dx = 0
+                        acc_dy = 0
+        except Exception:
+            pass
+
+    def deactivate(self, notify_peer: bool = True):
+        if not self.is_active:
+            return
+        self.is_active = False
+        self._stop_event.set()
+
+        for dev in self._grabbed_devices:
+            try:
+                dev.ungrab()
+            except Exception:
+                pass
+        self._grabbed_devices.clear()
+
+        if notify_peer:
+            self.node.return_host_control_to_local(notify_peer=True)
+
+        if self.on_deactivated:
+            try:
+                self.on_deactivated()
+            except Exception:
+                pass
+
+
 class ConnectMeLinuxNode:
     """Nobara Linux / KDE Plasma Wayland Full-Featured Node for Connect Me."""
 
@@ -776,6 +1123,7 @@ class ConnectMeLinuxNode:
         self.local_pin = f"{random.randint(100000, 999999)}"
         self.topology = LinuxMultiMonitorTopology()
         self.injector = LinuxInputInjector()
+        self.hardware_grabber = LinuxHardwareInputGrabber(self)
 
         self.shelf_dir = Path.home() / "Downloads" / "ConnectMe-Shelf"
         self.shelf_dir.mkdir(parents=True, exist_ok=True)
@@ -935,6 +1283,9 @@ class ConnectMeLinuxNode:
         self.controlling_remote_peer = peer
         self.controlling_exit_edge = local_exit_edge
 
+        # Activate kernel-level hardware input grabber if supported
+        self.hardware_grabber.activate(peer, local_exit_edge, norm_pos)
+
         # Send Fast UDP EDGE_HANDOFF packet
         self.send_edge_handoff(peer, target_entrance_edge, norm_pos)
 
@@ -950,6 +1301,9 @@ class ConnectMeLinuxNode:
 
     def return_host_control_to_local(self, notify_peer: bool = True) -> None:
         """Returns mouse/keyboard control back from remote peer to Linux host."""
+        if hasattr(self, "hardware_grabber") and self.hardware_grabber.is_active:
+            self.hardware_grabber.deactivate(notify_peer=False)
+
         peer = self.controlling_remote_peer
         if not peer:
             return
@@ -1207,6 +1561,8 @@ class ConnectMeLinuxNode:
     def stop(self) -> None:
         """Stops the daemon background loops, releases sockets, and cleans up."""
         self.running = False
+        if hasattr(self, "hardware_grabber") and self.hardware_grabber.is_active:
+            self.hardware_grabber.deactivate(notify_peer=False)
         for s in (
             getattr(self, "discovery_sock", None),
             getattr(self, "tcp_srv", None),
@@ -1767,20 +2123,20 @@ class ConnectMeLinuxNode:
                     # Calculate entrance coordinate on Linux (edge is targetEntranceEdge)
                     if edge == EDGE_LEFT:
                         # Cursor entered through Linux's LEFT edge
-                        self.cursor_x = min_x + 12
+                        self.cursor_x = min_x + 18
                         self.cursor_y = min_y + int(vh * norm_pos)
                     elif edge == EDGE_RIGHT:
                         # Cursor entered through Linux's RIGHT edge
-                        self.cursor_x = min_x + vw - 12
+                        self.cursor_x = min_x + vw - 18
                         self.cursor_y = min_y + int(vh * norm_pos)
                     elif edge == EDGE_TOP:
                         # Cursor entered through Linux's TOP edge
                         self.cursor_x = min_x + int(vw * norm_pos)
-                        self.cursor_y = min_y + 12
+                        self.cursor_y = min_y + 18
                     elif edge == EDGE_BOTTOM:
                         # Cursor entered through Linux's BOTTOM edge
                         self.cursor_x = min_x + int(vw * norm_pos)
-                        self.cursor_y = min_y + vh - 12
+                        self.cursor_y = min_y + vh - 18
                     else:
                         self.cursor_x = min_x + int(vw * 0.5)
                         self.cursor_y = min_y + int(vh * 0.5)
@@ -1800,10 +2156,10 @@ class ConnectMeLinuxNode:
                 elif pkt_type == PACKET_MOUSE_MOVE and len(data) >= 10:
                     seq, dx, dy = struct.unpack("<Hhh", data[4:10])
                     self.injector.move_relative(dx, dy)
-                    self.cursor_x += dx
-                    self.cursor_y += dy
 
                     min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
+                    self.cursor_x = max(min_x, min(min_x + vw, self.cursor_x + dx))
+                    self.cursor_y = max(min_y, min(min_y + vh, self.cursor_y + dy))
 
                     if self.on_cursor_update:
                         try:
@@ -1816,49 +2172,50 @@ class ConnectMeLinuxNode:
                         return_triggered = False
                         ret_edge = EDGE_NONE
                         ret_norm = 0.5
+                        RESISTANCE_THRESHOLD = 24.0
 
                         # If cursor entered through LEFT edge, pushing against LEFT edge returns to remote's RIGHT edge
                         if self.entry_edge == EDGE_LEFT:
                             if self.cursor_x <= min_x and dx < 0:
                                 self.return_edge_push_accum += abs(dx)
-                                if self.return_edge_push_accum >= 8.0:
+                                if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
                                     return_triggered = True
                                     ret_edge = EDGE_RIGHT
                                     ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
-                            elif dx > 2:
+                            elif dx > 3:
                                 self.return_edge_push_accum = 0.0
 
                         # If cursor entered through RIGHT edge, pushing against RIGHT edge returns to remote's LEFT edge
                         elif self.entry_edge == EDGE_RIGHT:
                             if self.cursor_x >= min_x + vw and dx > 0:
                                 self.return_edge_push_accum += abs(dx)
-                                if self.return_edge_push_accum >= 8.0:
+                                if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
                                     return_triggered = True
                                     ret_edge = EDGE_LEFT
                                     ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
-                            elif dx < -2:
+                            elif dx < -3:
                                 self.return_edge_push_accum = 0.0
 
                         # If cursor entered through TOP edge, pushing against TOP edge returns to remote's BOTTOM edge
                         elif self.entry_edge == EDGE_TOP:
                             if self.cursor_y <= min_y and dy < 0:
                                 self.return_edge_push_accum += abs(dy)
-                                if self.return_edge_push_accum >= 8.0:
+                                if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
                                     return_triggered = True
                                     ret_edge = EDGE_BOTTOM
                                     ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
-                            elif dy > 2:
+                            elif dy > 3:
                                 self.return_edge_push_accum = 0.0
 
                         # If cursor entered through BOTTOM edge, pushing against BOTTOM edge returns to remote's TOP edge
                         elif self.entry_edge == EDGE_BOTTOM:
                             if self.cursor_y >= min_y + vh and dy > 0:
                                 self.return_edge_push_accum += abs(dy)
-                                if self.return_edge_push_accum >= 8.0:
+                                if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
                                     return_triggered = True
                                     ret_edge = EDGE_TOP
                                     ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
-                            elif dy < -2:
+                            elif dy < -3:
                                 self.return_edge_push_accum = 0.0
 
                         if return_triggered:
