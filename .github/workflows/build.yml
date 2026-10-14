@@ -168,7 +168,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.get_ver.outputs.version }}
-          name: "Connect Me v${{ steps.get_ver.outputs.version }} — Linux Host Modu, İnteraktif 2D Kanvas, Koloni Ağı & Kararlı Başlatıcı"
+          name: "Connect Me v${{ steps.get_ver.outputs.version }} — Görünmez Kenar Geçişi, Ses Alıcısı & Pürüzsüz 2D Kanvas"
           body_path: docs/RELEASE_NOTES.md
           draft: false
           prerelease: false
