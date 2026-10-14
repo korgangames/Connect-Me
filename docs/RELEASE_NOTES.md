@@ -1,3 +1,28 @@
+# Connect Me v1.7.9 — Linux ➔ Windows Çift Yönlü Fare Geçişi, Donanım Yetkilendirme & HUD İyileştirmeleri
+
+Bu sürüm; Windows ile Linux birlikte çalıştığında farenin yalnızca Windows'tan Linux'a geçebilip Linux'tan Windows'a geri dönememesi sorununu kökten çözer. Linux dönüş paketindeki ikili veri paketleme hatasını, Windows imleç yakalama hook sıfırlamasını, IPv6-mapped IPv4 adres çözümlemesini ve evdev donanımsal girdi izinlerini kusursuzlaştırır.
+
+---
+
+### 🌟 v1.7.9 Yenilikleri ve Düzeltmeleri:
+
+* **🖱️ Linux ➔ Windows ve Çift Yönlü Kesintisiz Fare Geçişi (Bi-directional Handoff):**
+  - **Sorunun Kök Nedeni 1 (Linux UDP Paketleme):** Linux tarafında fare Windows sınırına dayandığında ve geri dönüş paketi (`PACKET_EDGE_HANDOFF`) hazırlanırken `struct.pack("<BBBBBf", ...)` formatı 6 eleman beklerken fonksiyona 7 argüman veriliyordu. Bu durum Python tarafında sessizce `struct.error: pack expected 6 items for packing (got 7)` hatası fırlatarak UDP geri dönüş paketinin gönderilmesini engelliyordu. Format `<BBBBBBf` olarak 7 elemana genişletildi ve `senderUdpPort` bilgisi eklendi.
+  - **Sorunun Kök Nedeni 2 (Windows Mouse Hook Sıfırlama):** Windows tarafında Linux'tan veya Android'den gelen fare hareketi `SetCursorPos` ile enjekte edildiğinde, Windows işletim sistemi `LLMHF_INJECTED` bayrağını üretmez. Düşük seviyeli fare kancası (`MouseHookCallback`) bu hareketi yerel donanım faresi sanarak `_controllingRemotePeer` durumunu ilk karede sıfırlıyor ve farenin karşı cihazda kalmasını engelliyordu. 120 milisaniyelik koruma penceresi ve koordinat toleransı eklenerek imleç durumu korundu.
+  - **Sorunun Kök Nedeni 3 (Windows Çift Hareket & Titreme):** `OnRemoteMouseMoveReceived` içinde `SetCursorPos` çağrısına ek olarak çağrılan `mouse_event(0x0001u, ...)` kaldırıldı; böylece Windows'a aktarılan imleçteki titreme, atlama ve takılmalar tamamen giderildi.
+  - **IPv4 / IPv6 Çift Yığın Çözümlemesi:** Dual-stack soketlerde Linux'tan gelen IPv4 adreslerinin `::ffff:192.168.x.x` şeklinde gelmesi durumunda Windows'un eşleşen cihazı bulabilmesi için `sender.Address.MapToIPv4()` eşlemesi eklendi. `SendEdgeReturnToPeer` çağrısındaki `IsMutuallyPaired` katı kontrolü gevşetilerek durum gecikmelerinden doğan geri dönüş kilitlenmeleri çözüldü.
+
+* **🔑 Linux Donanım İzinleri (/dev/uinput ve /dev/input/event*):**
+  - Kullanıcıların `evdev` ile 1000Hz donanımsal girdi yakalamayı kullanabilmesi için `setup-uinput.sh` ve otomatik izin onarım mekanizması güncellendi.
+  - `/dev/input/event*` aygıtlarına okuma/yazma izinleri eklendi ve oturumu kapatıp açmaya gerek kalmadan geçerli oturumda anında aktifleşmesi sağlandı (`chmod 666 /dev/uinput /dev/input/event*`).
+  - İzin verilmemiş olsa dahi eski sistemdeki fareyi küçük HUD kutusuna hapseden `grab_set()` kaldırıldı; yerine tüm masaüstünü 60Hz hızında tarayan şeffaf imleç izleyici fallback motoru ve HUD üzerinde doğrudan tek tıkla izin verme butonu (`[🔑 Donanım İzni Ver]`) eklendi.
+
+* **📐 Çoklu Monitör Kenar Algılama & Bağıl Oranlama:**
+  - Linux çoklu monitör yapısında ekran kenar sınır eşiği 4px'den 6px'e genişletildi.
+  - Farklı çözünürlükteki monitörler arasında geçiş yapılırken giriş noktasının doğru hesaplanması için imleç dikey oranı tüm sanal masaüstü yerine farenin terk ettiği fiziksel monitörün yüksekliğine göre normalize edildi.
+
+---
+
 # Connect Me v1.7.8 — Linux Görünmez Kenar Geçişi (Mavi Çizgi Kaldırıldı & Hızlı Fare Garantisi), Android➔Linux Ses Alıcısı, Pürüzsüz 2D Kanvas & Ekran Testi Temizliği
 
 Bu sürüm; Linux çoklu monitör ortamında ikinci ekranın ortasında beliren istenmeyen mavi çizgiyi (`#0284C7`) tamamen ortadan kaldırır, fareyi hızlı savursanız dahi masaüstünün gerçek fiziksel sınırında anında karşı cihaza geçmesini sağlar. Ayrıca Android'den Linux'a ses aktarımını (UDP 42852 alıcısı + PipeWire/PulseAudio oynatıcı), Linux 2D ekran kartı sürükleme ve düzen sıfırlama mekanizmalarını kusursuz hale getirir; Windows arayüzündeki ek monitör test seçeneğini tamamen temizler.

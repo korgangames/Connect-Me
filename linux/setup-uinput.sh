@@ -4,18 +4,21 @@
 
 set -e
 
-echo "🔧 Connect Me /dev/uinput donanım sürücüsü izinleri ayarlanıyor..."
+echo "🔧 Connect Me donanım ve girdi sürücüsü izinleri ayarlanıyor..."
 
 # 1. udev kurallarını oluştur (uinput ve input alt sistemleri)
 RULE_FILE="/etc/udev/rules.d/99-connectme-uinput.rules"
-echo 'KERNEL=="uinput", GROUP="input", MODE="0660", TAG+="uaccess", OPTIONS+="static_node=uinput"' | sudo tee "$RULE_FILE" >/dev/null
-echo 'SUBSYSTEM=="input", GROUP="input", MODE="0660", TAG+="uaccess"' | sudo tee -a "$RULE_FILE" >/dev/null
+echo 'KERNEL=="uinput", GROUP="input", MODE="0666", OPTIONS+="static_node=uinput"' | sudo tee "$RULE_FILE" >/dev/null
+echo 'SUBSYSTEM=="input", KERNEL=="event*", GROUP="input", MODE="0666"' | sudo tee -a "$RULE_FILE" >/dev/null
 echo "✅ udev kuralı yazıldı: $RULE_FILE"
 
 # 2. Kullanıcıyı 'input' grubuna ekle
 sudo groupadd -f input
-sudo usermod -aG input "$USER"
-echo "✅ Kullanıcı '$USER' input grubuna eklendi."
+TARGET_USER="${SUDO_USER:-$USER}"
+if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then
+    sudo usermod -aG input "$TARGET_USER" 2>/dev/null || true
+    echo "✅ Kullanıcı '$TARGET_USER' input grubuna eklendi."
+fi
 
 # 3. Gerekli paketleri kontrol et ve kur
 if ! python3 -c "import evdev" 2>/dev/null; then
@@ -31,8 +34,8 @@ if ! python3 -c "import evdev" 2>/dev/null; then
     fi
 fi
 
-# 4. Geçerli oturum için /dev/uinput izinlerini hemen ver
-sudo chmod 666 /dev/uinput 2>/dev/null || true
+# 4. Geçerli oturum için izinleri hemen ver (oturum kapatıp açmaya gerek kalmaz)
+sudo chmod 666 /dev/uinput /dev/input/event* 2>/dev/null || true
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 

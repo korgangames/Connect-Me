@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.7.8"
+VERSION = "1.7.9"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -1453,13 +1453,24 @@ class ConnectMeLinuxNode:
         remote_ip = peer.get("ipAddress")
 
         if notify_peer and remote_ip:
+            return_edge = {
+                EDGE_LEFT: EDGE_RIGHT,
+                EDGE_RIGHT: EDGE_LEFT,
+                EDGE_TOP: EDGE_BOTTOM,
+                EDGE_BOTTOM: EDGE_TOP
+            }.get(self.controlling_exit_edge, EDGE_LEFT)
+
+            # 1. Fast UDP packet
             try:
-                return_edge = {
-                    EDGE_LEFT: EDGE_RIGHT,
-                    EDGE_RIGHT: EDGE_LEFT,
-                    EDGE_TOP: EDGE_BOTTOM,
-                    EDGE_BOTTOM: EDGE_TOP
-                }.get(self.controlling_exit_edge, EDGE_LEFT)
+                u_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                pkt = struct.pack("<BBBBBBf", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_EDGE_HANDOFF, return_edge, 0, 0.5)
+                u_sock.sendto(pkt, (remote_ip, peer.get("udpInputPort", FAST_INPUT_UDP_PORT)))
+                u_sock.close()
+            except Exception:
+                pass
+
+            # 2. Reliable TCP packet
+            try:
                 t_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 t_sock.settimeout(1.5)
                 t_sock.connect((remote_ip, peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
@@ -1467,6 +1478,7 @@ class ConnectMeLinuxNode:
                     "type": "EDGE_RETURN",
                     "senderId": self.device_id,
                     "senderName": self.device_name,
+                    "senderUdpPort": FAST_INPUT_UDP_PORT,
                     "returnEdge": return_edge,
                     "normalizedPosition": 0.5
                 })
@@ -2398,7 +2410,7 @@ class ConnectMeLinuxNode:
         # 1. Fast UDP packet
         try:
             u_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            pkt = struct.pack("<BBBBBf", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_EDGE_HANDOFF, return_edge, 0, norm_pos)
+            pkt = struct.pack("<BBBBBBf", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_EDGE_HANDOFF, return_edge, 0, norm_pos)
             u_sock.sendto(pkt, (peer_ip, peer.get("udpInputPort", FAST_INPUT_UDP_PORT)))
             u_sock.close()
         except Exception:
@@ -2413,6 +2425,7 @@ class ConnectMeLinuxNode:
                 "type": "EDGE_RETURN",
                 "senderId": self.device_id,
                 "senderName": self.device_name,
+                "senderUdpPort": FAST_INPUT_UDP_PORT,
                 "returnEdge": return_edge,
                 "normalizedPosition": norm_pos,
             }

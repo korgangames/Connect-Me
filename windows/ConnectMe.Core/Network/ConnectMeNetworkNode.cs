@@ -1101,7 +1101,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         ScreenEdge returnEntranceEdge,
         float normalizedPosition)
     {
-        if (!peer.IsMutuallyPaired)
+        if (peer == null)
             return;
 
         // 1. Fast-path UDP packet
@@ -1117,6 +1117,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             SenderId = LocalDeviceId,
             SenderName = LocalDeviceName,
             SenderPlatform = LocalPlatform,
+            SenderUdpPort = InputUdpPort,
             ReturnEdge = (int)returnEntranceEdge,
             NormalizedPosition = normalizedPosition
         };

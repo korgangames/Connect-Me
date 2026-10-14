@@ -70,6 +70,7 @@ public sealed class Win32InputEngine : IDisposable
     private DateTimeOffset _suppressAnchorJitterUntil = DateTimeOffset.MinValue;
     private int _suppressedEntryX;
     private int _suppressedEntryY;
+    private long _lastInjectedCursorTime;
 
     public PeerDeviceNode? ActiveRemotePeer { get; private set; }
     public bool IsHooksInstalled => _mouseHookId != IntPtr.Zero && _keyboardHookId != IntPtr.Zero;
@@ -222,7 +223,8 @@ public sealed class Win32InputEngine : IDisposable
         _lastCursorY = entryY;
         _suppressedEntryX = entryX;
         _suppressedEntryY = entryY;
-        _suppressAnchorJitterUntil = DateTimeOffset.UtcNow.AddMilliseconds(150);
+        _suppressAnchorJitterUntil = DateTimeOffset.UtcNow.AddMilliseconds(200);
+        _lastInjectedCursorTime = Environment.TickCount64;
 
         SetCursorPos(entryX, entryY);
 
@@ -241,7 +243,10 @@ public sealed class Win32InputEngine : IDisposable
             return;
 
         // Receiving secondary mode: remote peer is handing cursor control over to this machine
-        string senderIp = sender.Address.ToString();
+        string senderIp = sender.Address.IsIPv4MappedToIPv6
+            ? sender.Address.MapToIPv4().ToString()
+            : sender.Address.ToString();
+
         var peer = _network.DiscoveredPeers.FirstOrDefault(p => p.IpAddress == senderIp)
                    ?? _network.DiscoveredPeers.FirstOrDefault(p => p.IsMutuallyPaired);
 
@@ -260,6 +265,7 @@ public sealed class Win32InputEngine : IDisposable
             var (entryX, entryY) = _topology.ComputeLocalEntryPoint(entranceEdge, packet.NormalizedPosition, peer);
             _lastCursorX = entryX;
             _lastCursorY = entryY;
+            _lastInjectedCursorTime = Environment.TickCount64;
             SetCursorPos(entryX, entryY);
         }
     }
@@ -355,8 +361,8 @@ public sealed class Win32InputEngine : IDisposable
         var (clampedX, clampedY) = _topology.ClampToVirtualDesktop(newX, newY);
         _lastCursorX = clampedX;
         _lastCursorY = clampedY;
+        _lastInjectedCursorTime = Environment.TickCount64;
         SetCursorPos(clampedX, clampedY);
-        mouse_event(0x0001u, packet.DeltaX, packet.DeltaY, 0, (UIntPtr)0xFFFFFF);
     }
 
     private void OnRemoteMouseButtonReceived(MouseButtonPacket packet)
@@ -446,6 +452,14 @@ public sealed class Win32InputEngine : IDisposable
             // Ignore self-injected events
             if ((info.flags & LLMHF_INJECTED) == 0)
             {
+                // If this is a WM_MOUSEMOVE caused by our SetCursorPos injection within 120ms, ignore it!
+                if (Environment.TickCount64 - _lastInjectedCursorTime < 120 &&
+                    Math.Abs(info.pt.X - _lastCursorX) <= 2 &&
+                    Math.Abs(info.pt.Y - _lastCursorY) <= 2)
+                {
+                    return CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
+                }
+
                 if (_controllingRemotePeer != null)
                 {
                     _controllingRemotePeer = null;
@@ -475,7 +489,7 @@ public sealed class Win32InputEngine : IDisposable
                     }
 
                     // Local Windows mode: check if cursor hits an active outer edge toward Android/Linux
-                    if (msg == WM_MOUSEMOVE)
+                    if (_controllingRemotePeer == null && msg == WM_MOUSEMOVE)
                     {
                         int dx = info.pt.X - _lastCursorX;
                         int dy = info.pt.Y - _lastCursorY;

@@ -201,36 +201,36 @@ class ScreenEdgeSentinels:
         mon = self.node.topology.find_monitor_at(cur_x, cur_y)
 
         # Right Edge
-        if cur_x >= max_x - 4 and EDGE_RIGHT in active_edge_peers:
+        if cur_x >= max_x - 6 and EDGE_RIGHT in active_edge_peers:
             if not mon or not self.node.topology.is_internal_seam(mon, EDGE_RIGHT, cur_x, cur_y):
-                norm_pos = max(0.0, min(1.0, (cur_y - min_y) / float(max(1, max_y - min_y))))
+                norm_pos = max(0.0, min(1.0, (cur_y - mon.virtualY) / float(max(1, mon.height)))) if mon else 0.5
                 self.set_cooldown(1.2)
                 if self.on_edge_triggered:
                     self.on_edge_triggered(active_edge_peers[EDGE_RIGHT], EDGE_RIGHT, norm_pos)
                 return
 
         # Left Edge
-        if cur_x <= min_x + 4 and EDGE_LEFT in active_edge_peers:
+        if cur_x <= min_x + 6 and EDGE_LEFT in active_edge_peers:
             if not mon or not self.node.topology.is_internal_seam(mon, EDGE_LEFT, cur_x, cur_y):
-                norm_pos = max(0.0, min(1.0, (cur_y - min_y) / float(max(1, max_y - min_y))))
+                norm_pos = max(0.0, min(1.0, (cur_y - mon.virtualY) / float(max(1, mon.height)))) if mon else 0.5
                 self.set_cooldown(1.2)
                 if self.on_edge_triggered:
                     self.on_edge_triggered(active_edge_peers[EDGE_LEFT], EDGE_LEFT, norm_pos)
                 return
 
         # Top Edge
-        if cur_y <= min_y + 4 and EDGE_TOP in active_edge_peers:
+        if cur_y <= min_y + 6 and EDGE_TOP in active_edge_peers:
             if not mon or not self.node.topology.is_internal_seam(mon, EDGE_TOP, cur_x, cur_y):
-                norm_pos = max(0.0, min(1.0, (cur_x - min_x) / float(max(1, max_x - min_x))))
+                norm_pos = max(0.0, min(1.0, (cur_x - mon.virtualX) / float(max(1, mon.width)))) if mon else 0.5
                 self.set_cooldown(1.2)
                 if self.on_edge_triggered:
                     self.on_edge_triggered(active_edge_peers[EDGE_TOP], EDGE_TOP, norm_pos)
                 return
 
         # Bottom Edge
-        if cur_y >= max_y - 4 and EDGE_BOTTOM in active_edge_peers:
+        if cur_y >= max_y - 6 and EDGE_BOTTOM in active_edge_peers:
             if not mon or not self.node.topology.is_internal_seam(mon, EDGE_BOTTOM, cur_x, cur_y):
-                norm_pos = max(0.0, min(1.0, (cur_x - min_x) / float(max(1, max_x - min_x))))
+                norm_pos = max(0.0, min(1.0, (cur_x - mon.virtualX) / float(max(1, mon.width)))) if mon else 0.5
                 self.set_cooldown(1.2)
                 if self.on_edge_triggered:
                     self.on_edge_triggered(active_edge_peers[EDGE_BOTTOM], EDGE_BOTTOM, norm_pos)
@@ -240,9 +240,10 @@ class ScreenEdgeSentinels:
 class HostCaptureOverlay:
     """Sleek top floating HUD and hardware input capture controller for when Linux acts as Host controlling Android or Windows."""
 
-    def __init__(self, root: tk.Tk, node: ConnectMeLinuxNode):
+    def __init__(self, root: tk.Tk, node: ConnectMeLinuxNode, gui: Optional[Any] = None):
         self.root = root
         self.node = node
+        self.gui = gui
         self.active_peer: Optional[dict] = None
         self.exit_edge: int = EDGE_NONE
         self.overlay: Optional[tk.Toplevel] = None
@@ -250,6 +251,7 @@ class HostCaptureOverlay:
         self.last_x_root = 0
         self.last_y_root = 0
         self._push_accum = 0.0
+        self._fallback_job: Optional[str] = None
 
         if hasattr(self.node, "hardware_grabber"):
             self.node.hardware_grabber.on_deactivated = lambda: self.root.after(0, lambda: self.deactivate(notify_peer=False))
@@ -268,9 +270,9 @@ class HostCaptureOverlay:
         if hasattr(self.node, "hardware_grabber") and not self.node.hardware_grabber.is_active:
             grab_ok = self.node.hardware_grabber.activate(peer, exit_edge, norm_pos)
 
-        # Create Top Floating HUD Banner (Compact, never covers the user's screen or causes black boxes)
+        # Create Top Floating HUD Banner (Compact, never covers the user's screen or traps clicks)
         min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
-        hud_w = 600
+        hud_w = 660
         hud_h = 46
         hud_x = min_x + max(20, (vw - hud_w) // 2)
         hud_y = min_y + 16
@@ -285,7 +287,7 @@ class HostCaptureOverlay:
         self.overlay.geometry(f"{hud_w}x{hud_h}+{hud_x}+{hud_y}")
 
         peer_name = peer.get("deviceName", "Cihaz")
-        grab_tag = " [Donanım 1000Hz]" if grab_ok else ""
+        grab_tag = " [Donanım 1000Hz]" if grab_ok else " [Yazılımsal Takip]"
         lbl = tk.Label(
             self.overlay,
             text=f"🟢 Kontrol '{peer_name}' Ekranında{grab_tag}  |  Geri Dönüş: [ESC], [ScrollLock] veya",
@@ -308,61 +310,77 @@ class HostCaptureOverlay:
             font=("Segoe UI", 8, "bold"),
             command=lambda: self.deactivate(notify_peer=True)
         )
-        btn.pack(side=tk.LEFT, padx=(0, 14), pady=8)
+        btn.pack(side=tk.LEFT, padx=(0, 8), pady=8)
+
+        if not grab_ok and self.gui:
+            fix_btn = tk.Button(
+                self.overlay,
+                text="🔑 Donanım İzni Ver",
+                fg="#FFFFFF",
+                bg="#0284C7",
+                activebackground="#0369A1",
+                activeforeground="#FFFFFF",
+                bd=0,
+                padx=8,
+                pady=4,
+                font=("Segoe UI", 8, "bold"),
+                command=self._on_fix_permissions_click
+            )
+            fix_btn.pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
         # Global return keys on overlay
         self.overlay.bind("<KeyPress>", self._on_key_press)
         self.overlay.bind("<KeyRelease>", self._on_key_release)
 
-        # Fallback tracking if hardware grabber could not grab devices
+        # Fallback 60Hz global pointer polling across the entire desktop if hardware grabber not yet permitted
         if not grab_ok:
             try:
-                self.last_x_root = self.root.winfo_pointerx()
-                self.last_y_root = self.root.winfo_pointery()
+                self.last_x_root, self.last_y_root = self.root.winfo_pointerxy()
             except Exception:
-                self.last_x_root = 0
-                self.last_y_root = 0
-
-            self.overlay.bind("<Motion>", self._on_fallback_motion)
-            self.overlay.bind("<Button-1>", lambda e: self._on_button(1, True))
-            self.overlay.bind("<ButtonRelease-1>", lambda e: self._on_button(1, False))
-            self.overlay.bind("<Button-2>", lambda e: self._on_button(3, True))
-            self.overlay.bind("<ButtonRelease-2>", lambda e: self._on_button(3, False))
-            self.overlay.bind("<Button-3>", lambda e: self._on_button(2, True))
-            self.overlay.bind("<ButtonRelease-3>", lambda e: self._on_button(2, False))
-            self.overlay.bind("<MouseWheel>", lambda e: self._on_scroll(0, int(e.delta)))
-
-            try:
-                self.overlay.focus_force()
-                self.overlay.grab_set()
-            except Exception:
-                pass
+                self.last_x_root, self.last_y_root = 0, 0
+            self._start_fallback_poll()
 
         self.overlay.deiconify()
         self.overlay.lift()
 
-    def _on_fallback_motion(self, event):
+    def _on_fix_permissions_click(self):
+        if self.gui and hasattr(self.gui, "_fix_uinput_permissions"):
+            self.gui._fix_uinput_permissions()
+            if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.can_grab():
+                self.node.hardware_grabber.activate(self.active_peer, self.exit_edge)
+                self._stop_fallback_poll()
+
+    def _start_fallback_poll(self):
+        self._stop_fallback_poll()
+        self._fallback_job = self.root.after(16, self._fallback_tick)
+
+    def _stop_fallback_poll(self):
+        if self._fallback_job is not None:
+            try:
+                self.root.after_cancel(self._fallback_job)
+            except Exception:
+                pass
+            self._fallback_job = None
+
+    def _fallback_tick(self):
         if not self.is_active or not self.active_peer:
             return
-
-        cur_x = event.x_root
-        cur_y = event.y_root
-
-        if self.last_x_root == 0 and self.last_y_root == 0:
-            self.last_x_root = cur_x
-            self.last_y_root = cur_y
+        if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.is_active:
             return
-
-        dx = cur_x - self.last_x_root
-        dy = cur_y - self.last_y_root
-        self.last_x_root = cur_x
-        self.last_y_root = cur_y
-
-        if dx == 0 and dy == 0:
-            return
-
-        # Send relative mouse move
-        self.node.send_mouse_move(self.active_peer, dx, dy)
+        try:
+            cur_x, cur_y = self.root.winfo_pointerxy()
+            if self.last_x_root == 0 and self.last_y_root == 0:
+                self.last_x_root, self.last_y_root = cur_x, cur_y
+            else:
+                dx = cur_x - self.last_x_root
+                dy = cur_y - self.last_y_root
+                if dx != 0 or dy != 0:
+                    self.node.send_mouse_move(self.active_peer, dx, dy)
+                    self.last_x_root, self.last_y_root = cur_x, cur_y
+        except Exception:
+            pass
+        if self.is_active:
+            self._fallback_job = self.root.after(16, self._fallback_tick)
 
     def _on_button(self, btn: int, is_pressed: bool):
         if not self.is_active or not self.active_peer:
@@ -407,16 +425,15 @@ class HostCaptureOverlay:
         if not self.is_active:
             return
         self.is_active = False
+        self._stop_fallback_poll()
+        self.last_x_root = 0
+        self.last_y_root = 0
         self.active_peer = None
 
         if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.is_active:
             self.node.hardware_grabber.deactivate(notify_peer=False)
 
         if self.overlay:
-            try:
-                self.overlay.grab_release()
-            except Exception:
-                pass
             try:
                 self.overlay.destroy()
             except Exception:
@@ -450,7 +467,7 @@ class ConnectMeLinuxGui:
         self.cursor_overlay = LinuxCursorOverlay(self.root)
 
         # Host Modu (Linux ana makine: fare/klavye aktarımı & kenar bariyerleri)
-        self.host_capture_overlay = HostCaptureOverlay(self.root, self.node)
+        self.host_capture_overlay = HostCaptureOverlay(self.root, self.node, self)
         self.edge_sentinels = ScreenEdgeSentinels(self.root, self.node, self._on_sentinel_triggered)
         self.node.on_host_control_switched = lambda peer, edge, norm: self.root.after(0, lambda: self._on_host_control_switched(peer, edge, norm))
         self.node.on_host_control_returned = lambda: self.root.after(0, self._on_host_control_returned)
@@ -1607,12 +1624,12 @@ class ConnectMeLinuxGui:
         pin_ent.bind("<Return>", lambda e: _do_connect())
 
     def _fix_uinput_permissions(self):
-        """Installs the udev rule and chmods /dev/uinput using Polkit (pkexec) to guarantee Wayland mouse input."""
+        """Installs the udev rule and chmods /dev/uinput and /dev/input/event* using Polkit (pkexec) to guarantee hardware input."""
         cmd = (
-            'echo \'KERNEL=="uinput", GROUP="input", MODE="0660", TAG+="uaccess", OPTIONS+="static_node=uinput"\' > /etc/udev/rules.d/99-connectme-uinput.rules && '
-            'echo \'SUBSYSTEM=="input", GROUP="input", MODE="0660", TAG+="uaccess"\' >> /etc/udev/rules.d/99-connectme-uinput.rules && '
-            'chmod 666 /dev/uinput && '
-            'groupadd -f input && usermod -aG input "$USER" && '
+            'echo \'KERNEL=="uinput", GROUP="input", MODE="0666", OPTIONS+="static_node=uinput"\' > /etc/udev/rules.d/99-connectme-uinput.rules && '
+            'echo \'SUBSYSTEM=="input", KERNEL=="event*", GROUP="input", MODE="0666"\' >> /etc/udev/rules.d/99-connectme-uinput.rules && '
+            'chmod 666 /dev/uinput /dev/input/event* 2>/dev/null || true && '
+            'groupadd -f input && '
             'udevadm control --reload-rules && udevadm trigger && '
             '(which dnf >/dev/null 2>&1 && dnf install -y python3-evdev ydotool wl-clipboard 2>/dev/null || which apt-get >/dev/null 2>&1 && apt-get install -y python3-evdev ydotool wl-clipboard 2>/dev/null || true)'
         )
@@ -1623,9 +1640,9 @@ class ConnectMeLinuxGui:
                 if self.node.injector.mode != "none":
                     self.uinput_banner.pack_forget()
                     self.injector_badge.configure(text=f" Girdi: {self.node.injector.mode.upper()} ", foreground="#4ADE80")
-                    messagebox.showinfo("Başarılı", "✅ Linux sanal donanım sürücüsü (/dev/uinput) başarıyla etkinleştirildi!\nFare ve klavye KDE Plasma Wayland'de sorunsuz çalışacaktır.")
+                    messagebox.showinfo("Başarılı", "✅ Linux donanım sürücüsü ve aygıt izinleri (/dev/uinput, /dev/input/event*) başarıyla etkinleştirildi!\nFare ve klavye donanım seviyesinde 1000Hz hızla sorunsuz çalışacaktır.")
                 else:
-                    messagebox.showwarning("Yeniden Başlatma Gerekebilir", "İzinler ayarlandı. Lütfen oturumunuzu kapatıp açın veya bilgisayarı yeniden başlatın.")
+                    messagebox.showinfo("Başarılı", "✅ Donanım izinleri başarıyla tanımlandı!")
             else:
                 messagebox.showerror("Yetkilendirme Başarısız", f"İzin verilemedi veya iptal edildi:\n{res.stderr}")
         except Exception as ex:
