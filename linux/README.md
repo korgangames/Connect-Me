@@ -24,6 +24,14 @@ Connect Me, **Nobara Linux** (KDE Plasma 5 & 6 Wayland) ve tüm modern Linux mas
    - Çift tıklamayla veya sürükle-bırakla seçilen dosyaları yerel ağdaki Windows veya Android cihazın Ortak Cebine doğrudan TCP üzerinden aktarır. Alınan dosyalar anında `~/Downloads/ConnectMe-Shelf` klasörüne iner ve `notify-send` ile masaüstü bildirimi verir.
 7. **Çift Taraflı 6 Haneli PIN & Sıfır-PIN Otomatik Bağlantı:**
    - İlk eşleşmede karşılıklı 6 haneli PIN doğrulaması yapılır. "Bu Cihaza Güven ve Hatırla" seçeneği işaretlenirse cihazlar program açıkken şifresiz otomatik bağlanır.
+8. **🐧 Linux Ana Makine Modu (Linux as Host KVM):**
+   - Linux bilgisayarınızı Ana Makine (Host) yaparak fiziksel farenizi ve klavyenizi Android telefonunuza veya Windows PC'nize aktarabilirsiniz.
+   - **Doğal Kenar Duyargaları (`ScreenEdgeSentinels`):** Belirlediğiniz kenara (ör. sağ kenar) fareyi götürdüğünüzde kontrol otomatik olarak karşı cihaza geçer.
+   - **Hızlı Geçiş Butonu:** 2D Kanvastaki **`[🎯 Fareyi Bu Cihaza Aktar]`** butonu ile tek tıkla doğrudan geçiş.
+   - **Geri Dönüş Barı:** Üst HUD panelindeki `[Esc / Geri Dön]` veya kenar itme direnciyle anında Linux masaüstüne dönüş.
+   - **Kalıcı Yerleşim:** Ekran konumları `~/.config/connectme/peer_topology.json` dosyasına kaydedilir.
+9. **🐝 Koloni Ağı (Colony Mode) & 1-Tık Kabul Et:**
+   - Birbirine bağlı cihazlar tek bir koloni oluşturur. Tek bir cihazın şifresiyle tüm koloniye bağlanabilir; gelen istekleri **`[✨ Hemen Kabul Et]`** ile tek tıkla onaylayabilirsiniz.
 
 ---
 

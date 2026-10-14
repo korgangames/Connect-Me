@@ -10,46 +10,49 @@
 
 ---
 
-## 📥 Hazır Paketleri İndir (Konsolsuz / Doğrudan Çalışan Sürümler)
+### 📥 Hazır Paketleri İndir (Konsolsuz / Doğrudan Çalışan Sürümler)
 
 Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir geliştirici aracı veya konsol / cmd açılması gerekmez:
 
 | İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.7.2.zip` | [⬇️ **ConnectMe-Windows-x64-v1.7.2.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.2/ConnectMe-Windows-x64-v1.7.2.zip) |
-| 📱 **Android** | `.apk` | `ConnectMe-v1.7.2.apk` | [⬇️ **ConnectMe-v1.7.2.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.2/ConnectMe-v1.7.2.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.7.2.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.7.2.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.2/ConnectMe-Linux-x64-v1.7.2.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.7.6.zip` | [⬇️ **ConnectMe-Windows-x64-v1.7.6.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.6/ConnectMe-Windows-x64-v1.7.6.zip) |
+| 📱 **Android** | `.apk` | `ConnectMe-v1.7.6.apk` | [⬇️ **ConnectMe-v1.7.6.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.6/ConnectMe-v1.7.6.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.7.6.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.7.6.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.6/ConnectMe-Linux-x64-v1.7.6.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.7.2 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.7.2)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.7.6 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.7.6)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
 
 ## ✨ Temel Özellikler
 
-1. **Çoklu Monitör Sanal Masaüstü Desteği (Multi-Monitor Futureproof — Windows & Linux):**
+1. **🐧 Linux Ana Makine Modu (Linux as Host KVM):**
+   - Nobara / KDE Plasma Linux bilgisayarınızı birincil ana makine yapabilir; fiziksel farenizi ve klavyenizi Android telefonunuza, tabletinize veya Windows PC'nize kesintisiz aktarabilirsiniz.
+   - **Doğal Kenar Duyargaları (`ScreenEdgeSentinels`):** Linux ekran kenarlarına yaklaşıldığında fare akıcı bir şekilde Android/Windows ekranına geçer.
+   - **Hızlı Geçiş Butonu:** 2D Kanvasta her cihaz için **`[🎯 Fareyi Bu Cihaza Aktar]`** butonu ve `ScrollLock` / `Ctrl+Alt+Yön` kısayolları.
+   - **Geri Dönüş Barı:** Üst durum çubuğundaki `[Esc / Geri Dön]` veya kenar itme direnciyle anında yerel Linux masaüstüne dönüş.
+2. **🐝 Koloni Modu (Colony Network — Tek PIN ile Tüm Ağa Bağlanma):**
+   - Birbirine bağlı cihazlar ağda tek bir koloni (küme) olarak algılanır.
+   - Kolonideki tek bir cihazın 6 haneli kodunu girdiğinizde, diğer koloni üyeleri yeni cihazı otomatik tanır ve tek tek şifre girmeden tüm ekosistem birbirine bağlanır.
+3. **✨ Tek Tıkla Kabul Etme (`PAIR_ACCEPT`):**
+   - Karşı taraf sizin PIN kodunuzu girdiğinde, kod aramakla uğraşmadan ekrandaki **`[✨ Hemen Kabul Et]`** butonuna basarak eşleşmeyi anında tamamlayabilirsiniz.
+4. **Çoklu Monitör Sanal Masaüstü Desteği (Multi-Monitor Futureproof — Windows & Linux):**
    - Bilgisayarlar (Windows veya Nobara Linux) birden fazla fiziksel ekrana (ör. 2'li yatay, 3'lü dikey+yatay) sahip olabilir.
    - **İç Birleşim Koruması (Internal Seam Rule):** Bilgisayarın kendi fiziksel monitörleri arasında (ör. DP-1 ile HDMI-1 arasında) imleç yerel olarak serbestçe geçer. Connect Me imlece müdahale etmez. İmleç yalnızca dışa açık kenara çarptığında Android veya diğer bilgisayara geçer.
-   - **Monitör Bazlı Kenetleme (`AttachedLocalMonitorId`):** 2D Ekran Haritasında Android veya Linux cihazı istediğiniz yerel monitörün kenarına yapıştırabilirsiniz.
    - **Linux KDE Plasma Wayland Entegrasyonu:** `kscreen-doctor -j`, `wlr-randr` ve `xrandr` ile Linux'taki tüm çoklu ekran düzenlerini otomatik algılar.
-2. **Ekran Ayarları Tarzı 2D Sürükle-Bırak Ekran Konfigürasyonu GUI'si:**
-   - Yerel bilgisayarın tüm monitörleri ve bağlı tüm cihazlar **2D Ekran Konfigürasyonu Kanvası (Display Arrangement Canvas)** üzerinde gerçek oranlarıyla kutular halinde gösterilir.
-   - Yakınlaştırma (Zoom Slider + Fare Tekerleği) ve `🎯 Merkeze Sığdır` desteği ile tüm çalışma alanını rahatça yönetebilirsiniz.
-3. **Çift Taraflı 6 Haneli PIN Kodu Doğrulaması (Mutual Dual-PIN Pairing):**
-   - İki cihazda da program açıkken her cihaz kendi **6 haneli PIN kodunu** üretir.
-   - Bağlantının aktifleşmesi için iki tarafın da karşı cihazın 6 haneli kodunu girerek bağlantıyı karşılıklı onaylaması gerekir (`Mutual Verified`).
-4. **Bu Cihaza Güven ve Hatırla (Sıfır-PIN Otomatik Bağlantı):**
-   - Eşleşme esnasında `⭐ Bu Cihaza Güven ve Hatırla` seçeneği işaretlendiğinde cihazlar birbirine kriptografik bir güven belirteci (`TrustToken`) atar ve bunu kalıcı diske kaydeder (`trusted_devices.json`).
-   - Cihazlar aynı ağdayken programlar açık olduğu sürece **artık bir daha PIN kodu girmeye gerek kalmadan** arka planda otomatik olarak bağlanır (`TRUSTED_RECONNECT`) ve 2D ekran konfigürasyonundaki yerini korur.
-   - İstenildiğinde arayüzden tek tıkla `🗑️ Bu Cihazın Güvenini Kaldır (Unut)` butonuna basılarak güven iptal edilebilir.
-5. **Evrensel Pano (Universal Clipboard) & Manyetik Cep (Drop Shelf):**
-   - Çift taraflı onaylanmış tüm cihazlar arasında anlık metin/görsel pano senkronizasyonu ve sürükle-bırak dosya paylaşımı.
-6. **🎧 Merkezi Ses Yönlendirme (Central Audio Hub — Tüm Sesler Kulaklıkta):**
-   - Kulaklığınız merkez bilgisayara (Windows) takılıyken; Android telefonunuzdaki (YouTube, Spotify, oyunlar) ve Linux bilgisayarınızdaki tüm sistem/medya sesleri UDP 42852 portundan ultra-düşük gecikmeyle (<15ms) bilgisayarınıza aktarılır ve aynı kulaklıktan çalınır. Win32 native `waveOut` ile sıfır harici paket bağımlılığı!
-7. **🔄 Dahili Uygulama İçi Otomatik Güncelleyici (In-Program Auto Updater):**
-   - **Android:** GitHub Releases API üzerinden yeni sürüm denetimi, uygulama içerisinden canlı indirme yüzdesi gösterimi, `FileProvider` (`content://`) ve `REQUEST_INSTALL_PACKAGES` izniyle tek tıkla APK yükleme ekranına yönlendirme.
-   - **Windows:** Başlık çubuğunda ve durum çubuğunda sürüm denetimi, ZIP indirme ve arka planda `apply_update.cmd` ile kesintisiz kendini güncelleme ve yeniden başlatma.
-   - **Linux:** Daemon ve GUI'de sürüm kontrolü ve doğrudan indirme yönlendirmesi.
+5. **Ekran Ayarları Tarzı İnteraktif 2D Sürükle-Bırak Ekran Konfigürasyonu:**
+   - Hem Windows hem de Linux arayüzünde bağlı cihazlar **2D Kanvas** üzerinde gerçek oranlarıyla kutular halinde gösterilir.
+   - Farenizle sürükleyip bıraktığınızda en yakın kenara (Sol, Sağ, Üst, Alt) manyetik olarak yapışır.
+   - Tek tıkla yön butonları (`[← Sol]`, `[Sağ →]`, `[↑ Üst]`, `[↓ Alt]`) ile anında kenar atanabilir.
+6. **Çift Taraflı 6 Haneli PIN & Sıfır-PIN Otomatik Bağlantı:**
+   - İki cihaz da birbirini onaylar; `⭐ Bu Cihaza Güven ve Hatırla` seçildiğinde bir daha şifre sormadan otomatik bağlanır.
+7. **Evrensel Pano (Universal Clipboard) & Manyetik Cep (Drop Shelf):**
+   - Çift taraflı onaylanmış tüm cihazlar arasında anlık metin/pano senkronizasyonu ve sürükle-bırak TCP dosya paylaşımı.
+8. **🎧 Merkezi Ses Yönlendirme (Central Audio Hub — Tüm Sesler Kulaklıkta):**
+   - Android ve Linux sesleri UDP 42852 portundan ultra-düşük gecikmeyle (<15ms) merkez Windows bilgisayara ve kulaklığınıza aktarılır.
+9. **🔄 Dahili Uygulama İçi Otomatik Güncelleyici (In-Program Auto Updater):**
+   - Android, Windows ve Linux ortamlarında tek tıkla kendini güncelleme ve yeniden başlatma.
 
 ---
 
@@ -60,19 +63,20 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
 dotnet run --project "windows\ConnectMe.Windows\ConnectMe.Windows.csproj" -c Release
 ```
 * **Çoklu Monitör Test Butonu:** Arayüzdeki **`🖥️ +Ek Monitör Testi`** butonuna basarak anında Tek Ekran, Çift Monitör (Dual) ve Üçlü Monitör (Triple - Sol Dikey Ekran) düzenlerini deneyimleyebilirsiniz.
-* **Çoklu Cihaz Simülatörü ile Anında Test:** **`🧪 +Simüle Et`** butonuna basarak sanal Android Telefon, Android Tablet, Windows İş İstasyonu veya çoklu monitörlü Nobara Linux PC oluşturabilirsiniz.
 * **İmleci Geri Çağırma / Ekran Kilidi:** Klavyeden **`Scroll Lock`** / **`Ctrl + Alt + L`** (acil durum için `Ctrl + Alt + Shift + Esc`) tuşlarına basarak anında ana ekrana dönebilirsiniz.
 
-### 2. Linux (Nobara / KDE Plasma Wayland) Daemon'ı Çalıştırma
+### 2. Linux (Nobara / KDE Plasma Wayland) Başlatma
 ```bash
-python3 linux/connectme_linux_daemon.py
+./linux/start-connectme.sh
+# veya grafik başlatıcı:
+python3 linux/connectme_linux_gui.py
 ```
 * Detaylı Linux talimatları için [**`linux/README.md`**](linux/README.md) dosyasına göz atabilirsiniz.
 
 ### 3. Android Uygulamasını Kurma
-* Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-Android-APK`** dosyasını derler.
+* Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-v1.7.6.apk`** dosyasını derler.
 
-### 4. Test Paketi Çalıştırma (31/31 Test)
+### 4. Test Paketi Çalıştırma (51/51 Test — %100 Başarı)
 ```powershell
 dotnet run --project "windows\ConnectMe.Tests\ConnectMe.Tests.csproj" -c Release
 ```

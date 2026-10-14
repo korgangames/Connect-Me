@@ -1,3 +1,68 @@
+# Connect Me v1.7.6 — Linux Başlatıcı, Eksik İçe Aktarma Düzeltmesi & Çökme Koruması
+
+Bu sürüm; Linux (Nobara / KDE Plasma / Wayland & X11) ortamında uygulamanın açılışta çökmesine neden olan eksik modül içe aktarmalarını (`EDGE_NONE`, `EDGE_*`, `time`, `struct`, `typing`) giderir, arka plan servis temizliği ve hata kayıt mekanizmasını güçlendirir.
+
+---
+
+### 🌟 v1.7.6 Yenilikleri ve Düzeltmeleri:
+
+* **🐧 Linux Arayüzü İçe Aktarma (Import) Hatası Giderildi:**
+  * `connectme_linux_gui.py` içerisinde yeni eklenen Host modu kenar sabitleri (`EDGE_NONE`, `EDGE_LEFT`, `EDGE_RIGHT`, `EDGE_TOP`, `EDGE_BOTTOM`) ile `time`, `struct` ve `typing` modüllerinin eksikliği nedeniyle oluşan `NameError` giderildi.
+  * `from __future__ import annotations` eklenerek Python 3.9 - 3.14 sürümleriyle tam uyumluluk sağlandı.
+
+* **🛑 Temiz Kapanma & Soket Temizliği (`stop()`):**
+  * Linux daemon ve GUI kapatıldığında veya yeniden başlatıldığında UDP/TCP portlarını (42849, 42850, 42851) derhal serbest bırakan `node.stop()` metodu ve soket yeniden kullanım (`SO_REUSEADDR`) mekanizması eklendi.
+
+* **🚀 Güçlendirilmiş Başlatıcı (`start-connectme.sh`):**
+  * Eski veya askıda kalmış bağımsız arka plan oturumlarını otomatik temizler.
+  * Çıktıları `/dev/null` yerine doğrudan `~/.config/connectme/gui.log` dosyasına yazarak tanılamayı kolaylaştırır.
+
+* **🛡️ Görsel Çökme Koruması (Fail-Safe Dialog & Crash Log):**
+  * Olası beklenmeyen sistem veya grafik kütüphanesi hatalarında uygulamanın sessizce kapanması yerine kullanıcıya grafiksel hata kutusu göstermesi ve detaylı hata dökümünü `~/.config/connectme/crash.log` dosyasına kaydetmesi sağlandı.
+
+---
+
+# Connect Me v1.7.5 — Linux Host Modu (Ana Makine), 2D Kanvas İnteraktif Ekran Düzenleme & UDP Girdi Çözümleme Düzeltmesi
+
+Bu sürüm; Linux'un (Nobara / KDE Plasma) da Windows gibi tam yetkili **Ana Makine (Host)** olarak çalışmasını, Linux masaüstünden Android veya Windows ekranlarına fare ve klavye aktarımını, Linux 2D kanvasında interaktif sürükle-bırak ekran düzenlemesini ve Windows'tan Linux'a fare geçişindeki UDP paket çökmesini çözer.
+
+---
+
+### 🌟 v1.7.5 Yenilikleri ve Düzeltmeleri:
+
+* **🐧 Linux Tam Yetkili Ana Makine (Host KVM):**
+  * Linux artık ikincil cihaz olmanın ötesinde, kendi fiziksel klavye ve faresini bağlı Android telefonlara, tabletlere ve ikincil Windows bilgisayarlara aktarabilen bir Host olarak çalışabilir.
+  * **Doğal Kenar Duyargaları (`ScreenEdgeSentinels`):** Linux masaüstü kenarlarına yerleştirilen hafif, şeffaf sınır pencereleri ile fare kenara ulaştığında kontrol akıcı bir şekilde hedef cihaza devredilir.
+  * **Hızlı Geçiş Butonu:** 2D Kanvasta bağlı her cihaz için **`[🎯 Fareyi Bu Cihaza Aktar]`** butonu eklendi.
+  * **Kısayol Tuşları:** `ScrollLock` veya `Ctrl + Alt + Sağ/Sol Ok` tuşlarıyla geçiş desteği.
+  * **Tam Ekran Donanım Girdi Yakalama (`HostCaptureOverlay`):** Fare karşı cihaza geçtiğinde Linux girdileri yüksek frekansta UDP üzerinden karşı cihaza aktarır, fareyi merkezde tutar ve üst HUD barı (`[Esc / Geri Dön]`) veya kenar itme direnciyle anında Linux'a geri döner.
+
+* **🖥️ Linux İnteraktif 2D Ekran Düzenleme Kanvası:**
+  * Linux arayüzündeki 2D Kanvas üzerinde bağlı Android ve Windows cihazları farenizle serbestçe sürükleyip bırakabilirsiniz.
+  * Bırakıldığı anda masaüstü merkezine göre en yakın kenara (Sol, Sağ, Üst, Alt) manyetik olarak yapışır.
+  * Pratik kenar butonları (**`[← Sol]`**, **`[Sağ →]`**, **`[↑ Üst]`**, **`[↓ Alt]`**) ile tek tıkla konum değiştirilebilir.
+  * Ekran yerleşimleri kalıcı olarak `~/.config/connectme/peer_topology.json` dosyasına kaydedilir.
+
+* **🐛 Windows ➔ Linux Fare Geçişi Unpack Çökmesi Giderildi:**
+  * Windows'tan Linux'a geçerken imleç göstergesinin çıkıp farenin hareket etmemesi sorunu çözüldü (`struct.unpack('<Hhh', ...)` çağrısının 3 eleman yerine 4 değişkene açılmasından kaynaklanan `ValueError` giderildi).
+
+---
+
+# Connect Me v1.7.4 — Tkinter Float Font Hatası Çözümü & 1-Tık Kabul Et Desteği
+
+* **🐧 Linux Tkinter Float Font Çökmesi Giderildi:** Linux ekran ölçekleme faktöründen (ör. %125 / 1.25) kaynaklanan float font boyutu hatası giderilerek tamsayıya (`int(round(...))`) dönüştürüldü.
+* **✨ Tek Tıkla Gelen Bağlantıyı Kabul Etme (`PAIR_ACCEPT`):** Karşı taraf sizin kodunuzu girdiğinde kod girmeden anında karşılıklı eşleşmeyi tamamlayan `[✨ Kabul Et]` / `[✨ Hemen Kabul Et]` butonları eklendi.
+
+---
+
+# Connect Me v1.7.3 — Koloni Ağı (Colony Mode) & Tek PIN ile Tüm Ağa Otomatik Bağlantı
+
+* **🐝 Koloni Ağı (Colony Mode):** Birbirine bağlı cihazlar ağda tek bir koloni (küme) olarak algılanır.
+* **🔗 Tek PIN ile Koloniye Katılma:** Kolonideki herhangi bir cihazın 6 haneli kodu doğrulandığında, diğer koloni üyeleri de yeni cihazı otomatik olarak tanır ve tek tek şifre girmeye gerek kalmadan tüm ağa anında bağlanılır.
+* **🧪 51/51 Birim Testi:** Protokol, koloni oluşumu, kenar direnci, çoklu monitör topolojisi ve çift yönlü KVM testlerinin tamamı yeşil.
+
+---
+
 # Connect Me v1.7.2 — Kusursuz Ses Aktarımı (Audio Streaming), Akıllı Hedef Çözümleme & Tek Taraflı/Çift Taraflı PIN Desteği
 
 Bu sürüm; Android ve Windows arasında ses aktarımı başlatıldığında cihazlar bağlı olmasına rağmen ortaya çıkan *"Önce bilgisayarla 6 haneli PIN eşleşmesini tamamlayın!"* hatasını kökten çözer. Ses akışı artık bağlı, aktif veya yerel ağda keşfedilen bilgisayarı otomatik ve akıllıca tespit eder.
