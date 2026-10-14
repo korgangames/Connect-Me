@@ -79,6 +79,7 @@ class ConnectMeLinuxGui:
         self.node = ConnectMeLinuxNode(on_log=self._log)
         self.node.on_cursor_update = self._on_cursor_update
         self.node.on_pin_request_received = self._on_pin_request_received
+        self.node.on_peer_updated = lambda p: self.root.after(0, self._refresh_state)
         self.node.start()
 
         # Ekran üstü imleç göstergesi
@@ -233,8 +234,10 @@ class ConnectMeLinuxGui:
         self.inbound_card = ttk.Frame(tab, style="Card.TFrame", padding=10)
         self.inbound_label = ttk.Label(self.inbound_card, text="", font=("Segoe UI", 10, "bold"), foreground="#F59E0B")
         self.inbound_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.inbound_btn = ttk.Button(self.inbound_card, text="🔐 Kodu Gir ve Bağlan", style="Accent.TButton", command=self._on_inbound_pair_click)
-        self.inbound_btn.pack(side=tk.RIGHT, padx=6)
+        self.inbound_accept_btn = ttk.Button(self.inbound_card, text="✨ Hemen Kabul Et", style="Success.TButton", command=self._on_inbound_accept_click)
+        self.inbound_accept_btn.pack(side=tk.RIGHT, padx=4)
+        self.inbound_btn = ttk.Button(self.inbound_card, text="🔐 PIN Kodunu Gir", style="Accent.TButton", command=self._on_inbound_pair_click)
+        self.inbound_btn.pack(side=tk.RIGHT, padx=4)
         # Initially not packed, packed dynamically on request
 
         # 1. Manuel IP ile Doğrudan Bağlan Kartı (Manual IP Connect Card)
@@ -485,6 +488,20 @@ class ConnectMeLinuxGui:
             self.pair_prompt_lbl.configure(text=f"'{peer.get('deviceName')}' 6 Haneli Kodu:")
             self.pin_entry.focus_set()
 
+    def _on_inbound_accept_click(self):
+        target_id = self.selected_peer_id
+        if not target_id or target_id not in self.node.peers or not self.node.peers[target_id].get("in_ok"):
+            inbound = [p for p in self.node.peers.values() if p.get("in_ok")]
+            if inbound:
+                target_id = inbound[0].get("deviceId")
+        if target_id and target_id in self.node.peers:
+            peer = self.node.peers[target_id]
+            self._log(f"'{peer.get('deviceName')}' bağlantı isteği tek tıkla onaylanıyor...")
+            threading.Thread(target=self.node.accept_inbound_pairing, args=(target_id, True), daemon=True).start()
+            if self.inbound_card.winfo_ismapped():
+                self.inbound_card.pack_forget()
+            self._refresh_state()
+
     def _on_inbound_pair_click(self):
         if self.selected_peer_id and self.selected_peer_id in self.node.peers:
             self._show_enter_pin_dialog(self.node.peers[self.selected_peer_id])
@@ -499,9 +516,8 @@ class ConnectMeLinuxGui:
         sel = self.peer_list.curselection()
         if not sel:
             return
-        keys = list(self.node.peers.keys())
-        if sel[0] < len(keys):
-            peer_id = keys[sel[0]]
+        if hasattr(self, "_displayed_peer_ids") and sel[0] < len(self._displayed_peer_ids):
+            peer_id = self._displayed_peer_ids[sel[0]]
             peer = self.node.peers.get(peer_id)
             if peer:
                 self._show_enter_pin_dialog(peer)
@@ -510,8 +526,9 @@ class ConnectMeLinuxGui:
         def _update():
             self.selected_peer_id = sender_id
             self.inbound_label.configure(
-                text=f"🔔 '{sender_name}' sizin 6 haneli kodunuzu girdi! Eşleşmeyi tamamlamak için siz de onun kodunu girin."
+                text=f"🔔 '{sender_name}' sizin 6 haneli kodunuzu girdi! Hemen kabul edebilir veya kodunu girebilirsiniz."
             )
+            self.inbound_accept_btn.configure(text=f"✨ '{sender_name}' Hemen Kabul Et")
             self.inbound_btn.configure(text=f"🔐 '{sender_name}' Kodunu Gir")
             if not self.inbound_card.winfo_ismapped():
                 self.inbound_card.pack(fill=tk.X, pady=(0, 8), before=self.peer_list)
@@ -525,10 +542,12 @@ class ConnectMeLinuxGui:
     def _refresh_state(self):
         # 1. Cihazlar Listesi
         self.peer_list.delete(0, tk.END)
+        self._displayed_peer_ids = []
         if not self.node.peers:
             self.peer_list.insert(tk.END, "  [Henüz ağda başka bir Connect Me cihazı bulunamadı. Cihazlarınızda programı açık tutun.]")
         else:
             for pid, p in self.node.peers.items():
+                self._displayed_peer_ids.append(pid)
                 name = p.get("deviceName", pid)
                 ip = p.get("ipAddress", "")
                 is_mut = p.get("isMutuallyPaired", False)
@@ -536,13 +555,24 @@ class ConnectMeLinuxGui:
                 tag = "⭐ " if is_trust else ""
                 mon_cnt = len(p.get("monitors", []))
                 mon_str = f" [{mon_cnt} Ekran]" if mon_cnt > 1 else ""
-                status = f"{tag}🟢 ÇİFT TARAFLI ONAYLI (Aktif)" if is_mut else (f"{tag}🟡 Karşı Onay Bekliyor" if p.get("out_ok") else f"{tag}⚪ Eşleşme Bekleniyor")
+                if is_mut:
+                    status = f"{tag}🟢 ÇİFT TARAFLI ONAYLI (Aktif)"
+                elif p.get("in_ok"):
+                    status = f"{tag}🔔 Karşı Taraf Onayladı (Kabul Bekliyor)"
+                elif p.get("out_ok"):
+                    status = f"{tag}🟡 Karşı Onay Bekliyor"
+                else:
+                    status = f"{tag}⚪ Eşleşme Bekleniyor"
                 self.peer_list.insert(tk.END, f"  🖥️ {name} ({ip}){mon_str} — {status}")
 
             keys = list(self.node.peers.keys())
             if self.selected_peer_id and self.selected_peer_id in keys:
                 idx = keys.index(self.selected_peer_id)
                 self.peer_list.selection_set(idx)
+
+        has_pending_inbound = any(p.get("in_ok") and not p.get("isMutuallyPaired") for p in self.node.peers.values())
+        if not has_pending_inbound and self.inbound_card.winfo_ismapped():
+            self.inbound_card.pack_forget()
 
         # 2. Güvenilir Cihazlar Listesi
         self.trusted_list.delete(0, tk.END)
@@ -594,18 +624,17 @@ class ConnectMeLinuxGui:
 
     def _show_enter_pin_dialog(self, peer: dict):
         """Modal dialog to enter the 6-digit PIN code for a specific discovered peer."""
-        dlg = tk.Toplevel(self.root)
         dev_name = peer.get("deviceName", peer.get("deviceId", "Cihaz"))
         dev_ip = peer.get("ipAddress", "")
         platform = peer.get("platform", "").lower()
         dev_icon = "🪟" if "win" in platform else ("📱" if "android" in platform else "💻")
 
+        dlg = tk.Toplevel(self.root)
         dlg.title(f"🔐 {dev_name} ile Eşleş")
-        dlg.geometry("480x350")
-        dlg.minsize(440, 310)
+        dlg.geometry("490x380")
+        dlg.minsize(440, 320)
         dlg.configure(bg="#0B1120")
         dlg.transient(self.root)
-        dlg.grab_set()
 
         frm = ttk.Frame(dlg, padding=18)
         frm.pack(fill=tk.BOTH, expand=True)
@@ -614,13 +643,13 @@ class ConnectMeLinuxGui:
 
         in_ok = peer.get("in_ok", False)
         if in_ok:
-            info_txt = f"🔔 '{dev_name}' sizin kodunuzu ({self.node.local_pin}) doğru girdi!\nBağlantıyı tamamlamak için şimdi siz de onun ekranındaki 6 haneli kodu girin:"
+            info_txt = f"🔔 '{dev_name}' sizin kodunuzu ({self.node.local_pin}) doğru girdi!\n'Hemen Kabul Et' butonuna basarak tek tıkla onaylayabilir veya siz de onun 6 haneli kodunu girebilirsiniz:"
             info_fg = "#4ADE80"
         else:
             info_txt = f"'{dev_name}' ekranında görünen 6 haneli kodu (PIN) girin:"
             info_fg = "#94A3B8"
 
-        ttk.Label(frm, text=info_txt, font=("Segoe UI", 9.5), foreground=info_fg, wraplength=430).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(frm, text=info_txt, font=("Segoe UI", 10), foreground=info_fg, wraplength=440).pack(anchor=tk.W, pady=(0, 10))
 
         pin_box = tk.Entry(
             frm,
@@ -661,6 +690,15 @@ class ConnectMeLinuxGui:
             dlg.destroy()
             self._refresh_state()
 
+        if in_ok:
+            def _do_quick_accept():
+                remember = trust_var.get()
+                self._log(f"'{dev_name}' bağlantı isteği tek tıkla onaylanıyor...")
+                threading.Thread(target=self.node.accept_inbound_pairing, args=(peer.get("deviceId", ""), remember), daemon=True).start()
+                dlg.destroy()
+                self._refresh_state()
+            ttk.Button(btn_box, text="✨ Hemen Kabul Et", style="Success.TButton", command=_do_quick_accept).pack(side=tk.LEFT, padx=4)
+
         if peer.get("isMutuallyPaired"):
             def _do_disconnect():
                 self.node.disconnect_peer(peer.get("deviceId", ""))
@@ -670,6 +708,11 @@ class ConnectMeLinuxGui:
 
         ttk.Button(btn_box, text="🔗 Doğrula ve Bağlan", style="Accent.TButton", command=_do_pair).pack(side=tk.RIGHT, padx=4)
         ttk.Button(btn_box, text="İptal", command=dlg.destroy).pack(side=tk.RIGHT, padx=4)
+
+        try:
+            dlg.grab_set()
+        except Exception:
+            pass
 
         pin_box.focus_set()
         pin_box.bind("<Return>", lambda e: _do_pair())
@@ -841,12 +884,12 @@ class ConnectMeLinuxGui:
 
                 dev_icon = "🪟" if "win" in p.get("platform", "").lower() else ("📱" if "android" in p.get("platform", "").lower() else "💻")
                 dev_name = p.get("deviceName", pid)[:18]
-                self.canvas.create_text(px1 + 10, py1 + 14, anchor=tk.W, text=f"{dev_icon} {dev_name}", fill="#FFFFFF", font=("Segoe UI", 9.5, "bold"), tags=(card_tag,))
+                self.canvas.create_text(px1 + 10, py1 + 14, anchor=tk.W, text=f"{dev_icon} {dev_name}", fill="#FFFFFF", font=("Segoe UI", 10, "bold"), tags=(card_tag,))
                 self.canvas.create_text(px1 + 10, py1 + 32, anchor=tk.W, text=status_txt, fill=status_col, font=("Segoe UI", 8, "bold"), tags=(card_tag,))
 
                 if p_monitors and len(p_monitors) > 1:
                     mon_str = " | ".join(f"{m.get('width', 1920)}x{m.get('height', 1080)}" for m in p_monitors[:2])
-                    self.canvas.create_text(px1 + 10, py1 + 48, anchor=tk.W, text=f"🖥️ {len(p_monitors)} Ekran: {mon_str}", fill="#CBD5E1", font=("Segoe UI", 7.5), tags=(card_tag,))
+                    self.canvas.create_text(px1 + 10, py1 + 48, anchor=tk.W, text=f"🖥️ {len(p_monitors)} Ekran: {mon_str}", fill="#CBD5E1", font=("Segoe UI", 8), tags=(card_tag,))
                 else:
                     self.canvas.create_text(px1 + 10, py1 + 48, anchor=tk.W, text=f"🖥️ Çözünürlük: {p_w}x{p_h}", fill="#94A3B8", font=("Segoe UI", 8), tags=(card_tag,))
 
@@ -1122,7 +1165,7 @@ class ConnectMeLinuxGui:
                     if resp.get("senderId"):
                         peer["deviceId"] = resp.get("senderId")
 
-                    if resp.get("isMutualComplete"):
+                    if resp.get("isMutualComplete") or peer.get("in_ok"):
                         peer["isMutuallyPaired"] = True
                         if req_trust and token:
                             self.node.trusted_devices[peer["deviceId"]] = {
@@ -1140,8 +1183,10 @@ class ConnectMeLinuxGui:
                 elif resp.get("type") == "PAIR_REJECT":
                     self._log(f"⚠️ Karşı taraf girilen PIN kodunu reddetti.")
             s.close()
+            self.root.after(0, self._refresh_state)
         except Exception as e:
             self._log(f"⚠️ Eşleşme bağlantı hatası: {e}")
+            self.root.after(0, self._refresh_state)
 
     def _on_revoke_trust(self):
         sel = self.trusted_list.curselection()

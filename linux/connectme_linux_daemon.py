@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.7.3"
+VERSION = "1.7.4"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -872,6 +872,70 @@ class ConnectMeLinuxNode:
                 pass
         return True
 
+    def accept_inbound_pairing(self, device_id: str, remember: bool = True) -> bool:
+        """Accepts an inbound pairing attempt in 1-click when remote peer already entered our PIN, sends PAIR_ACCEPT over TCP."""
+        peer = self.peers.get(device_id)
+        if not peer:
+            for p in self.peers.values():
+                if p.get("ipAddress") == device_id or p.get("deviceId") == device_id:
+                    peer = p
+                    break
+        if not peer:
+            return False
+
+        dev_id = peer.get("deviceId", device_id)
+        self.suppressed_autoconnect.discard(dev_id)
+        peer["in_ok"] = True
+        peer["out_ok"] = True
+        peer["isMutuallyPaired"] = True
+
+        trust_token = f"trust-{self.device_id}-{os.urandom(8).hex()}" if remember else ""
+        if remember and trust_token:
+            self.trusted_devices[dev_id] = {
+                "deviceId": dev_id,
+                "deviceName": peer.get("deviceName", dev_id),
+                "platform": peer.get("platform", "android"),
+                "trustToken": trust_token,
+                "autoConnect": True
+            }
+            self._save_trusted_devices()
+            peer["is_trusted"] = True
+            self.log(f"[Güvenlik] ⭐ '{peer.get('deviceName')}' güvenilir cihaz olarak kaydedildi.")
+
+        # Send PAIR_ACCEPT over TCP to peer
+        try:
+            remote_ip = peer.get("ipAddress")
+            tcp_port = peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(4.0)
+            sock.connect((remote_ip, tcp_port))
+            req = {
+                "type": "PAIR_ACCEPT",
+                "senderId": self.device_id,
+                "senderName": self.device_name,
+                "senderPlatform": "linux-nobara",
+                "senderUdpPort": FAST_INPUT_UDP_PORT,
+                "senderTcpPort": DATA_CONTROL_TCP_PORT,
+                "senderScreenWidth": self.topology.total_width,
+                "senderScreenHeight": self.topology.total_height,
+                "senderMonitors": [asdict(m) for m in self.topology.monitors],
+                "requestTrust": remember,
+                "trustToken": trust_token if remember else None,
+                "isMutualComplete": True
+            }
+            self._send_tcp_frame(sock, req)
+            sock.close()
+            self.log(f"[Çift Taraflı Eşleşme] ✅ '{peer.get('deviceName')}' ({remote_ip}) bağlantı isteği tek tıkla onaylandı!")
+            if self.on_peer_updated:
+                try:
+                    self.on_peer_updated(peer)
+                except Exception:
+                    pass
+            return True
+        except Exception as e:
+            self.log(f"[Bağlantı Uyarı] PAIR_ACCEPT iletim hatası: {e}")
+            return False
+
     def revoke_trust(self, device_id: str) -> None:
         if device_id in self.trusted_devices:
             del self.trusted_devices[device_id]
@@ -1241,6 +1305,82 @@ class ConnectMeLinuxNode:
                 else:
                     self._send_tcp_frame(conn, {"type": "PAIR_REJECT", "senderId": self.device_id, "senderName": self.device_name})
                     self.log(f"[Güvenlik] ⚠️ '{sender_name}' hatalı kod denedi ({target_pin}).")
+
+            elif msg_type == "PAIR_ACCEPT":
+                sender_id = header.get("senderId", remote_ip)
+                sender_name = header.get("senderName", remote_ip)
+                peer = self.peers.setdefault(sender_id, {
+                    "deviceId": sender_id,
+                    "deviceName": sender_name,
+                    "platform": header.get("senderPlatform", "android"),
+                    "ipAddress": remote_ip,
+                    "udpInputPort": header.get("senderUdpPort", FAST_INPUT_UDP_PORT),
+                    "tcpControlPort": header.get("senderTcpPort", DATA_CONTROL_TCP_PORT),
+                })
+                peer["deviceName"] = sender_name
+                peer["platform"] = header.get("senderPlatform", peer.get("platform", "android"))
+                peer["ipAddress"] = remote_ip
+                peer["udpInputPort"] = header.get("senderUdpPort", peer.get("udpInputPort", FAST_INPUT_UDP_PORT))
+                peer["tcpControlPort"] = header.get("senderTcpPort", peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT))
+                peer["monitors"] = header.get("senderMonitors", peer.get("monitors", []))
+                peer["in_ok"] = True
+                peer["out_ok"] = True
+                peer["isMutuallyPaired"] = True
+                self.suppressed_autoconnect.discard(sender_id)
+
+                req_trust = bool(header.get("requestTrust", False))
+                trust_token = header.get("trustToken", "")
+                if req_trust and trust_token:
+                    self.trusted_devices[sender_id] = {
+                        "deviceId": sender_id,
+                        "deviceName": sender_name,
+                        "platform": peer.get("platform", "android"),
+                        "trustToken": trust_token,
+                        "autoConnect": True
+                    }
+                    self._save_trusted_devices()
+                    peer["is_trusted"] = True
+                    self.log(f"[Güvenlik] ⭐ '{sender_name}' güvenilir cihaz olarak kaydedildi.")
+
+                ack = {
+                    "type": "PAIR_ACCEPT_ACK",
+                    "senderId": self.device_id,
+                    "senderName": self.device_name,
+                    "senderPlatform": "linux-nobara",
+                    "senderUdpPort": FAST_INPUT_UDP_PORT,
+                    "senderTcpPort": DATA_CONTROL_TCP_PORT,
+                    "senderScreenWidth": self.topology.total_width,
+                    "senderScreenHeight": self.topology.total_height,
+                    "senderMonitors": [asdict(m) for m in self.topology.monitors],
+                    "isMutualComplete": True
+                }
+                self._send_tcp_frame(conn, ack)
+                self.log(f"[Çift Taraflı Eşleşme] ✅ '{sender_name}' ({remote_ip}) bağlantı isteğinizi tek tıkla kabul etti! Karşılıklı bağlantı aktif.")
+                if self.on_peer_updated:
+                    try:
+                        self.on_peer_updated(peer)
+                    except Exception:
+                        pass
+
+            elif msg_type == "PAIR_ACCEPT_ACK":
+                sender_id = header.get("senderId", remote_ip)
+                sender_name = header.get("senderName", remote_ip)
+                peer = self.peers.get(sender_id)
+                if not peer:
+                    for p in self.peers.values():
+                        if p.get("ipAddress") == remote_ip:
+                            peer = p
+                            break
+                if peer:
+                    peer["in_ok"] = True
+                    peer["out_ok"] = True
+                    peer["isMutuallyPaired"] = True
+                    if self.on_peer_updated:
+                        try:
+                            self.on_peer_updated(peer)
+                        except Exception:
+                            pass
+                self.log(f"[Bağlantı Onayı] ✅ '{sender_name}' ({remote_ip}) PAIR_ACCEPT_ACK teyit etti.")
 
             elif msg_type == "TRUSTED_RECONNECT":
                 sender_id = header.get("senderId", remote_ip)
