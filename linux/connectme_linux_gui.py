@@ -1534,6 +1534,8 @@ class ConnectMeLinuxGui:
         ip_ent.bind("<Return>", lambda e: _do_connect())
         pin_ent.bind("<Return>", lambda e: _do_connect())
 
+    def _fix_uinput_permissions(self):
+        """Installs the udev rule and chmods /dev/uinput using Polkit (pkexec) to guarantee Wayland mouse input."""
         cmd = (
             'echo \'KERNEL=="uinput", GROUP="input", MODE="0660", TAG+="uaccess", OPTIONS+="static_node=uinput"\' > /etc/udev/rules.d/99-connectme-uinput.rules && '
             'echo \'SUBSYSTEM=="input", GROUP="input", MODE="0660", TAG+="uaccess"\' >> /etc/udev/rules.d/99-connectme-uinput.rules && '
@@ -1556,6 +1558,8 @@ class ConnectMeLinuxGui:
                 messagebox.showerror("Yetkilendirme Başarısız", f"İzin verilemedi veya iptal edildi:\n{res.stderr}")
         except Exception as ex:
             messagebox.showerror("Hata", f"Yetkilendirme penceresi açılamadı: {ex}")
+
+    _fix_input_permissions = _fix_uinput_permissions
 
     def _refresh_monitors(self):
         mons = self.node.topology.refresh_monitors()
