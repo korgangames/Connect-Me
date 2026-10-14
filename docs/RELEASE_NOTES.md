@@ -1,3 +1,24 @@
+# Connect Me v1.8.3 — Çoklu Cihaz Ses Matrisi (Audio Matrix) & Android 14+ Uyumluluk Güncellemesi
+
+Bu sürüm; ağdaki tüm cihazların (Windows, Linux Nobara, Android) tüm ses çıkışlarını (hoparlör, kulaklık, USB DAC vb.) tek bir dinamik matriste toplayarak seçtiğiniz cihaza tüm sistem seslerini ultra düşük gecikmeyle yönlendirmenizi sağlar. Ayrıca Android 14+ MediaProjection çökmesi tamamen giderilmiş ve Android tarafına çift yönlü ses oynatıcı (AudioTrack) eklenmiştir.
+
+---
+
+### 🌟 v1.8.3 Yenilikleri ve Düzeltmeleri:
+
+* **🎧 Tüm Cihazlarda Dinamik Ses Matrisi (Unified Cross-Device Audio Matrix):**
+  - **Windows, Linux ve Android** arayüzlerinde tüm bağlı cihazların ses çıkışları (dahili hoparlör, kulaklık, harici aygıtlar) anında listelenir.
+  - Listeden seçtiğiniz hedef cihaz aktif alıcı olurken, diğer cihazlar sistem seslerini UDP port 42852 üzerinden canlı olarak oraya yönlendirir.
+  - "Yerel Çalma / Devre Dışı" seçildiğinde tüm cihazlar kendi hoparlörlerine döner.
+
+* **🛡️ Android 14+ MediaProjection Çökmesi (Crash) Giderildi:**
+  - Android 14'te Foreground Service tipi ile `MediaProjection` token alınma sırasındaki yaşam döngüsü tam uyumlu hale getirildi. İkinci kez tıklamalarda veya izin iptallerinde yaşanan `SecurityException` ve sürekli kapanma hatası tamamen çözüldü.
+
+* **🔊 Android Çift Yönlü Ses Oynatma Motoru (`AndroidAudioPlaybackEngine`):**
+  - Bilgisayardan veya Linux'tan telefon hoparlörü seçildiğinde seslerin telefondan çalınabilmesi için düşük gecikmeli PCM 48kHz stereo `AudioTrack` motoru entegre edildi.
+
+---
+
 # Connect Me v1.8.2 — İmleç Sembolü Temizliği, Doğru Konumlandırma & Yüksek Performanslı Arayüz
 
 Bu sürüm; arayüz kanvasında diğer cihazların kutucukları üzerinde görünen ve imleç ivmelenmesi/çözünürlük farkları nedeniyle konumu yanlış takip eden hareketli imleç sembolünü (yeşil nokta) ve karşı Linux ekranında beliren yapay imleç bindirmesini (`LinuxCursorOverlay`) tamamen kaldırır.
