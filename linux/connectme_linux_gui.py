@@ -49,31 +49,13 @@ except ImportError:
 
 
 class LinuxCursorOverlay:
-    """Lightweight floating cursor indicator for Nobara Linux KDE Wayland."""
+    """Disabled floating cursor indicator (native OS system cursor is used instead)."""
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.win = tk.Toplevel(root)
-        self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True)
-        self.win.config(bg="#38BDF8")
-        self.canvas = tk.Canvas(self.win, width=24, height=24, bg="#0284C7", highlightthickness=1, highlightbackground="#38BDF8")
-        self.canvas.pack()
-        self.canvas.create_oval(3, 3, 21, 21, fill="#0F172A", outline="#38BDF8", width=2)
-        self.canvas.create_oval(8, 8, 16, 16, fill="#4ADE80", outline="")
-        self.win.withdraw()
         self.visible = False
 
     def update(self, active: bool, x: int, y: int):
-        if active:
-            self.win.geometry(f"24x24+{max(0, x-12)}+{max(0, y-12)}")
-            if not self.visible:
-                self.win.deiconify()
-                self.win.lift()
-                self.visible = True
-        else:
-            if self.visible:
-                self.win.withdraw()
-                self.visible = False
+        pass
 
 
 KEYSYM_TO_VK = {

@@ -1,3 +1,23 @@
+# Connect Me v1.8.2 — İmleç Sembolü Temizliği, Doğru Konumlandırma & Yüksek Performanslı Arayüz
+
+Bu sürüm; arayüz kanvasında diğer cihazların kutucukları üzerinde görünen ve imleç ivmelenmesi/çözünürlük farkları nedeniyle konumu yanlış takip eden hareketli imleç sembolünü (yeşil nokta) ve karşı Linux ekranında beliren yapay imleç bindirmesini (`LinuxCursorOverlay`) tamamen kaldırır.
+
+---
+
+### 🌟 v1.8.2 Yenilikleri ve Düzeltmeleri:
+
+* **🧹 Arayüz Kanvasından Yanıltıcı İmleç Sembolü Kaldırıldı (`cursorDot`):**
+  - **Sorun:** Windows arayüzündeki 2D ekran yerleşim kanvasında, fare başka bir cihaza geçtiğinde cihaz kartının üzerinde yeşil bir daire (`cursorDot`) çiziliyor ve farenin ham `dx, dy` değerleri toplanarak bu daire hareket ettiriliyordu. Ancak karşı cihazın ekran çözünürlüğü ve işletim sistemi imleç ivmelendirmesi (mouse acceleration) hesaba katılmadığından, bu sembol imlecin gerçek yerini hiçbir zaman doğru gösteremiyor ve kullanıcıyı yanıltıyordu.
+  - **Çözüm:** Cihaz kartı üzerindeki yanıltıcı `cursorDot` çizimi tamamen kaldırıldı. Kontrolün hangi ekranda olduğu, kartın şık yeşil çerçevesi, `🎯 [İMLEÇ BURADA]` rozeti ve başlık çubuğundaki net cihaz ismiyle temiz ve estetik şekilde sunulmaya devam eder.
+
+* **⚡ 70ms Gereksiz Kanvas Çizim Döngüsü İptal Edildi:**
+  - Eski sistemde `cursorDot` sembolünü hareket ettirebilmek için saniyede 15-20 kez tüm 2D kanvası baştan çizen `_cursorTrackingTimer` çalışıyordu. Bu timer ve sürekli yeniden çizim döngüsü kaldırılarak Windows tarafındaki CPU kullanımı ve UI yükü sıfıra indirildi. Kanvas artık sadece cihaz geçişi veya ekran düzenlemesi yapıldığında bir kez akıllıca güncellenir.
+
+* **🖥️ Linux Ekran Üstü Yapay İmleç Bindirmesi Devre Dışı Bırakıldı (`LinuxCursorOverlay`):**
+  - Uzaktan Linux kontrol edildiğinde Linux ekranında beliren 24x24 piksellik yapay imleç bindirmesi kapatıldı. Linux çekirdeğindeki sanal fare (`evdev.UInput` / `Connect-Me-Mouse`) zaten sistemin kendi donanım imlecini 1:1 akıcılıkla hareket ettirdiği için ikinci bir yapay sembolün ekranda dolaşması engellendi.
+
+---
+
 # Connect Me v1.8.1 — Linux Otomatik Ekran Kenarı Geçişi (Kesintisiz Donanım KVM) & Çoklu Monitör İyileştirmeleri
 
 Bu sürüm; Linux'tan Windows'a veya Android'e geçerken fare imlecini ekrandan aktarmak için GUI üzerindeki "🎯 Fareyi Bu Cihaza Aktar" butonuna basma zorunluluğunu tamamen ortadan kaldırır. Fare imleci ekran sınırına ulaştığında ve karşı cihaza doğru itildiğinde geçiş %100 otomatik ve anında gerçekleşir.

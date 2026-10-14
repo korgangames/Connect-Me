@@ -902,28 +902,6 @@ public partial class MainWindow : Window
             Canvas.SetLeft(peerBorder, peer.CanvasX);
             Canvas.SetTop(peerBorder, peer.CanvasY);
             DisplayArrangementCanvas.Children.Add(peerBorder);
-
-            if (isCursorHere)
-            {
-                double normX = Math.Clamp(peer.RemoteCursorX / (double)Math.Max(1, peer.ScreenWidth), 0.05, 0.95);
-                double normY = Math.Clamp(peer.RemoteCursorY / (double)Math.Max(1, peer.ScreenHeight), 0.05, 0.95);
-                double dotX = peer.CanvasX + normX * boxW;
-                double dotY = peer.CanvasY + normY * boxH;
-
-                var cursorDot = new System.Windows.Shapes.Ellipse
-                {
-                    Width = 10,
-                    Height = 10,
-                    Fill = new SolidColorBrush(Color.FromRgb(34, 197, 94)),
-                    Stroke = Brushes.White,
-                    StrokeThickness = 1.5,
-                    IsHitTestVisible = false,
-                    ToolTip = $"İmleç Konumu: ({peer.RemoteCursorX}, {peer.RemoteCursorY})"
-                };
-                Canvas.SetLeft(cursorDot, dotX - 5);
-                Canvas.SetTop(cursorDot, dotY - 5);
-                DisplayArrangementCanvas.Children.Add(cursorDot);
-            }
         }
     }
 
@@ -1611,37 +1589,7 @@ public partial class MainWindow : Window
     // Active Focus, Lock & Peer Selection
     // =========================================================================
 
-    private System.Windows.Threading.DispatcherTimer? _cursorTrackingTimer;
-
-    private void StartCursorTrackingTimer()
-    {
-        if (_cursorTrackingTimer == null)
-        {
-            _cursorTrackingTimer = new System.Windows.Threading.DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(70)
-            };
-            _cursorTrackingTimer.Tick += (s, e) =>
-            {
-                var active = _inputEngine.ActiveRemotePeer;
-                if (active != null)
-                {
-                    ActiveFocusText.Text = $"{GetPlatformIcon(active.Platform)} Kontrol: {active.DeviceName} ({active.RemoteCursorX}, {active.RemoteCursorY})";
-                    RedrawDisplayArrangementCanvas();
-                }
-                else
-                {
-                    StopCursorTrackingTimer();
-                }
-            };
-        }
-        _cursorTrackingTimer.Start();
-    }
-
-    private void StopCursorTrackingTimer()
-    {
-        _cursorTrackingTimer?.Stop();
-    }
+    private void StopCursorTrackingTimer() { }
 
     private void OnActiveTargetChanged(PeerDeviceNode? activePeer, ScreenEdge edge, float normalizedPos)
     {
@@ -1652,13 +1600,11 @@ public partial class MainWindow : Window
                 ActiveFocusBadge.Background = new SolidColorBrush(Color.FromRgb(30, 58, 138));
                 ActiveFocusBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
                 ActiveFocusText.Foreground = new SolidColorBrush(Color.FromRgb(125, 211, 252));
-                ActiveFocusText.Text = $"{GetPlatformIcon(activePeer.Platform)} Kontrol: {activePeer.DeviceName} ({activePeer.RemoteCursorX}, {activePeer.RemoteCursorY})";
+                ActiveFocusText.Text = $"{GetPlatformIcon(activePeer.Platform)} Kontrol: {activePeer.DeviceName}";
                 AppendLog($"[Kenar Geçişi] ➡️ İmleç ve klavye '{activePeer.DeviceName}' ekranına geçti.");
-                StartCursorTrackingTimer();
             }
             else
             {
-                StopCursorTrackingTimer();
                 ActiveFocusBadge.Background = new SolidColorBrush(Color.FromRgb(30, 58, 47));
                 ActiveFocusBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
                 ActiveFocusText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));

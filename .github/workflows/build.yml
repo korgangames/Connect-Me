@@ -168,7 +168,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.get_ver.outputs.version }}
-          name: "Connect Me v${{ steps.get_ver.outputs.version }} — Linux Otomatik Kenar Geçişi & Kesintisiz Donanım KVM"
+          name: "Connect Me v${{ steps.get_ver.outputs.version }} — İmleç Sembolü Temizliği & Performans İyileştirmeleri"
           body_path: docs/RELEASE_NOTES.md
           draft: false
           prerelease: false
