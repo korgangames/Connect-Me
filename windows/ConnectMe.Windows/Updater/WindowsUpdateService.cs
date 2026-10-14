@@ -28,6 +28,9 @@ public static class WindowsUpdateService
     private const string GITHUB_LATEST_RELEASE_URL =
         "https://api.github.com/repos/korgangames/Connect-Me/releases/latest";
 
+    private const string GITHUB_WEB_LATEST_URL =
+        "https://github.com/korgangames/Connect-Me/releases/latest";
+
     private static readonly HttpClient _http = new()
     {
         Timeout = TimeSpan.FromSeconds(30)
@@ -35,7 +38,7 @@ public static class WindowsUpdateService
 
     static WindowsUpdateService()
     {
-        string ver = typeof(WindowsUpdateService).Assembly.GetName().Version?.ToString(3) ?? "1.7.7";
+        string ver = typeof(WindowsUpdateService).Assembly.GetName().Version?.ToString(3) ?? "1.8.4";
         _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ConnectMe-Windows", ver));
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
     }
@@ -44,69 +47,87 @@ public static class WindowsUpdateService
     {
         try
         {
+            string tag = "";
+            string title = "";
+            string body = "";
+            string downloadUrl = "";
+            string zipName = "";
+            long size = 0;
+
             using var resp = await _http.GetAsync(GITHUB_LATEST_RELEASE_URL, ct);
-            if (!resp.IsSuccessStatusCode)
+            if (resp.IsSuccessStatusCode)
             {
-                int code = (int)resp.StatusCode;
-                string hint = code == 404
-                    ? "GitHub 404 Not Found döndürdü. Depo (korgangames/Connect-Me) Private (Gizli) ayarlanmış olabilir. Güncellemelerin cihazlar tarafından görülebilmesi için deponun 'Public' (Açık) olması gerekir."
-                    : $"GitHub API HTTP {code} ({resp.ReasonPhrase}) hatası döndürdü.";
-                return new UpdateCheckResult(false, false, null, hint);
+                var jsonStream = await resp.Content.ReadAsStreamAsync(ct);
+                using var doc = await JsonDocument.ParseAsync(jsonStream, cancellationToken: ct);
+                var root = doc.RootElement;
+
+                tag = root.GetProperty("tag_name").GetString() ?? "";
+                title = root.TryGetProperty("name", out var tProp) ? (tProp.GetString() ?? tag) : tag;
+                body = root.TryGetProperty("body", out var bProp) ? (bProp.GetString() ?? "") : "";
+
+                if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+                {
+                    string fallbackUrl = "";
+                    string fallbackName = "";
+                    long fallbackSize = 0;
+                    string cleanTag = tag.TrimStart('v', 'V');
+
+                    foreach (var asset in assets.EnumerateArray())
+                    {
+                        string name = asset.GetProperty("name").GetString() ?? "";
+                        if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (name.Contains(cleanTag, StringComparison.OrdinalIgnoreCase) || name.Contains(tag, StringComparison.OrdinalIgnoreCase))
+                            {
+                                downloadUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
+                                zipName = name;
+                                size = asset.TryGetProperty("size", out var sProp) ? sProp.GetInt64() : 0;
+                                break;
+                            }
+                            else if (string.IsNullOrEmpty(fallbackUrl))
+                            {
+                                fallbackUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
+                                fallbackName = name;
+                                fallbackSize = asset.TryGetProperty("size", out var sProp) ? sProp.GetInt64() : 0;
+                            }
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(downloadUrl) && !string.IsNullOrEmpty(fallbackUrl))
+                    {
+                        downloadUrl = fallbackUrl;
+                        zipName = fallbackName;
+                        size = fallbackSize;
+                    }
+                }
             }
-
-            var jsonStream = await resp.Content.ReadAsStreamAsync(ct);
-            using var doc = await JsonDocument.ParseAsync(jsonStream, cancellationToken: ct);
-            var root = doc.RootElement;
-
-            string tag = root.GetProperty("tag_name").GetString() ?? "";
-            string title = root.TryGetProperty("name", out var tProp) ? (tProp.GetString() ?? tag) : tag;
-            string body = root.TryGetProperty("body", out var bProp) ? (bProp.GetString() ?? "") : "";
+            else
+            {
+                // Fallback: Check GitHub web redirect (bypasses GitHub API rate limits e.g. 403 Forbidden)
+                string? webTag = await GetLatestTagFromWebRedirectAsync(ct);
+                if (!string.IsNullOrEmpty(webTag))
+                {
+                    tag = webTag;
+                    title = $"Connect Me {tag}";
+                    string cleanTag = tag.TrimStart('v', 'V');
+                    zipName = $"ConnectMe-Windows-x64-v{cleanTag}.zip";
+                    downloadUrl = $"https://github.com/korgangames/Connect-Me/releases/download/{tag}/ConnectMe-Windows-x64.zip";
+                }
+                else
+                {
+                    int code = (int)resp.StatusCode;
+                    string hint = code == 404
+                        ? "GitHub 404 Not Found döndürdü. Depo (korgangames/Connect-Me) Private (Gizli) ayarlanmış olabilir. Güncellemelerin cihazlar tarafından görülebilmesi için deponun 'Public' (Açık) olması gerekir."
+                        : $"GitHub API HTTP {code} ({resp.ReasonPhrase}) hatası döndürdü.";
+                    return new UpdateCheckResult(false, false, null, hint);
+                }
+            }
 
             if (string.IsNullOrWhiteSpace(tag))
                 return new UpdateCheckResult(false, false, null, "Sürüm etiketi (tag_name) bulunamadı.");
 
             if (!IsNewerVersion(tag, currentVersion))
                 return new UpdateCheckResult(true, false, null, null);
-
-            string downloadUrl = "";
-            string zipName = $"ConnectMe-Windows-x64{tag}.zip";
-            long size = 0;
-
-            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
-            {
-                string fallbackUrl = "";
-                string fallbackName = "";
-                long fallbackSize = 0;
-                string cleanTag = tag.TrimStart('v', 'V');
-
-                foreach (var asset in assets.EnumerateArray())
-                {
-                    string name = asset.GetProperty("name").GetString() ?? "";
-                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (name.Contains(cleanTag, StringComparison.OrdinalIgnoreCase) || name.Contains(tag, StringComparison.OrdinalIgnoreCase))
-                        {
-                            downloadUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
-                            zipName = name;
-                            size = asset.TryGetProperty("size", out var sProp) ? sProp.GetInt64() : 0;
-                            break;
-                        }
-                        else if (string.IsNullOrEmpty(fallbackUrl))
-                        {
-                            fallbackUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
-                            fallbackName = name;
-                            fallbackSize = asset.TryGetProperty("size", out var sProp) ? sProp.GetInt64() : 0;
-                        }
-                    }
-                }
-
-                if (string.IsNullOrEmpty(downloadUrl) && !string.IsNullOrEmpty(fallbackUrl))
-                {
-                    downloadUrl = fallbackUrl;
-                    zipName = fallbackName;
-                    size = fallbackSize;
-                }
-            }
 
             if (string.IsNullOrWhiteSpace(downloadUrl))
                 return new UpdateCheckResult(false, false, null, $"Yeni sürüm ({tag}) bulundu ancak Windows uyumlu .zip paketi yer almıyor.");
@@ -118,6 +139,28 @@ public static class WindowsUpdateService
         {
             return new UpdateCheckResult(false, false, null, $"Güncelleme sunucusuna erişilemedi: {ex.Message}");
         }
+    }
+
+    private static async Task<string?> GetLatestTagFromWebRedirectAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var handler = new HttpClientHandler { AllowAutoRedirect = false };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+            using var req = new HttpRequestMessage(HttpMethod.Head, GITHUB_WEB_LATEST_URL);
+            using var resp = await client.SendAsync(req, ct);
+            if (resp.Headers.Location != null)
+            {
+                string loc = resp.Headers.Location.ToString();
+                int idx = loc.LastIndexOf('/');
+                if (idx >= 0 && idx < loc.Length - 1)
+                {
+                    return loc[(idx + 1)..].Trim();
+                }
+            }
+        }
+        catch { }
+        return null;
     }
 
     public static async Task DownloadAndApplyUpdateAsync(
@@ -181,23 +224,40 @@ public static class WindowsUpdateService
             throw new InvalidOperationException("Mevcut uygulamanın konumu belirlenemedi.");
         }
 
-        // Güncelleme komut betiği (.cmd)
+        // Güncelleme komut betiği (.cmd) - Ping ile bekleme ve kilit kalkana kadar döngü
         string cmdPath = Path.Combine(tempDir, "apply_update.cmd");
         string cmdContent = $@"@echo off
-timeout /t 2 /nobreak >nul
-copy /y ""{newExe}"" ""{currentExe}"" >nul
-start """" ""{currentExe}""
-del ""{cmdPath}""
+setlocal
+set ""SRC={newExe}""
+set ""DST={currentExe}""
+set /a ATTEMPTS=0
+
+:retry
+set /a ATTEMPTS+=1
+if %ATTEMPTS% gtr 40 goto fail
+
+ping 127.0.0.1 -n 2 >nul
+copy /y ""%SRC%"" ""%DST%"" >nul 2>&1
+if errorlevel 1 goto retry
+
+start """" ""%DST%""
+goto cleanup
+
+:fail
+start """" ""%DST%""
+
+:cleanup
+del /f /q ""%~f0"" >nul 2>&1
 ";
         await File.WriteAllTextAsync(cmdPath, cmdContent, ct);
 
-        // Arka planda çalıştır ve uygulamayı kapat
+        // Arka planda bağımsız kabuk olarak çalıştır ve uygulamayı kapat
         Process.Start(new ProcessStartInfo
         {
             FileName = "cmd.exe",
             Arguments = $"/c \"{cmdPath}\"",
             CreateNoWindow = true,
-            UseShellExecute = false
+            UseShellExecute = true
         });
 
         Environment.Exit(0);

@@ -757,8 +757,15 @@ public static class Program
             await nodeA.AcceptInboundPairingAsync(peerCOnA, rememberDevice: false);
         }
 
-        // Wait briefly for COLONY_INTRODUCE and sync propagation
-        await Task.Delay(300);
+        // Wait for COLONY_INTRODUCE and sync propagation
+        for (int i = 0; i < 20; i++)
+        {
+            var pBOnC = nodeC.DiscoveredPeers.FirstOrDefault(p => p.DeviceId == "win-pc-B");
+            var pCOnB = nodeB.DiscoveredPeers.FirstOrDefault(p => p.DeviceId == "win-pc-C");
+            if (peerAOnC.IsMutuallyPaired && pBOnC?.IsMutuallyPaired == true && pCOnB?.IsMutuallyPaired == true)
+                break;
+            await Task.Delay(100);
+        }
 
         AssertTrue(peerAOnC.IsMutuallyPaired, "Koloni Ağı: Node C ve Node A karşılıklı eşleşti");
 

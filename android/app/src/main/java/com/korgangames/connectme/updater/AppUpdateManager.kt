@@ -38,6 +38,30 @@ object AppUpdateManager {
         val fileSize: Long
     )
 
+    private const val GITHUB_WEB_LATEST_URL =
+        "https://github.com/korgangames/Connect-Me/releases/latest"
+
+    private fun getLatestTagFromWebRedirect(): String? {
+        return try {
+            val url = URL(GITHUB_WEB_LATEST_URL)
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                requestMethod = "HEAD"
+                connectTimeout = 6000
+                readTimeout = 6000
+                setRequestProperty("User-Agent", "Mozilla/5.0")
+            }
+            val loc = conn.getHeaderField("Location")
+            conn.disconnect()
+            if (!loc.isNullOrBlank()) {
+                val tag = loc.substringAfterLast("/").trim()
+                if (tag.isNotEmpty()) tag else null
+            } else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /**
      * GitHub Releases API üzerinden en son yayınlanan sürümü denetler.
      */
@@ -48,6 +72,13 @@ object AppUpdateManager {
     ) {
         thread(isDaemon = true, name = "ConnectMe-UpdateChecker") {
             try {
+                var remoteTag = ""
+                var releaseTitle = ""
+                var releaseNotes = ""
+                var downloadUrl = ""
+                var apkFileName = ""
+                var fileSize = 0L
+
                 val url = URL(GITHUB_LATEST_RELEASE_URL)
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
@@ -58,23 +89,66 @@ object AppUpdateManager {
                 }
 
                 val code = conn.responseCode
-                if (code != HttpURLConnection.HTTP_OK) {
-                    val msg = if (code == 404) {
-                        "GitHub 404 Not Found (Depo 'Private' olabilir, güncelleme için 'Public' olmalıdır)."
-                    } else {
-                        "GitHub HTTP $code hatası döndürdü."
+                if (code == HttpURLConnection.HTTP_OK) {
+                    val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
+                    conn.disconnect()
+
+                    val json = JSONObject(jsonStr)
+                    remoteTag = json.optString("tag_name", "").trim()
+                    releaseTitle = json.optString("name", remoteTag)
+                    releaseNotes = json.optString("body", "")
+
+                    val assets = json.optJSONArray("assets")
+                    if (assets != null) {
+                        val cleanTag = remoteTag.removePrefix("v").removePrefix("V")
+                        var fallbackUrl = ""
+                        var fallbackName = ""
+                        var fallbackSize = 0L
+
+                        for (i in 0 until assets.length()) {
+                            val asset = assets.getJSONObject(i)
+                            val name = asset.optString("name", "")
+                            if (name.endsWith(".apk", ignoreCase = true)) {
+                                if (name.contains(cleanTag, ignoreCase = true) || name.contains(remoteTag, ignoreCase = true)) {
+                                    downloadUrl = asset.optString("browser_download_url", "")
+                                    apkFileName = name
+                                    fileSize = asset.optLong("size", 0L)
+                                    break
+                                } else if (fallbackUrl.isEmpty()) {
+                                    fallbackUrl = asset.optString("browser_download_url", "")
+                                    fallbackName = name
+                                    fallbackSize = asset.optLong("size", 0L)
+                                }
+                            }
+                        }
+                        if (downloadUrl.isEmpty() && fallbackUrl.isNotEmpty()) {
+                            downloadUrl = fallbackUrl
+                            apkFileName = fallbackName
+                            fileSize = fallbackSize
+                        }
                     }
-                    mainHandler.post { onResult(null, msg) }
-                    return@thread
+                } else {
+                    conn.disconnect()
+                    // Fallback: Check GitHub web redirect (bypasses GitHub API rate limits / 403 Forbidden)
+                    val webTag = getLatestTagFromWebRedirect()
+                    if (webTag != null) {
+                        remoteTag = webTag
+                        releaseTitle = "Connect Me $remoteTag"
+                        releaseNotes = "Connect Me yeni sürüm ($remoteTag) yayınlandı."
+                        val cleanTag = remoteTag.removePrefix("v").removePrefix("V")
+                        apkFileName = "ConnectMe-v$cleanTag.apk"
+                        downloadUrl = "https://github.com/korgangames/Connect-Me/releases/download/$remoteTag/ConnectMe-Android.apk"
+                        fileSize = 4600000L
+                    } else {
+                        val msg = if (code == 404) {
+                            "GitHub 404 Not Found (Depo 'Private' olabilir, güncelleme için 'Public' olmalıdır)."
+                        } else {
+                            "GitHub HTTP $code hatası döndürdü."
+                        }
+                        mainHandler.post { onResult(null, msg) }
+                        return@thread
+                    }
                 }
-
-                val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
-                conn.disconnect()
-
-                val json = JSONObject(jsonStr)
-                val remoteTag = json.optString("tag_name", "").trim()
-                val releaseTitle = json.optString("name", remoteTag)
-                val releaseNotes = json.optString("body", "")
 
                 if (remoteTag.isEmpty()) {
                     mainHandler.post { onResult(null, "Sürüm etiketi bulunamadı.") }
@@ -84,40 +158,6 @@ object AppUpdateManager {
                 if (!isNewerVersion(remoteTag, currentVersionName)) {
                     mainHandler.post { onResult(null, null) } // Güncel
                     return@thread
-                }
-
-                val assets = json.optJSONArray("assets")
-                var downloadUrl = ""
-                var apkFileName = "ConnectMe-$remoteTag.apk"
-                var fileSize = 0L
-
-                if (assets != null) {
-                    val cleanTag = remoteTag.removePrefix("v").removePrefix("V")
-                    var fallbackUrl = ""
-                    var fallbackName = ""
-                    var fallbackSize = 0L
-
-                    for (i in 0 until assets.length()) {
-                        val asset = assets.getJSONObject(i)
-                        val name = asset.optString("name", "")
-                        if (name.endsWith(".apk", ignoreCase = true)) {
-                            if (name.contains(cleanTag, ignoreCase = true) || name.contains(remoteTag, ignoreCase = true)) {
-                                downloadUrl = asset.optString("browser_download_url", "")
-                                apkFileName = name
-                                fileSize = asset.optLong("size", 0L)
-                                break
-                            } else if (fallbackUrl.isEmpty()) {
-                                fallbackUrl = asset.optString("browser_download_url", "")
-                                fallbackName = name
-                                fallbackSize = asset.optLong("size", 0L)
-                            }
-                        }
-                    }
-                    if (downloadUrl.isEmpty() && fallbackUrl.isNotEmpty()) {
-                        downloadUrl = fallbackUrl
-                        apkFileName = fallbackName
-                        fileSize = fallbackSize
-                    }
                 }
 
                 if (downloadUrl.isEmpty()) {
@@ -137,7 +177,23 @@ object AppUpdateManager {
                 mainHandler.post { onResult(updateInfo, null) }
             } catch (e: Exception) {
                 e.printStackTrace()
-                mainHandler.post { onResult(null, "Bağlantı hatası: ${e.message}") }
+                // Last-ditch fallback on exception
+                val webTag = getLatestTagFromWebRedirect()
+                if (webTag != null && isNewerVersion(webTag, currentVersionName)) {
+                    val cleanTag = webTag.removePrefix("v").removePrefix("V")
+                    val updateInfo = UpdateInfo(
+                        versionName = webTag,
+                        releaseTitle = "Connect Me $webTag",
+                        releaseNotes = "Connect Me yeni sürüm ($webTag) yayınlandı.",
+                        downloadUrl = "https://github.com/korgangames/Connect-Me/releases/download/$webTag/ConnectMe-Android.apk",
+                        apkFileName = "ConnectMe-v$cleanTag.apk",
+                        fileSize = 4600000L
+                    )
+                    mainHandler.post { onResult(updateInfo, null) }
+                } else {
+                    mainHandler.post { onResult(null, "Bağlantı hatası: ${e.message}") }
+                }
+            }
             }
         }
     }

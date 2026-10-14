@@ -53,9 +53,19 @@ public partial class MainWindow : Window
         Closed += MainWindow_Closed;
     }
 
+    private static string GetAppVersion()
+    {
+        string ver = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.8.4";
+        if (File.Exists("VERSION"))
+        {
+            try { ver = File.ReadAllText("VERSION").Trim(); } catch { }
+        }
+        return ver;
+    }
+
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        string currentVer = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.7.7";
+        string currentVer = GetAppVersion();
         Title = $"Connect Me v{currentVer} — Çoklu Cihaz Ekran Konfigürasyonu, Çift Taraflı PIN & Ortak Cep (Korgan Games)";
 
         _network.LogMessage += AppendLog;
@@ -2403,7 +2413,7 @@ public partial class MainWindow : Window
 
     private async Task CheckForUpdatesAsync(bool isManual)
     {
-        string currentVer = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.7.7";
+        string currentVer = GetAppVersion();
         if (isManual)
         {
             AppendLog("🔍 [Güncelleme] GitHub Releases üzerinden yeni sürüm denetleniyor...");

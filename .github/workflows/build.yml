@@ -36,7 +36,7 @@ jobs:
       - name: Publish Windows App (Self-Contained Standalone GUI)
         run: |
           $ver = (Get-Content VERSION).Trim()
-          dotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/windows
+          dotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$ver -p:AssemblyVersion=$ver -p:FileVersion=$ver -p:InformationalVersion="v$ver" -o publish/windows
           Move-Item publish/windows/ConnectMe.Windows.exe publish/windows/ConnectMe.exe
           New-Item -ItemType Directory -Force -Path publish/dist
           Compress-Archive -Path publish/windows/ConnectMe.exe -DestinationPath "publish/dist/ConnectMe-Windows-x64-v$ver.zip"
