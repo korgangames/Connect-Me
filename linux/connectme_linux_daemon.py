@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.7.4"
+VERSION = "1.7.5"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -537,6 +537,19 @@ class LinuxInputInjector:
             self.mode = "xdotool"
             return
 
+        # Tier 5: Fallback to pynput
+        try:
+            from pynput.mouse import Controller as MouseController
+            from pynput.keyboard import Controller as KbdController
+            self.pynput_mouse = MouseController()
+            self.pynput_kbd = KbdController()
+            self.mode = "pynput"
+            return
+        except Exception:
+            pass
+
+        self.mode = "none"
+
     def _init_raw_uinput(self) -> None:
         try:
             import fcntl
@@ -607,6 +620,11 @@ class LinuxInputInjector:
             subprocess.run(["ydotool", "mousemove", "-x", str(dx), "-y", str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.mode == "xdotool":
             subprocess.run(["xdotool", "mousemove_relative", "--", str(dx), str(dy)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif self.mode == "pynput" and hasattr(self, "pynput_mouse") and self.pynput_mouse:
+            try:
+                self.pynput_mouse.move(dx, dy)
+            except Exception:
+                pass
 
     def mouse_button(self, btn: int, is_pressed: bool) -> None:
         # btn: 1=Left, 2=Right, 3=Middle
@@ -627,6 +645,16 @@ class LinuxInputInjector:
         elif self.mode == "xdotool":
             subcmd = "mousedown" if is_pressed else "mouseup"
             subprocess.run(["xdotool", subcmd, str(btn)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif self.mode == "pynput" and hasattr(self, "pynput_mouse") and self.pynput_mouse:
+            try:
+                from pynput.mouse import Button
+                btn_obj = Button.left if btn == BUTTON_LEFT else (Button.right if btn == BUTTON_RIGHT else Button.middle)
+                if is_pressed:
+                    self.pynput_mouse.press(btn_obj)
+                else:
+                    self.pynput_mouse.release(btn_obj)
+            except Exception:
+                pass
 
     def mouse_scroll(self, sx: int, sy: int) -> None:
         dev = self.evdev_mouse or self.evdev_device
@@ -649,6 +677,11 @@ class LinuxInputInjector:
         elif self.mode == "ydotool":
             wheel_arg = f"-w{sy}"
             subprocess.run(["ydotool", "mousemove", wheel_arg], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif self.mode == "pynput" and hasattr(self, "pynput_mouse") and self.pynput_mouse:
+            try:
+                self.pynput_mouse.scroll(sx, sy)
+            except Exception:
+                pass
 
     def _vk_to_evdev_code(self, vk: int) -> Optional[int]:
         try:
@@ -750,12 +783,24 @@ class ConnectMeLinuxNode:
         self.trust_file.parent.mkdir(parents=True, exist_ok=True)
         self.trusted_devices: Dict[str, dict] = self._load_trusted_devices()
 
+        self.topology_file = Path.home() / ".config" / "connectme" / "peer_topology.json"
+        self.topology_file.parent.mkdir(parents=True, exist_ok=True)
+        self.peer_arrangements: Dict[str, dict] = self._load_peer_arrangements()
+
         self.peers: Dict[str, dict] = {}
         self.active_remote_peer: Optional[dict] = None
         self.entry_edge: int = EDGE_NONE
         self.cursor_x: float = 0.0
         self.cursor_y: float = 0.0
         self.return_edge_push_accum: float = 0.0
+
+        # Host Control State (When Linux is host controlling Android or Windows)
+        self.controlling_remote_peer: Optional[dict] = None
+        self.controlling_exit_edge: int = EDGE_NONE
+        self.on_host_control_switched: Optional[Callable[[dict, int, float], None]] = None
+        self.on_host_control_returned: Optional[Callable[[], None]] = None
+        self._host_seq: int = 0
+        self._host_udp_sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         # UI & Telemetry Callbacks
         self.on_log = on_log
@@ -818,6 +863,175 @@ class ConnectMeLinuxNode:
         try:
             with open(self.trust_file, "w", encoding="utf-8") as f:
                 json.dump(list(self.trusted_devices.values()), f, indent=2)
+        except Exception:
+            pass
+
+    def _load_peer_arrangements(self) -> Dict[str, dict]:
+        if not self.topology_file.exists():
+            return {}
+        try:
+            with open(self.topology_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_peer_arrangements(self) -> None:
+        try:
+            with open(self.topology_file, "w", encoding="utf-8") as f:
+                json.dump(self.peer_arrangements, f, indent=2)
+        except Exception:
+            pass
+
+    def get_peer_arrangement(self, device_id: str) -> dict:
+        return self.peer_arrangements.get(device_id, {
+            "assignedEdge": EDGE_RIGHT,
+            "edgeOffset": 0.5,
+            "canvasX": None,
+            "canvasY": None
+        })
+
+    def set_peer_arrangement(self, device_id: str, edge: int, edge_offset: float = 0.5, canvas_x: Optional[float] = None, canvas_y: Optional[float] = None) -> None:
+        rec = self.peer_arrangements.setdefault(device_id, {})
+        rec["assignedEdge"] = edge
+        rec["edgeOffset"] = edge_offset
+        if canvas_x is not None:
+            rec["canvasX"] = canvas_x
+        if canvas_y is not None:
+            rec["canvasY"] = canvas_y
+        self._save_peer_arrangements()
+        if device_id in self.peers:
+            self.peers[device_id]["assignedEdge"] = edge
+            self.peers[device_id]["edgeOffset"] = edge_offset
+            if canvas_x is not None:
+                self.peers[device_id]["canvasX"] = canvas_x
+                self.peers[device_id]["canvasY"] = canvas_y
+        edge_name = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}.get(edge, "Kenar")
+        self.log(f"[Ekran Düzeni] '{device_id}' {edge_name} kenara yerleştirildi.")
+        if self.on_peer_updated and device_id in self.peers:
+            try:
+                self.on_peer_updated(self.peers[device_id])
+            except Exception:
+                pass
+
+    def switch_control_to_peer(self, peer: dict, local_exit_edge: int = EDGE_NONE, norm_pos: float = 0.5) -> bool:
+        """Switches mouse/keyboard control from Linux host to remote peer (Android or Windows)."""
+        if not peer:
+            return False
+        remote_ip = peer.get("ipAddress")
+        if not remote_ip:
+            return False
+
+        assigned_edge = peer.get("assignedEdge", EDGE_RIGHT)
+        if local_exit_edge == EDGE_NONE:
+            local_exit_edge = assigned_edge
+
+        target_entrance_edge = {
+            EDGE_LEFT: EDGE_RIGHT,
+            EDGE_RIGHT: EDGE_LEFT,
+            EDGE_TOP: EDGE_BOTTOM,
+            EDGE_BOTTOM: EDGE_TOP
+        }.get(local_exit_edge, EDGE_LEFT)
+
+        self.controlling_remote_peer = peer
+        self.controlling_exit_edge = local_exit_edge
+
+        # Send Fast UDP EDGE_HANDOFF packet
+        self.send_edge_handoff(peer, target_entrance_edge, norm_pos)
+
+        peer_name = peer.get("deviceName", remote_ip)
+        self.log(f"[Host Modu] 🚀 Fare ve klavye kontrolü '{peer_name}' cihazına aktarıldı (Çıkış: {local_exit_edge}, Giriş: {target_entrance_edge}).")
+
+        if self.on_host_control_switched:
+            try:
+                self.on_host_control_switched(peer, local_exit_edge, norm_pos)
+            except Exception:
+                pass
+        return True
+
+    def return_host_control_to_local(self, notify_peer: bool = True) -> None:
+        """Returns mouse/keyboard control back from remote peer to Linux host."""
+        peer = self.controlling_remote_peer
+        if not peer:
+            return
+        self.controlling_remote_peer = None
+        peer_name = peer.get("deviceName", "Cihaz")
+        remote_ip = peer.get("ipAddress")
+
+        if notify_peer and remote_ip:
+            try:
+                return_edge = {
+                    EDGE_LEFT: EDGE_RIGHT,
+                    EDGE_RIGHT: EDGE_LEFT,
+                    EDGE_TOP: EDGE_BOTTOM,
+                    EDGE_BOTTOM: EDGE_TOP
+                }.get(self.controlling_exit_edge, EDGE_LEFT)
+                t_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                t_sock.settimeout(1.5)
+                t_sock.connect((remote_ip, peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+                self._send_tcp_frame(t_sock, {
+                    "type": "EDGE_RETURN",
+                    "senderId": self.device_id,
+                    "senderName": self.device_name,
+                    "returnEdge": return_edge,
+                    "normalizedPosition": 0.5
+                })
+                t_sock.close()
+            except Exception:
+                pass
+
+        self.log(f"[Host Modu] ⬅️ '{peer_name}' cihazından yerel Linux masaüstüne dönüş yapıldı.")
+        if self.on_host_control_returned:
+            try:
+                self.on_host_control_returned()
+            except Exception:
+                pass
+
+    def send_edge_handoff(self, peer: dict, target_entrance_edge: int, normalized_pos: float = 0.5, is_dragging: bool = False) -> None:
+        try:
+            remote_ip = peer.get("ipAddress")
+            udp_port = peer.get("udpInputPort", FAST_INPUT_UDP_PORT)
+            norm_clamped = max(0.0, min(1.0, float(normalized_pos)))
+            pkt = struct.pack("<BBBBBBf", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_EDGE_HANDOFF, target_entrance_edge, 1 if is_dragging else 0, norm_clamped)
+            self._host_udp_sock.sendto(pkt, (remote_ip, udp_port))
+        except Exception as e:
+            self.log(f"[Host Uyarı] send_edge_handoff hatası: {e}")
+
+    def send_mouse_move(self, peer: dict, dx: int, dy: int) -> None:
+        try:
+            remote_ip = peer.get("ipAddress")
+            udp_port = peer.get("udpInputPort", FAST_INPUT_UDP_PORT)
+            self._host_seq = (self._host_seq + 1) & 0xFFFF
+            dx_s = max(-32768, min(32767, int(dx)))
+            dy_s = max(-32768, min(32767, int(dy)))
+            pkt = struct.pack("<BBBBHhh", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_MOUSE_MOVE, self._host_seq, dx_s, dy_s)
+            self._host_udp_sock.sendto(pkt, (remote_ip, udp_port))
+        except Exception:
+            pass
+
+    def send_mouse_button(self, peer: dict, btn: int, is_pressed: bool) -> None:
+        try:
+            remote_ip = peer.get("ipAddress")
+            udp_port = peer.get("udpInputPort", FAST_INPUT_UDP_PORT)
+            pkt = struct.pack("<BBBBBB", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_MOUSE_BUTTON, btn, 1 if is_pressed else 0)
+            self._host_udp_sock.sendto(pkt, (remote_ip, udp_port))
+        except Exception:
+            pass
+
+    def send_mouse_scroll(self, peer: dict, sx: int, sy: int) -> None:
+        try:
+            remote_ip = peer.get("ipAddress")
+            udp_port = peer.get("udpInputPort", FAST_INPUT_UDP_PORT)
+            pkt = struct.pack("<BBBBhh", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_MOUSE_SCROLL, max(-32768, min(32767, int(sx))), max(-32768, min(32767, int(sy))))
+            self._host_udp_sock.sendto(pkt, (remote_ip, udp_port))
+        except Exception:
+            pass
+
+    def send_key_event(self, peer: dict, vk: int, sc: int, is_pressed: bool, mods: int = 0, char_code: int = 0) -> None:
+        try:
+            remote_ip = peer.get("ipAddress")
+            udp_port = peer.get("udpInputPort", FAST_INPUT_UDP_PORT)
+            pkt = struct.pack("<BBBBHHBBH", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_KEY_EVENT, vk & 0xFFFF, sc & 0xFFFF, 1 if is_pressed else 0, mods & 0xFF, char_code & 0xFFFF)
+            self._host_udp_sock.sendto(pkt, (remote_ip, udp_port))
         except Exception:
             pass
 
@@ -1079,6 +1293,14 @@ class ConnectMeLinuxNode:
                 peer["screenWidth"] = payload.get("screenWidth", peer.get("screenWidth", 1920))
                 peer["screenHeight"] = payload.get("screenHeight", peer.get("screenHeight", 1080))
                 peer["lastSeen"] = time.time()
+
+                arr = self.get_peer_arrangement(dev_id)
+                peer["assignedEdge"] = arr.get("assignedEdge", EDGE_RIGHT)
+                peer["edgeOffset"] = arr.get("edgeOffset", 0.5)
+                if arr.get("canvasX") is not None:
+                    peer["canvasX"] = arr.get("canvasX")
+                if arr.get("canvasY") is not None:
+                    peer["canvasY"] = arr.get("canvasY")
 
                 is_trusted = dev_id in self.trusted_devices
                 peer["is_trusted"] = is_trusted
@@ -1417,7 +1639,10 @@ class ConnectMeLinuxNode:
                 edge = header.get("returnEdge", 0)
                 norm_pos = float(header.get("normalizedPosition", 0.5))
                 self.log(f"[Kenar Dönüşü] '{header.get('senderName')}' ({remote_ip}) TCP sinyaliyle yerel masaüstüne dönüş yaptı.")
-                self.return_control_to_local(edge, norm_pos)
+                if self.controlling_remote_peer is not None:
+                    self.return_host_control_to_local(notify_peer=False)
+                else:
+                    self.return_control_to_local(edge, norm_pos)
 
             elif msg_type == "DISCONNECT":
                 sender_id = header.get("senderId", remote_ip)
@@ -1473,151 +1698,159 @@ class ConnectMeLinuxNode:
         min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
 
         while self.running:
-            data, addr = self.udp_sock.recvfrom(2048)
-            if len(data) < 4 or data[0] != MAGIC_0 or data[1] != MAGIC_1 or data[2] != PROTO_VER:
-                continue
+            try:
+                data, addr = self.udp_sock.recvfrom(2048)
+                if len(data) < 4 or data[0] != MAGIC_0 or data[1] != MAGIC_1 or data[2] != PROTO_VER:
+                    continue
 
-            pkt_type = data[3]
-            if pkt_type == PACKET_HEARTBEAT_PING and len(data) >= 12:
-                pong = bytearray(data[:12])
-                pong[3] = PACKET_HEARTBEAT_PONG
-                self.udp_sock.sendto(bytes(pong), addr)
+                pkt_type = data[3]
+                if pkt_type == PACKET_HEARTBEAT_PING and len(data) >= 12:
+                    pong = bytearray(data[:12])
+                    pong[3] = PACKET_HEARTBEAT_PONG
+                    self.udp_sock.sendto(bytes(pong), addr)
 
-            elif pkt_type == PACKET_EDGE_HANDOFF and len(data) >= 10:
-                edge, dragging, norm_pos = struct.unpack("<BBf", data[4:10])
-                min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
+                elif pkt_type == PACKET_EDGE_HANDOFF and len(data) >= 10:
+                    edge, dragging, norm_pos = struct.unpack("<BBf", data[4:10])
+                    if self.controlling_remote_peer is not None and (self.controlling_remote_peer.get("ipAddress") == addr[0] or self.controlling_remote_peer.get("deviceId") == addr[0]):
+                        self.log(f"[Kenar Dönüşü] '{self.controlling_remote_peer.get('deviceName')}' imleci Linux'a geri bıraktı.")
+                        self.return_host_control_to_local(notify_peer=False)
+                        continue
 
-                peer = None
-                for p in self.peers.values():
-                    if p.get("ipAddress") == addr[0]:
-                        peer = p
-                        break
-                if not peer:
-                    peer = {"deviceId": addr[0], "deviceName": addr[0], "ipAddress": addr[0], "udpInputPort": FAST_INPUT_UDP_PORT, "tcpControlPort": DATA_CONTROL_TCP_PORT}
+                    min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
 
-                self.active_remote_peer = peer
-                self.entry_edge = edge
+                    peer = None
+                    for p in self.peers.values():
+                        if p.get("ipAddress") == addr[0]:
+                            peer = p
+                            break
+                    if not peer:
+                        peer = {"deviceId": addr[0], "deviceName": addr[0], "ipAddress": addr[0], "udpInputPort": FAST_INPUT_UDP_PORT, "tcpControlPort": DATA_CONTROL_TCP_PORT}
 
-                # Calculate entrance coordinate on Linux (edge is targetEntranceEdge)
-                if edge == EDGE_LEFT:
-                    # Cursor entered through Linux's LEFT edge
-                    self.cursor_x = min_x + 12
-                    self.cursor_y = min_y + int(vh * norm_pos)
-                elif edge == EDGE_RIGHT:
-                    # Cursor entered through Linux's RIGHT edge
-                    self.cursor_x = min_x + vw - 12
-                    self.cursor_y = min_y + int(vh * norm_pos)
-                elif edge == EDGE_TOP:
-                    # Cursor entered through Linux's TOP edge
-                    self.cursor_x = min_x + int(vw * norm_pos)
-                    self.cursor_y = min_y + 12
-                elif edge == EDGE_BOTTOM:
-                    # Cursor entered through Linux's BOTTOM edge
-                    self.cursor_x = min_x + int(vw * norm_pos)
-                    self.cursor_y = min_y + vh - 12
-                else:
-                    self.cursor_x = min_x + int(vw * 0.5)
-                    self.cursor_y = min_y + int(vh * 0.5)
+                    self.active_remote_peer = peer
+                    self.entry_edge = edge
 
-                self.return_edge_push_accum = 0.0
+                    # Calculate entrance coordinate on Linux (edge is targetEntranceEdge)
+                    if edge == EDGE_LEFT:
+                        # Cursor entered through Linux's LEFT edge
+                        self.cursor_x = min_x + 12
+                        self.cursor_y = min_y + int(vh * norm_pos)
+                    elif edge == EDGE_RIGHT:
+                        # Cursor entered through Linux's RIGHT edge
+                        self.cursor_x = min_x + vw - 12
+                        self.cursor_y = min_y + int(vh * norm_pos)
+                    elif edge == EDGE_TOP:
+                        # Cursor entered through Linux's TOP edge
+                        self.cursor_x = min_x + int(vw * norm_pos)
+                        self.cursor_y = min_y + 12
+                    elif edge == EDGE_BOTTOM:
+                        # Cursor entered through Linux's BOTTOM edge
+                        self.cursor_x = min_x + int(vw * norm_pos)
+                        self.cursor_y = min_y + vh - 12
+                    else:
+                        self.cursor_x = min_x + int(vw * 0.5)
+                        self.cursor_y = min_y + int(vh * 0.5)
 
-                self.log(f"[Kenar Geçişi] ➡️ İmleç '{peer.get('deviceName')}' ekranından Linux'a geçti ({int(self.cursor_x)}, {int(self.cursor_y)}).")
-                # Nudge hardware cursor to wake up and display pointer immediately on Wayland
-                self.injector.move_relative(1, 0)
-                self.injector.move_relative(-1, 0)
-                if self.on_cursor_update:
-                    try:
-                        self.on_cursor_update(True, int(self.cursor_x), int(self.cursor_y))
-                    except Exception:
-                        pass
+                    self.return_edge_push_accum = 0.0
 
-            elif pkt_type == PACKET_MOUSE_MOVE and len(data) >= 10:
-                _, _, dx, dy = struct.unpack("<Hhh", data[4:10])
-                self.injector.move_relative(dx, dy)
-                self.cursor_x += dx
-                self.cursor_y += dy
+                    self.log(f"[Kenar Geçişi] ➡️ İmleç '{peer.get('deviceName')}' ekranından Linux'a geçti ({int(self.cursor_x)}, {int(self.cursor_y)}).")
+                    # Nudge hardware cursor to wake up and display pointer immediately on Wayland
+                    self.injector.move_relative(1, 0)
+                    self.injector.move_relative(-1, 0)
+                    if self.on_cursor_update:
+                        try:
+                            self.on_cursor_update(True, int(self.cursor_x), int(self.cursor_y))
+                        except Exception:
+                            pass
 
-                min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
+                elif pkt_type == PACKET_MOUSE_MOVE and len(data) >= 10:
+                    seq, dx, dy = struct.unpack("<Hhh", data[4:10])
+                    self.injector.move_relative(dx, dy)
+                    self.cursor_x += dx
+                    self.cursor_y += dy
 
-                if self.on_cursor_update:
-                    try:
-                        self.on_cursor_update(True, int(self.cursor_x), int(self.cursor_y))
-                    except Exception:
-                        pass
+                    min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
 
-                # Check if cursor hits boundary to return to Windows/remote with push resistance
-                if self.active_remote_peer is not None:
-                    return_triggered = False
-                    ret_edge = EDGE_NONE
-                    ret_norm = 0.5
+                    if self.on_cursor_update:
+                        try:
+                            self.on_cursor_update(True, int(self.cursor_x), int(self.cursor_y))
+                        except Exception:
+                            pass
 
-                    # If cursor entered through LEFT edge, pushing against LEFT edge returns to remote's RIGHT edge
-                    if self.entry_edge == EDGE_LEFT:
-                        if self.cursor_x <= min_x and dx < 0:
-                            self.return_edge_push_accum += abs(dx)
-                            if self.return_edge_push_accum >= 8.0:
-                                return_triggered = True
-                                ret_edge = EDGE_RIGHT
-                                ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
-                        elif dx > 2:
+                    # Check if cursor hits boundary to return to Windows/remote with push resistance
+                    if self.active_remote_peer is not None:
+                        return_triggered = False
+                        ret_edge = EDGE_NONE
+                        ret_norm = 0.5
+
+                        # If cursor entered through LEFT edge, pushing against LEFT edge returns to remote's RIGHT edge
+                        if self.entry_edge == EDGE_LEFT:
+                            if self.cursor_x <= min_x and dx < 0:
+                                self.return_edge_push_accum += abs(dx)
+                                if self.return_edge_push_accum >= 8.0:
+                                    return_triggered = True
+                                    ret_edge = EDGE_RIGHT
+                                    ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
+                            elif dx > 2:
+                                self.return_edge_push_accum = 0.0
+
+                        # If cursor entered through RIGHT edge, pushing against RIGHT edge returns to remote's LEFT edge
+                        elif self.entry_edge == EDGE_RIGHT:
+                            if self.cursor_x >= min_x + vw and dx > 0:
+                                self.return_edge_push_accum += abs(dx)
+                                if self.return_edge_push_accum >= 8.0:
+                                    return_triggered = True
+                                    ret_edge = EDGE_LEFT
+                                    ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
+                            elif dx < -2:
+                                self.return_edge_push_accum = 0.0
+
+                        # If cursor entered through TOP edge, pushing against TOP edge returns to remote's BOTTOM edge
+                        elif self.entry_edge == EDGE_TOP:
+                            if self.cursor_y <= min_y and dy < 0:
+                                self.return_edge_push_accum += abs(dy)
+                                if self.return_edge_push_accum >= 8.0:
+                                    return_triggered = True
+                                    ret_edge = EDGE_BOTTOM
+                                    ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
+                            elif dy > 2:
+                                self.return_edge_push_accum = 0.0
+
+                        # If cursor entered through BOTTOM edge, pushing against BOTTOM edge returns to remote's TOP edge
+                        elif self.entry_edge == EDGE_BOTTOM:
+                            if self.cursor_y >= min_y + vh and dy > 0:
+                                self.return_edge_push_accum += abs(dy)
+                                if self.return_edge_push_accum >= 8.0:
+                                    return_triggered = True
+                                    ret_edge = EDGE_TOP
+                                    ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
+                            elif dy < -2:
+                                self.return_edge_push_accum = 0.0
+
+                        if return_triggered:
+                            target = self.active_remote_peer
+                            self.active_remote_peer = None
                             self.return_edge_push_accum = 0.0
+                            if self.on_cursor_update:
+                                try:
+                                    self.on_cursor_update(False, 0, 0)
+                                except Exception:
+                                    pass
+                            threading.Thread(target=self.return_control_to_peer, args=(target, ret_edge, ret_norm), daemon=True).start()
 
-                    # If cursor entered through RIGHT edge, pushing against RIGHT edge returns to remote's LEFT edge
-                    elif self.entry_edge == EDGE_RIGHT:
-                        if self.cursor_x >= min_x + vw and dx > 0:
-                            self.return_edge_push_accum += abs(dx)
-                            if self.return_edge_push_accum >= 8.0:
-                                return_triggered = True
-                                ret_edge = EDGE_LEFT
-                                ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
-                        elif dx < -2:
-                            self.return_edge_push_accum = 0.0
+                elif pkt_type == PACKET_MOUSE_BUTTON and len(data) >= 6:
+                    btn, pressed = struct.unpack("<BB", data[4:6])
+                    self.injector.mouse_button(btn, pressed != 0)
 
-                    # If cursor entered through TOP edge, pushing against TOP edge returns to remote's BOTTOM edge
-                    elif self.entry_edge == EDGE_TOP:
-                        if self.cursor_y <= min_y and dy < 0:
-                            self.return_edge_push_accum += abs(dy)
-                            if self.return_edge_push_accum >= 8.0:
-                                return_triggered = True
-                                ret_edge = EDGE_BOTTOM
-                                ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
-                        elif dy > 2:
-                            self.return_edge_push_accum = 0.0
+                elif pkt_type == PACKET_MOUSE_SCROLL and len(data) >= 8:
+                    sx, sy = struct.unpack("<hh", data[4:8])
+                    self.injector.mouse_scroll(sx, sy)
 
-                    # If cursor entered through BOTTOM edge, pushing against BOTTOM edge returns to remote's TOP edge
-                    elif self.entry_edge == EDGE_BOTTOM:
-                        if self.cursor_y >= min_y + vh and dy > 0:
-                            self.return_edge_push_accum += abs(dy)
-                            if self.return_edge_push_accum >= 8.0:
-                                return_triggered = True
-                                ret_edge = EDGE_TOP
-                                ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
-                        elif dy < -2:
-                            self.return_edge_push_accum = 0.0
-
-                    if return_triggered:
-                        target = self.active_remote_peer
-                        self.active_remote_peer = None
-                        self.return_edge_push_accum = 0.0
-                        if self.on_cursor_update:
-                            try:
-                                self.on_cursor_update(False, 0, 0)
-                            except Exception:
-                                pass
-                        threading.Thread(target=self.return_control_to_peer, args=(target, ret_edge, ret_norm), daemon=True).start()
-
-            elif pkt_type == PACKET_MOUSE_BUTTON and len(data) >= 6:
-                btn, pressed = struct.unpack("<BB", data[4:6])
-                self.injector.mouse_button(btn, pressed != 0)
-
-            elif pkt_type == PACKET_MOUSE_SCROLL and len(data) >= 8:
-                sx, sy = struct.unpack("<hh", data[4:8])
-                self.injector.mouse_scroll(sx, sy)
-
-            elif pkt_type == PACKET_KEY_EVENT and len(data) >= 12:
-                vk, sc, pressed, mods, char_code = struct.unpack("<HHBBH", data[4:12])
-                ch = chr(char_code) if char_code > 0 else ""
-                self.injector.key_event(vk, pressed != 0, ch)
+                elif pkt_type == PACKET_KEY_EVENT and len(data) >= 12:
+                    vk, sc, pressed, mods, char_code = struct.unpack("<HHBBH", data[4:12])
+                    ch = chr(char_code) if char_code > 0 else ""
+                    self.injector.key_event(vk, pressed != 0, ch)
+            except Exception:
+                pass
 
     def return_control_to_peer(self, peer: dict, return_edge: int, norm_pos: float) -> None:
         """Sends framed TCP EDGE_RETURN and UDP EDGE_HANDOFF packet back to remote device."""
