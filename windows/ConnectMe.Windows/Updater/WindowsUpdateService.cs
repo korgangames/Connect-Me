@@ -35,7 +35,8 @@ public static class WindowsUpdateService
 
     static WindowsUpdateService()
     {
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ConnectMe-Windows", "1.7.6"));
+        string ver = typeof(WindowsUpdateService).Assembly.GetName().Version?.ToString(3) ?? "1.7.7";
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ConnectMe-Windows", ver));
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
     }
 

@@ -2284,6 +2284,7 @@ public partial class MainWindow : Window
 
     private async Task CheckForUpdatesAsync(bool isManual)
     {
+        string currentVer = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.7.7";
         if (isManual)
         {
             AppendLog("🔍 [Güncelleme] GitHub Releases üzerinden yeni sürüm denetleniyor...");
@@ -2291,7 +2292,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var result = await WindowsUpdateService.CheckForUpdatesAsync("1.7.6");
+            var result = await WindowsUpdateService.CheckForUpdatesAsync(currentVer);
             await Dispatcher.InvokeAsync(() =>
             {
                 if (result.HasUpdate && result.UpdateInfo != null)
@@ -2307,7 +2308,7 @@ public partial class MainWindow : Window
                         var res = MessageBox.Show(
                             this,
                             $"Yeni bir Connect Me sürümü mevcut!\n\n" +
-                            $"Mevcut Sürüm: v1.7.6\n" +
+                            $"Mevcut Sürüm: v{currentVer}\n" +
                             $"Yeni Sürüm: {update.VersionTag}\n\n" +
                             $"{update.ReleaseTitle}\n\n" +
                             $"Şimdi otomatik olarak indirilip kurulsun mu?",
@@ -2342,7 +2343,7 @@ public partial class MainWindow : Window
                     {
                         MessageBox.Show(
                             this,
-                            "Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v1.7.6).",
+                            $"Tebrikler! Connect Me uygulamanız zaten en son güncel sürümde (v{currentVer}).",
                             "Connect Me Güncel",
                             MessageBoxButton.OK,
                             MessageBoxImage.Information);

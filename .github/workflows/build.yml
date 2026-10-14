@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-windows:
     name: 🪟 Windows (.NET Desktop & Tests)
@@ -146,8 +150,13 @@ jobs:
       - name: Prepare Release Folder
         run: |
           mkdir -p dist
-          find release-assets/ -type f \( -name "*.zip" -o -name "*.apk" -o -name "*.tar.gz" \) -exec cp {} dist/ \;
+          find release-assets/ -type f \( -name "*.zip" -o -name "*.apk" -o -name "*.tar.gz" \) -exec cp -v {} dist/ \;
+          echo "=== Paketler Listesi ==="
           ls -la dist/
+          if ! ls dist/*.apk 1> /dev/null 2>&1; then
+            echo "HATA: Hicbir APK paketi bulunamadi!"
+            exit 1
+          fi
 
       - name: Read Version
         id: get_ver
@@ -163,6 +172,7 @@ jobs:
           body_path: docs/RELEASE_NOTES.md
           draft: false
           prerelease: false
+          make_latest: true
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
