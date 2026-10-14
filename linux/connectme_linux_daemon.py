@@ -41,7 +41,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.7.7"
+VERSION = "1.7.8"
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850
@@ -103,33 +103,63 @@ class LinuxMultiMonitorTopology:
         self.monitors: List[PhysicalMonitor] = []
         self.refresh_monitors()
 
-    def refresh_monitors(self) -> List[PhysicalMonitor]:
+    def refresh_monitors(self, root_w: Optional[int] = None, root_h: Optional[int] = None) -> List[PhysicalMonitor]:
         detected = (
             self._try_kscreen_doctor()
             or self._try_kscreen_console()
             or self._try_kscreen_doctor_text()
             or self._try_wlr_randr()
+            or self._try_gnome_mutter()
+            or self._try_drm_sysfs()
             or self._try_xrandr()
         )
         if not detected:
+            def_w = max(1920, root_w or 1920)
+            def_h = max(1080, root_h or 1080)
             detected = [
                 PhysicalMonitor(
                     monitorId="DP-1",
                     name="Monitör 1 (DP-1 — Birincil)",
                     virtualX=0,
                     virtualY=0,
-                    width=2560,
-                    height=1440,
+                    width=def_w,
+                    height=def_h,
                     scaleFactor=1.0,
                     isPrimary=True,
                 )
             ]
+        elif root_w and root_h and len(detected) == 1 and root_w > detected[0].width:
+            m1 = detected[0]
+            rem_w = root_w - m1.width
+            detected.append(PhysicalMonitor(
+                monitorId="DISP-2",
+                name="Monitör 2 (Genişletilmiş)",
+                virtualX=m1.right,
+                virtualY=m1.virtualY,
+                width=rem_w,
+                height=root_h,
+                scaleFactor=1.0,
+                isPrimary=False,
+            ))
         if not any(m.isPrimary for m in detected):
             detected[0].isPrimary = True
         # Sort monitors deterministically by X then Y
         detected.sort(key=lambda m: (m.virtualX, m.virtualY))
         self.monitors = detected
         return self.monitors
+
+    def ensure_bounds(self, cur_x: int, cur_y: int) -> None:
+        """Dynamically expands known monitor dimensions if cursor travels beyond current bounds."""
+        if not self.monitors:
+            return
+        max_r = max(m.right for m in self.monitors)
+        max_b = max(m.bottom for m in self.monitors)
+        if cur_x >= max_r:
+            rightmost = max(self.monitors, key=lambda m: m.right)
+            rightmost.width += (cur_x - max_r + 1)
+        if cur_y >= max_b:
+            bottommost = max(self.monitors, key=lambda m: m.bottom)
+            bottommost.height += (cur_y - max_b + 1)
 
     def virtual_desktop_bounds(self) -> Tuple[int, int, int, int]:
         min_x = min(m.virtualX for m in self.monitors)
@@ -432,6 +462,94 @@ class LinuxMultiMonitorTopology:
                 )
             )
         return result
+
+    def _try_gnome_mutter(self) -> List[PhysicalMonitor]:
+        out = self._run_cmd(["gdbus", "call", "--session", "--dest", "org.gnome.Mutter.DisplayConfig",
+                             "--object-path", "/org/gnome/Mutter/DisplayConfig",
+                             "--method", "org.gnome.Mutter.DisplayConfig.GetCurrentState"])
+        if not out:
+            return []
+        try:
+            mon_re = re.compile(
+                r"\(\s*(?P<x>-?\d+)\s*,\s*(?P<y>-?\d+)\s*,\s*(?P<scale>[\d\.]+)\s*,\s*(?P<trans>\d+)\s*,\s*(?P<prim>true|false)\s*,\s*\[\s*\(\s*'(?P<name>[^']+)'",
+                re.IGNORECASE
+            )
+            mode_re = re.compile(r"'(?P<mid>[^']+)'\s*,\s*(?P<w>\d+)\s*,\s*(?P<h>\d+)", re.IGNORECASE)
+            matches = list(mon_re.finditer(out))
+            if not matches:
+                return []
+            modes_map: Dict[str, Tuple[int, int]] = {}
+            for m in mode_re.finditer(out):
+                modes_map[m.group("mid")] = (int(m.group("w")), int(m.group("h")))
+
+            result: List[PhysicalMonitor] = []
+            for i, match in enumerate(matches, start=1):
+                vx = int(match.group("x"))
+                vy = int(match.group("y"))
+                scale = float(match.group("scale"))
+                is_prim = match.group("prim").lower() == "true"
+                cname = match.group("name")
+                w, h = 1920, 1080
+                for mid, (mw, mh) in modes_map.items():
+                    if cname in mid:
+                        w, h = mw, mh
+                        break
+                result.append(PhysicalMonitor(
+                    monitorId=cname,
+                    name=f"Monitör {i} ({cname})",
+                    virtualX=vx,
+                    virtualY=vy,
+                    width=w,
+                    height=h,
+                    scaleFactor=scale if scale > 0.05 else 1.0,
+                    isPrimary=is_prim
+                ))
+            return result
+        except Exception:
+            return []
+
+    def _try_drm_sysfs(self) -> List[PhysicalMonitor]:
+        try:
+            drm_path = Path("/sys/class/drm")
+            if not drm_path.exists():
+                return []
+            connected_outputs = []
+            for p in sorted(drm_path.glob("card*-*")):
+                status_file = p / "status"
+                if status_file.exists():
+                    try:
+                        content = status_file.read_text(encoding="utf-8").strip()
+                        if content == "connected":
+                            name = p.name.split("-", 1)[1] if "-" in p.name else p.name
+                            w, h = 1920, 1080
+                            modes_file = p / "modes"
+                            if modes_file.exists():
+                                lines = modes_file.read_text(encoding="utf-8").splitlines()
+                                if lines and "x" in lines[0]:
+                                    parts = lines[0].strip().split("x")
+                                    w, h = int(parts[0]), int(parts[1])
+                            connected_outputs.append((name, w, h))
+                    except Exception:
+                        pass
+            if not connected_outputs:
+                return []
+            result: List[PhysicalMonitor] = []
+            cur_x = 0
+            for i, (name, w, h) in enumerate(connected_outputs, start=1):
+                result.append(PhysicalMonitor(
+                    monitorId=name,
+                    name=f"Monitör {i} ({name})",
+                    virtualX=cur_x,
+                    virtualY=0,
+                    width=w,
+                    height=h,
+                    scaleFactor=1.0,
+                    isPrimary=(i == 1)
+                ))
+                cur_x += w
+            return result
+        except Exception:
+            return []
 
 
 class YdotoolSocketClient:
@@ -1163,12 +1281,20 @@ class ConnectMeLinuxNode:
         self.last_copied_clipboard = ""
         self.udp_sock: Optional[socket.socket] = None
 
-        # Audio streaming
+        # Audio streaming (Transmitter: Linux -> Windows)
         self.audio_streaming = False
         self.audio_target_ip: Optional[str] = None
         self.audio_proc: Optional[subprocess.Popen] = None
         self.audio_thread: Optional[threading.Thread] = None
         self.audio_seq = 0
+
+        # Audio Receiver (Sink: Android/Windows -> Linux Headphones/Speakers)
+        self.audio_rx_sock: Optional[socket.socket] = None
+        self.audio_rx_bytes: int = 0
+        self.audio_rx_active: bool = False
+        self.audio_rx_last_time: float = 0.0
+        self.audio_rx_last_sender: str = ""
+        self.audio_rx_last_player: str = ""
 
     def log(self, text: str) -> None:
         line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
@@ -1260,6 +1386,21 @@ class ConnectMeLinuxNode:
                 self.on_peer_updated(self.peers[device_id])
             except Exception:
                 pass
+
+    def reset_peer_arrangements(self) -> None:
+        """Clears all custom canvas coordinates, deletes topology cache file, and resets peers to default edge."""
+        self.peer_arrangements.clear()
+        try:
+            if self.topology_file.exists():
+                self.topology_file.unlink()
+        except Exception:
+            pass
+        for peer in self.peers.values():
+            peer["canvasX"] = None
+            peer["canvasY"] = None
+            peer["assignedEdge"] = EDGE_RIGHT
+            peer["edgeOffset"] = 0.5
+        self.log("[Ekran Düzeni] 📐 Ekran yerleşim düzeni varsayılana sıfırlandı.")
 
     def switch_control_to_peer(self, peer: dict, local_exit_edge: int = EDGE_NONE, norm_pos: float = 0.5) -> bool:
         """Switches mouse/keyboard control from Linux host to remote peer (Android or Windows)."""
@@ -1557,6 +1698,7 @@ class ConnectMeLinuxNode:
         threading.Thread(target=self._tcp_server_loop, daemon=True).start()
         threading.Thread(target=self._udp_input_loop, daemon=True).start()
         threading.Thread(target=self._clipboard_monitor_loop, daemon=True).start()
+        threading.Thread(target=self._audio_receiver_loop, daemon=True).start()
 
     def stop(self) -> None:
         """Stops the daemon background loops, releases sockets, and cleans up."""
@@ -1568,6 +1710,7 @@ class ConnectMeLinuxNode:
             getattr(self, "tcp_srv", None),
             self.udp_sock,
             getattr(self, "_host_udp_sock", None),
+            getattr(self, "audio_rx_sock", None),
         ):
             if s:
                 try:
@@ -2444,6 +2587,121 @@ class ConnectMeLinuxNode:
                 break
         sock.close()
         self.audio_streaming = False
+
+    def _audio_receiver_loop(self) -> None:
+        """Listens on UDP port 42852 for incoming PCM audio chunks (e.g. from Android/Windows) and plays them through Linux speakers/headphones."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if hasattr(socket, "SO_REUSEPORT"):
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except OSError:
+                    pass
+            sock.bind(("0.0.0.0", AUDIO_STREAM_UDP_PORT))
+            self.audio_rx_sock = sock
+            self.log(f"[Ses Alıcısı] 🎧 UDP {AUDIO_STREAM_UDP_PORT} portu dinleniyor (Merkezi Kulaklık/Hoparlör Modu).")
+        except OSError as ex:
+            self.log(f"[Ses Alıcısı Hatası] UDP {AUDIO_STREAM_UDP_PORT} dinlenemedi: {ex}")
+            return
+
+        last_packet_time = 0.0
+        active_playback_proc: Optional[subprocess.Popen] = None
+        current_playback_sr = 48000
+        current_playback_ch = 2
+
+        while self.running:
+            try:
+                sock.settimeout(1.0)
+                try:
+                    data, addr = sock.recvfrom(8192)
+                except socket.timeout:
+                    if active_playback_proc and (time.time() - last_packet_time > 2.5):
+                        try:
+                            if active_playback_proc.stdin:
+                                active_playback_proc.stdin.close()
+                            active_playback_proc.terminate()
+                            active_playback_proc.wait(timeout=0.5)
+                        except Exception:
+                            pass
+                        active_playback_proc = None
+                        self.audio_rx_active = False
+                    continue
+
+                if len(data) < 14 or data[0] != MAGIC_0 or data[1] != MAGIC_1 or data[2] != PROTO_VER:
+                    continue
+                if data[3] != PACKET_AUDIO_CHUNK:
+                    continue
+
+                ch, sr, bits, seq, payload_len = struct.unpack("<BIHBH", data[4:14])
+                pcm_data = data[14:14 + payload_len] if len(data) >= 14 + payload_len else data[14:]
+                if not pcm_data:
+                    continue
+
+                now = time.time()
+                last_packet_time = now
+                self.audio_rx_bytes += len(pcm_data)
+                self.audio_rx_last_time = now
+                self.audio_rx_last_sender = addr[0]
+                self.audio_rx_active = True
+
+                if (
+                    active_playback_proc is None
+                    or active_playback_proc.poll() is not None
+                    or current_playback_sr != sr
+                    or current_playback_ch != ch
+                ):
+                    if active_playback_proc:
+                        try:
+                            if active_playback_proc.stdin:
+                                active_playback_proc.stdin.close()
+                            active_playback_proc.terminate()
+                        except Exception:
+                            pass
+
+                    play_cmd = None
+                    if shutil.which("pw-play"):
+                        play_cmd = ["pw-play", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]
+                    elif shutil.which("paplay"):
+                        play_cmd = ["paplay", "--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}"]
+                    elif shutil.which("aplay"):
+                        play_cmd = ["aplay", "-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q"]
+
+                    if play_cmd:
+                        try:
+                            active_playback_proc = subprocess.Popen(
+                                play_cmd,
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                bufsize=0,
+                            )
+                            current_playback_sr = sr
+                            current_playback_ch = ch
+                            self.audio_rx_last_player = play_cmd[0]
+                            self.log(f"[Ses Çalma] 🔊 Gelen ses akışı çalınıyor ({play_cmd[0]} - {sr}Hz {ch} kanal S16LE, Kaynak: {addr[0]}).")
+                        except Exception as p_err:
+                            self.log(f"[Ses Çalma Hatası] Oynatma süreci başlatılamadı: {p_err}")
+                            active_playback_proc = None
+
+                if active_playback_proc and active_playback_proc.stdin:
+                    try:
+                        active_playback_proc.stdin.write(pcm_data)
+                        active_playback_proc.stdin.flush()
+                    except BrokenPipeError:
+                        active_playback_proc = None
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        if active_playback_proc:
+            try:
+                if active_playback_proc.stdin:
+                    active_playback_proc.stdin.close()
+                active_playback_proc.terminate()
+            except Exception:
+                pass
 
     @staticmethod
     def _send_tcp_frame(conn: socket.socket, header: dict, payload: bytes = b"") -> None:

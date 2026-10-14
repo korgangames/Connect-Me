@@ -32,7 +32,6 @@ public partial class MainWindow : Window
     private PeerDeviceNode? _selectedPeer;
     private PeerDeviceNode? _inboundRequestPeer;
     private int _simDeviceCounter;
-    private int _simLocalMonitorStep;
 
     // 2D Canvas Dragging state
     private PeerDeviceNode? _draggingPeer;
@@ -415,90 +414,6 @@ public partial class MainWindow : Window
         int pairedCount = _topology.GetConfiguredPeers().Count(p => p.IsMutuallyPaired);
         int localMonCount = _topology.LocalMonitors.Count;
         CanvasZoomSlider.Value = (pairedCount >= 4 || localMonCount >= 3) ? 0.78 : 0.95;
-        RedrawDisplayArrangementCanvas();
-    }
-
-    private void ToggleLocalMonitorsTestBtn_Click(object sender, RoutedEventArgs e)
-    {
-        _simLocalMonitorStep = (_simLocalMonitorStep + 1) % 3;
-        var hardwareMonitors = Win32MonitorEnumerator.EnumerateLocalMonitors();
-        var primary = hardwareMonitors.FirstOrDefault(m => m.IsPrimary) ?? hardwareMonitors[0];
-
-        if (_simLocalMonitorStep == 0)
-        {
-            _topology.UpdateLocalMonitors(hardwareMonitors);
-            _network.LocalMonitors = hardwareMonitors;
-            AppendLog($"[Çoklu Monitör] Gerçek donanım ekranlarına dönüldü ({hardwareMonitors.Count} monitör).");
-        }
-        else if (_simLocalMonitorStep == 1)
-        {
-            // Dual-Monitor Setup: Primary + Right Secondary (1920x1080)
-            var dualList = new List<PhysicalMonitorDescriptor>
-            {
-                primary,
-                new()
-                {
-                    MonitorId = "DISPLAY2",
-                    Name = "Monitör 2 (HDMI-1 Sağ)",
-                    VirtualX = primary.Right,
-                    VirtualY = primary.VirtualY,
-                    Width = 1920,
-                    Height = 1080,
-                    ScaleFactor = 1.0,
-                    IsPrimary = false,
-                    IsSimulated = true
-                }
-            };
-            _topology.UpdateLocalMonitors(dualList);
-            _network.LocalMonitors = dualList;
-            AppendLog("[Çoklu Monitör Testi] 2'li Monitör (Dual-Monitor: Ana Ekran + Sağ 1920x1080) aktif! İç birleşim çizgisinde imleç serbest geçer.");
-        }
-        else
-        {
-            // Triple-Monitor Setup: Left Portrait (1080x1920) + Primary + Right Secondary (1920x1080)
-            var tripleList = new List<PhysicalMonitorDescriptor>
-            {
-                primary,
-                new()
-                {
-                    MonitorId = "DISPLAY2",
-                    Name = "Monitör 2 (HDMI-1 Sağ)",
-                    VirtualX = primary.Right,
-                    VirtualY = primary.VirtualY,
-                    Width = 1920,
-                    Height = 1080,
-                    ScaleFactor = 1.0,
-                    IsPrimary = false,
-                    IsSimulated = true
-                },
-                new()
-                {
-                    MonitorId = "DISPLAY3",
-                    Name = "Monitör 3 (DP-2 Dikey)",
-                    VirtualX = primary.VirtualX - 1080,
-                    VirtualY = primary.VirtualY - 240,
-                    Width = 1080,
-                    Height = 1920,
-                    ScaleFactor = 1.0,
-                    IsPrimary = false,
-                    IsSimulated = true
-                }
-            };
-            _topology.UpdateLocalMonitors(tripleList);
-            _network.LocalMonitors = tripleList;
-            CanvasZoomSlider.Value = 0.82;
-            AppendLog("[Çoklu Monitör Testi] 3'lü Monitör (Sol Dikey 1080x1920 + Ana Ekran + Sağ 1920x1080) aktif! Uzak cihazları istediğiniz monitöre sürükleyebilirsiniz.");
-        }
-
-        // Reset custom canvas positions so peers re-align around the updated monitor layout
-        foreach (var peer in _topology.GetConfiguredPeers())
-        {
-            peer.HasCustomCanvasPosition = false;
-            peer.AttachedLocalMonitorId = _topology.GetOutermostMonitorForEdge(peer.AssignedEdgeOnLocal).MonitorId;
-        }
-
-        _ = _network.BroadcastTopologySyncAsync();
-        RefreshPeersList();
         RedrawDisplayArrangementCanvas();
     }
 

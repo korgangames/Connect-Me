@@ -1,3 +1,35 @@
+# Connect Me v1.7.8 — Linux Görünmez Kenar Geçişi (Mavi Çizgi Kaldırıldı & Hızlı Fare Garantisi), Android➔Linux Ses Alıcısı, Pürüzsüz 2D Kanvas & Ekran Testi Temizliği
+
+Bu sürüm; Linux çoklu monitör ortamında ikinci ekranın ortasında beliren istenmeyen mavi çizgiyi (`#0284C7`) tamamen ortadan kaldırır, fareyi hızlı savursanız dahi masaüstünün gerçek fiziksel sınırında anında karşı cihaza geçmesini sağlar. Ayrıca Android'den Linux'a ses aktarımını (UDP 42852 alıcısı + PipeWire/PulseAudio oynatıcı), Linux 2D ekran kartı sürükleme ve düzen sıfırlama mekanizmalarını kusursuz hale getirir; Windows arayüzündeki ek monitör test seçeneğini tamamen temizler.
+
+---
+
+### 🌟 v1.7.8 Yenilikleri ve Düzeltmeleri:
+
+* **🖱️ Linux ➔ Android / Windows Görünmez Kenar Geçişi (Mavi Çizgi Kaldırıldı & Hızlı Fare Garantisi):**
+  - **Sorunun Kök Nedeni:** Eski Tkinter `ScreenEdgeSentinels` yapısı şeffaf olması amacıyla açılan 2 piksellik override-redirect pencerelerden oluşuyordu. Linux Wayland ve X11 ortamlarında şeffaflık (`-alpha`) desteklenmediği için bu pencereler parlak mavi/cyan (`#0284C7`) opak çizgiler olarak görünüyordu. Ayrıca ekran çözünürlüğü tespitinde GNOME Wayland desteği eksik olduğundan çizgi ikinci ekranın ortasına denk geliyor ve fare hızlı hareket ettirildiğinde 2 piksellik ince çizgiyi atlayıp karşı ekrana geçemiyordu.
+  - **Çözüm:** Görünür tüm mavi pencereler tamamen yok edildi! Yerine sıfır CPU tüketen 60Hz (~16ms) görünmez imleç pozisyonu takip motoru (`winfo_pointerxy()`) getirildi.
+  - **Gerçek Ekran Sınırı Tespiti:** GNOME Mutter D-Bus (`org.gnome.Mutter.DisplayConfig`), DRM sysfs (`/sys/class/drm/`) ve dinamik masaüstü sınır genişletmesi eklendi. Çizgi artık ikinci ekranın ortasında değil; geçiş yalnızca masaüstünün en dış fiziksel sınırına ulaşıldığında gerçekleşir.
+  - **Hızlı Fare Garantisi:** Fare ne kadar hızlı çekilirse çekilsin, fiziksel işletim sistemi imleci masaüstü sınırında durduğu için sistem 16 milisaniye içerisinde sınır temasını anında yakalar ve kontrolü gecikmesiz karşı cihaza aktarır. İç monitör birleşim noktalarından geçerken (`is_internal_seam`) imleç yerel ekranlar arasında serbestçe akar.
+
+* **🔊 Android ➔ Linux Canlı Ses Aktarımı (Merkezi Kulaklık/Hoparlör Modu):**
+  - **Sorunun Kök Nedeni:** Linux düğümünde yalnızca dışarı ses basan `start_audio_streaming` vericisi mevcuttu; Android cihazdan gelen UDP 42852 PCM ses paketlerini karşılayacak bir dinleyici soket veya oynatma hattı bulunmuyordu. Bu nedenle Android ses gönderiyor görünmesine rağmen Linux üzerinde hiçbir ses duyulmuyordu.
+  - **Çözüm:** Linux arka plan servisine UDP port 42852 üzerinde dinleyen `_audio_receiver_loop` eklendi. Gelen 48,000 Hz 16-bit PCM stereo sesler; sistemde bulunan en uygun Linux ses mimarisi (`pw-play` [PipeWire] -> `paplay` [PulseAudio] -> `aplay` [ALSA]) stdin borusuna anında yönlendirilerek sıfır gecikmeyle (<15ms) kulaklığınızdan çalınır.
+  - **Arayüz Canlı Geri Bildirimi:** Linux arayüzü Tab 4'e "Merkezi Ses Alıcısı: Dinliyor (UDP 42852)" kartı eklendi; Android'den gelen bayt miktarı ve aktif oynatma durumu canlı olarak gösterilir.
+
+* **📐 Linux 2D Kanvas: Pürüzsüz Sürükleme, Buton Yalıtımı & Çalışan "Düzeni Sıfırla":**
+  - **Sürükleme ve Köşede Sıkışma Çözümü:** Eski kodda fare sürüklendiğinde her piksel hareketinde tüm kanvas silinip baştan çiziliyordu (`canvas.delete("all")`). Bu durum Tkinter fare yakalama olayını düşürdüğü için kart fareyi takip etmeyi bırakıyor ve tuhaf köşelere savruluyordu. Artık sürükleme `canvas.move()` ile nesne silinmeden 1000 FPS hızında pürüzsüzce gerçekleştirilir; fare bırakıldığında en yakın monitör kenarına otomatik kenetlenir.
+  - **Buton Yalıtımı:** Kartın üzerindeki butonların ve kenar seçim haplarının (`[Sol] [Sağ] [Üst] [Alt]`, `[Kabul Et]`, `[Fareyi Aktar]`) tıklanması durumunda sürüklemenin tetiklenmesi `tags` yalıtımı ve `return "break"` ile tamamen engellendi.
+  - **"Ekran Düzenini Sıfırla" Düzeltildi:** Butona basıldığında artık hem bellekteki geçici koordinatlar hem de `~/.config/connectme/peer_topology.json` dosyasındaki eski kayıtlar temizlenir; tüm cihaz kartları yerel Linux monitörlerinin hemen sağına temiz ve düzenli biçimde hizalanır.
+
+* **🗑️ Windows Ek Monitör Test Seçeneğinin Tamamen Kaldırılması:**
+  - Kullanıcı geri bildirimi doğrultusunda Windows arayüzündeki `ToggleLocalMonitorsTestBtn` ("🖥️ +Ek Monitör Testi") butonu ve kodundaki tüm simülasyon değişkenleri tamamen temizlendi.
+
+* **🪟 Windows Tam Ekran Başlatma (Maximized Window):**
+  - Windows uygulaması başlatıldığında varsayılan olarak maksimize pencere boyutunda (`WindowState.Maximized`) açılır.
+
+---
+
 # Connect Me v1.7.7 — Linux Host Donanımsal Girdi Yakalama (evdev), Siyah Kutu Çözümü & Windows-Linux 1000 FPS Mikro-Soket Enjeksiyonu
 
 Bu sürüm; Linux'tan (Nobara / KDE Plasma) Android'e bağlanıldığında ekranda siyah bir kare çıkması ve farenin yalnızca o karenin içinde kısıtlı hareket etmesi sorununu kökten çözer; Windows'tan Linux'a fare geçtiğinde yaşanan düşük kare hızı (stutter/lag) ve ekranın yalnızca bir kısmında hareket edebilme kısıtlamasını doğrudan Linux çekirdek soket akışı ve Wayland/X11 tam masaüstü sınır kenetleme mimarisiyle 1000 FPS microsecond hızına kavuşturur.

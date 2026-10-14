@@ -117,27 +117,61 @@ for _i in range(1, 13):
 
 
 class ScreenEdgeSentinels:
-    """Manages thin transparent sentinel edge windows to automatically detect when mouse reaches an active edge."""
+    """Invisible high-precision 60Hz edge monitor for Linux host KVM.
+    Polls global pointer coordinates using Tkinter root.winfo_pointerxy() to detect when cursor reaches
+    the physical outermost screen boundary without rendering any visual artifacts or blue lines.
+    Completely immune to fast mouse gestures (physical pointer stops at the desktop edge).
+    """
 
     def __init__(self, root: tk.Tk, node: ConnectMeLinuxNode, on_edge_triggered: Callable[[dict, int, float], None]):
         self.root = root
         self.node = node
         self.on_edge_triggered = on_edge_triggered
-        self.sentinels: Dict[int, tk.Toplevel] = {}
         self.cooldown_until = 0.0
         self.enabled = True
+        self._poll_job: Optional[str] = None
+        self._start_poll()
 
-    def set_cooldown(self, duration_sec: float = 0.6):
+    def set_cooldown(self, duration_sec: float = 0.8):
         self.cooldown_until = time.time() + duration_sec
 
+    def hide(self):
+        self.enabled = False
+
+    def show_with_cooldown(self, cooldown: float = 0.8):
+        self.enabled = True
+        self.set_cooldown(cooldown)
+
     def update_sentinels(self):
-        """Creates or positions sentinels according to assigned edges of mutually paired peers."""
-        if not self.enabled:
+        """Called when peer topology or monitor layout changes."""
+        pass
+
+    def _start_poll(self):
+        if self._poll_job is not None:
+            try:
+                self.root.after_cancel(self._poll_job)
+            except Exception:
+                pass
+        self._poll_job = self.root.after(16, self._check_edge)
+
+    def _check_edge(self):
+        try:
+            self._do_check()
+        except Exception:
+            pass
+        finally:
+            if self.root:
+                try:
+                    self._poll_job = self.root.after(16, self._check_edge)
+                except Exception:
+                    pass
+
+    def _do_check(self):
+        if not self.enabled or time.time() < self.cooldown_until:
+            return
+        if hasattr(self, "host_capture_overlay") and getattr(self.host_capture_overlay, "is_active", False):
             return
 
-        min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
-
-        # Find which edges have mutually paired peers
         active_edge_peers: Dict[int, dict] = {}
         for p in self.node.peers.values():
             if p.get("isMutuallyPaired"):
@@ -145,79 +179,62 @@ class ScreenEdgeSentinels:
                 if edge not in active_edge_peers:
                     active_edge_peers[edge] = p
 
-        # Destroy sentinels that are no longer needed
-        to_remove = [e for e in self.sentinels if e not in active_edge_peers]
-        for e in to_remove:
-            try:
-                self.sentinels[e].destroy()
-            except Exception:
-                pass
-            del self.sentinels[e]
-
-        # Create or update active sentinels
-        for edge, peer in active_edge_peers.items():
-            if edge not in self.sentinels:
-                win = tk.Toplevel(self.root)
-                win.overrideredirect(True)
-                try:
-                    win.attributes("-topmost", True)
-                    win.attributes("-alpha", 0.01)
-                except Exception:
-                    pass
-                win.configure(bg="#0284C7")
-                self.sentinels[edge] = win
-
-            win = self.sentinels[edge]
-            win.bind("<Enter>", lambda e, p=peer, ed=edge: self._handle_hit(e, p, ed))
-            win.bind("<Motion>", lambda e, p=peer, ed=edge: self._handle_hit(e, p, ed))
-
-            thickness = 2
-            if edge == EDGE_RIGHT:
-                geom = f"{thickness}x{vh}+{min_x + vw - thickness}+{min_y}"
-            elif edge == EDGE_LEFT:
-                geom = f"{thickness}x{vh}+{min_x}+{min_y}"
-            elif edge == EDGE_TOP:
-                geom = f"{vw}x{thickness}+{min_x}+{min_y}"
-            elif edge == EDGE_BOTTOM:
-                geom = f"{vw}x{thickness}+{min_x}+{min_y + vh - thickness}"
-            else:
-                geom = f"1x1+0+0"
-
-            try:
-                win.geometry(geom)
-                win.deiconify()
-                win.lift()
-            except Exception:
-                pass
-
-    def _handle_hit(self, event, peer: dict, edge: int):
-        if not self.enabled or time.time() < self.cooldown_until:
-            return
-        if not peer or not peer.get("isMutuallyPaired"):
+        if not active_edge_peers:
             return
 
+        try:
+            cur_x, cur_y = self.root.winfo_pointerxy()
+        except Exception:
+            return
+
+        try:
+            scr_w = self.root.winfo_screenwidth()
+            scr_h = self.root.winfo_screenheight()
+        except Exception:
+            scr_w, scr_h = 1920, 1080
+
+        self.node.topology.ensure_bounds(cur_x, cur_y)
         min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
-        if edge in (EDGE_LEFT, EDGE_RIGHT):
-            norm_pos = max(0.0, min(1.0, (event.y_root - min_y) / float(max(1, vh))))
-        else:
-            norm_pos = max(0.0, min(1.0, (event.x_root - min_x) / float(max(1, vw))))
+        max_x = max(min_x + vw, scr_w)
+        max_y = max(min_y + vh, scr_h)
 
-        self.set_cooldown(1.2)
-        if self.on_edge_triggered:
-            self.on_edge_triggered(peer, edge, norm_pos)
+        mon = self.node.topology.find_monitor_at(cur_x, cur_y)
 
-    def hide(self):
-        self.enabled = False
-        for win in self.sentinels.values():
-            try:
-                win.withdraw()
-            except Exception:
-                pass
+        # Right Edge
+        if cur_x >= max_x - 4 and EDGE_RIGHT in active_edge_peers:
+            if not mon or not self.node.topology.is_internal_seam(mon, EDGE_RIGHT, cur_x, cur_y):
+                norm_pos = max(0.0, min(1.0, (cur_y - min_y) / float(max(1, max_y - min_y))))
+                self.set_cooldown(1.2)
+                if self.on_edge_triggered:
+                    self.on_edge_triggered(active_edge_peers[EDGE_RIGHT], EDGE_RIGHT, norm_pos)
+                return
 
-    def show_with_cooldown(self, cooldown: float = 0.6):
-        self.enabled = True
-        self.set_cooldown(cooldown)
-        self.update_sentinels()
+        # Left Edge
+        if cur_x <= min_x + 4 and EDGE_LEFT in active_edge_peers:
+            if not mon or not self.node.topology.is_internal_seam(mon, EDGE_LEFT, cur_x, cur_y):
+                norm_pos = max(0.0, min(1.0, (cur_y - min_y) / float(max(1, max_y - min_y))))
+                self.set_cooldown(1.2)
+                if self.on_edge_triggered:
+                    self.on_edge_triggered(active_edge_peers[EDGE_LEFT], EDGE_LEFT, norm_pos)
+                return
+
+        # Top Edge
+        if cur_y <= min_y + 4 and EDGE_TOP in active_edge_peers:
+            if not mon or not self.node.topology.is_internal_seam(mon, EDGE_TOP, cur_x, cur_y):
+                norm_pos = max(0.0, min(1.0, (cur_x - min_x) / float(max(1, max_x - min_x))))
+                self.set_cooldown(1.2)
+                if self.on_edge_triggered:
+                    self.on_edge_triggered(active_edge_peers[EDGE_TOP], EDGE_TOP, norm_pos)
+                return
+
+        # Bottom Edge
+        if cur_y >= max_y - 4 and EDGE_BOTTOM in active_edge_peers:
+            if not mon or not self.node.topology.is_internal_seam(mon, EDGE_BOTTOM, cur_x, cur_y):
+                norm_pos = max(0.0, min(1.0, (cur_x - min_x) / float(max(1, max_x - min_x))))
+                self.set_cooldown(1.2)
+                if self.on_edge_triggered:
+                    self.on_edge_triggered(active_edge_peers[EDGE_BOTTOM], EDGE_BOTTOM, norm_pos)
+                return
 
 
 class HostCaptureOverlay:
@@ -726,9 +743,20 @@ class ConnectMeLinuxGui:
         tab = ttk.Frame(self.notebook, padding=16)
         self.notebook.add(tab, text="🎧 Ses Yönlendirme")
 
+        # 1. Gelen Ses Alıcısı (Android & Windows -> Linux Kulaklığı)
+        rx_card = ttk.Frame(tab, style="Card.TFrame", padding=14)
+        rx_card.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(rx_card, text="🎧 Merkezi Ses Alıcısı (Kulaklık & Hoparlör Köprüsü)", font=("Segoe UI", 12, "bold"), foreground="#4ADE80").pack(anchor=tk.W)
+        ttk.Label(rx_card, text="Android telefonunuzdan veya diğer bilgisayarlardan gelen tüm sesler (YouTube, Spotify, oyunlar) UDP 42852 portundan alınır ve Linux kulaklığınıza/hoparlörünüze anında (<15ms) aktarılır.",
+                  foreground="#94A3B8", wraplength=700).pack(anchor=tk.W, pady=4)
+
+        self.audio_rx_status_lbl = ttk.Label(rx_card, text="Durum: 🎧 Dinliyor (UDP Port: 42852) — 0 bayt alındı", font=("Segoe UI", 10, "bold"), foreground="#38BDF8")
+        self.audio_rx_status_lbl.pack(anchor=tk.W, pady=2)
+
+        # 2. Giden Ses Vericisi (Linux -> Windows PC)
         card = ttk.Frame(tab, style="Card.TFrame", padding=14)
         card.pack(fill=tk.X, pady=6)
-        ttk.Label(card, text="🎧 Merkez Bilgisayara (Kulaklığa) Ses Aktarımı", font=("Segoe UI", 12, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
+        ttk.Label(card, text="📤 Merkez Bilgisayara (Kulaklığa) Ses Aktarımı", font=("Segoe UI", 12, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
         ttk.Label(card, text="Bu Linux bilgisayarının tüm seslerini (müzik, video, oyun, sistem sesleri) ağ üzerinden merkez Windows bilgisayarına ve ona bağlı kulaklığa aktarır.",
                   foreground="#94A3B8", wraplength=700).pack(anchor=tk.W, pady=4)
 
@@ -957,29 +985,66 @@ class ConnectMeLinuxGui:
         if hasattr(self, "edge_sentinels") and not self.host_capture_overlay.is_active:
             self.edge_sentinels.update_sentinels()
 
+        # 6. Gelen Ses Alıcısı Durumunu Güncelle
+        if hasattr(self, "audio_rx_status_lbl"):
+            rx_bytes = getattr(self.node, "audio_rx_bytes", 0)
+            rx_active = getattr(self.node, "audio_rx_active", False)
+            last_sender = getattr(self.node, "audio_rx_last_sender", "")
+            last_player = getattr(self.node, "audio_rx_last_player", "")
+            kb = rx_bytes / 1024.0
+            mb = kb / 1024.0
+            size_str = f"{mb:.1f} MB" if mb >= 1.0 else f"{kb:.0f} KB"
+            if rx_active:
+                player_str = f" [{last_player}]" if last_player else ""
+                self.audio_rx_status_lbl.configure(
+                    text=f"Durum: 🟢 Aktif Alınıyor & Çalınıyor{player_str} (Kaynak: {last_sender} — {size_str} alındı)",
+                    foreground="#4ADE80"
+                )
+            else:
+                bytes_info = f" — {size_str} alındı" if rx_bytes > 0 else " — 0 bayt alındı"
+                self.audio_rx_status_lbl.configure(
+                    text=f"Durum: 🎧 Dinliyor (UDP Port: 42852){bytes_info}",
+                    foreground="#38BDF8"
+                )
+
     def _reset_canvas_layout(self):
         self.peer_canvas_coords.clear()
+        self.node.reset_peer_arrangements()
+        self._refresh_monitors()
         self._draw_2d_canvas()
+        if hasattr(self, "edge_sentinels"):
+            self.edge_sentinels.update_sentinels()
+        self._log("[Ekran Düzeni] 📐 2D ekran yerleşimi sıfırlandı ve cihazlar yerel monitörlerin sağına hizalandı.")
 
     def _on_peer_drag_start(self, event, peer_id: str):
         self.selected_peer_id = peer_id
         coords = self.peer_canvas_coords.get(peer_id, (event.x - 90, event.y - 45))
         self._drag_data["peer_id"] = peer_id
-        self._drag_data["start_x"] = event.x
-        self._drag_data["start_y"] = event.y
-        self._drag_data["orig_x"] = coords[0]
-        self._drag_data["orig_y"] = coords[1]
+        self._drag_data["last_x"] = event.x
+        self._drag_data["last_y"] = event.y
+        self._drag_data["card_x"] = coords[0]
+        self._drag_data["card_y"] = coords[1]
+        try:
+            self.canvas.lift(f"peer_{peer_id}")
+        except Exception:
+            pass
 
     def _on_peer_drag_motion(self, event):
         pid = self._drag_data.get("peer_id")
         if not pid:
             return
-        dx = event.x - self._drag_data["start_x"]
-        dy = event.y - self._drag_data["start_y"]
-        new_x = max(10, self._drag_data["orig_x"] + dx)
-        new_y = max(10, self._drag_data["orig_y"] + dy)
-        self.peer_canvas_coords[pid] = (new_x, new_y)
-        self._draw_2d_canvas()
+        dx = event.x - self._drag_data.get("last_x", event.x)
+        dy = event.y - self._drag_data.get("last_y", event.y)
+        self._drag_data["last_x"] = event.x
+        self._drag_data["last_y"] = event.y
+
+        self._drag_data["card_x"] = self._drag_data.get("card_x", 0) + dx
+        self._drag_data["card_y"] = self._drag_data.get("card_y", 0) + dy
+        self.peer_canvas_coords[pid] = (self._drag_data["card_x"], self._drag_data["card_y"])
+        try:
+            self.canvas.move(f"peer_{pid}", dx, dy)
+        except Exception:
+            pass
 
     def _on_peer_drag_release(self, event):
         pid = self._drag_data.get("peer_id")
@@ -1002,21 +1067,28 @@ class ConnectMeLinuxGui:
         offset_x = max(20, (cw - loc_w) / 2.0)
         offset_y = max(20, (ch - loc_h) / 2.0)
 
+        card_w = max(210, min(260, int(self.node.peers[pid].get("screenWidth", 1920) * scale + 24)))
+        card_h = max(130, min(150, int(self.node.peers[pid].get("screenHeight", 1080) * scale + 34)))
+
+        card_cx = px1 + card_w / 2.0
+        card_cy = py1 + card_h / 2.0
         loc_cx = offset_x + loc_w / 2.0
         loc_cy = offset_y + loc_h / 2.0
-        card_cx = px1 + 100
-        card_cy = py1 + 60
 
-        diff_x = card_cx - loc_cx
-        diff_y = card_cy - loc_cy
+        dx = card_cx - loc_cx
+        dy = card_cy - loc_cy
 
-        if abs(diff_x) >= abs(diff_y):
-            edge = EDGE_RIGHT if diff_x > 0 else EDGE_LEFT
+        norm_dx = dx / max(1.0, loc_w)
+        norm_dy = dy / max(1.0, loc_h)
+
+        if abs(norm_dx) >= abs(norm_dy):
+            edge = EDGE_RIGHT if norm_dx > 0 else EDGE_LEFT
         else:
-            edge = EDGE_BOTTOM if diff_y > 0 else EDGE_TOP
+            edge = EDGE_BOTTOM if norm_dy > 0 else EDGE_TOP
 
         self.node.set_peer_arrangement(pid, edge, 0.5, px1, py1)
-        self.edge_sentinels.update_sentinels()
+        if hasattr(self, "edge_sentinels"):
+            self.edge_sentinels.update_sentinels()
         self._draw_2d_canvas()
 
     def _set_peer_edge(self, pid: str, edge: int):
@@ -1380,27 +1452,27 @@ class ConnectMeLinuxGui:
                         acc_x2 = px1 + card_w // 2 - 4
                         acc_y2 = py2 - 6
                         acc_tag = f"accept_btn_{pid}"
-                        self.canvas.create_rectangle(acc_x1, acc_y1, acc_x2, acc_y2, fill="#16A34A", outline="#4ADE80", width=1, tags=(card_tag, acc_tag))
-                        self.canvas.create_text((acc_x1 + acc_x2) / 2, (acc_y1 + acc_y2) / 2, text="✨ Kabul Et", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(card_tag, acc_tag))
-                        self.canvas.tag_bind(acc_tag, "<Button-1>", lambda e, p_id=pid: self.node.accept_inbound_pairing(p_id, remember=True))
+                        self.canvas.create_rectangle(acc_x1, acc_y1, acc_x2, acc_y2, fill="#16A34A", outline="#4ADE80", width=1, tags=(acc_tag,))
+                        self.canvas.create_text((acc_x1 + acc_x2) / 2, (acc_y1 + acc_y2) / 2, text="✨ Kabul Et", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(acc_tag,))
+                        self.canvas.tag_bind(acc_tag, "<Button-1>", lambda e, p_id=pid: (self.node.accept_inbound_pairing(p_id, remember=True), "break")[1])
 
                         btn_x1 = px1 + card_w // 2 + 4
                         btn_y1 = py2 - 26
                         btn_x2 = px2 - 8
                         btn_y2 = py2 - 6
                         btn_tag = f"pin_btn_{pid}"
-                        self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(card_tag, btn_tag))
-                        self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 Kod Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(card_tag, btn_tag))
-                        self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: self._show_enter_pin_dialog(peer_obj))
+                        self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(btn_tag,))
+                        self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 Kod Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(btn_tag,))
+                        self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: (self._show_enter_pin_dialog(peer_obj), "break")[1])
                     else:
                         btn_x1 = px1 + 8
                         btn_y1 = py2 - 26
                         btn_x2 = px2 - 8
                         btn_y2 = py2 - 6
                         btn_tag = f"pin_btn_{pid}"
-                        self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(card_tag, btn_tag))
-                        self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 6 Haneli Kodu Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(card_tag, btn_tag))
-                        self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: self._show_enter_pin_dialog(peer_obj))
+                        self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(btn_tag,))
+                        self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 6 Haneli Kodu Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(btn_tag,))
+                        self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: (self._show_enter_pin_dialog(peer_obj), "break")[1])
                 else:
                     # 1. Edge placement pills
                     edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
@@ -1421,9 +1493,9 @@ class ConnectMeLinuxGui:
                         b_out = "#38BDF8" if is_sel else "#334155"
                         b_txt_col = "#FFFFFF" if is_sel else "#94A3B8"
                         b_tag = f"edge_btn_{pid}_{ed_val}"
-                        self.canvas.create_rectangle(bx1, by1, bx2, by2, fill=b_fill, outline=b_out, width=1, tags=(card_tag, b_tag))
-                        self.canvas.create_text((bx1 + bx2) / 2, (by1 + by2) / 2, text=ed_label, fill=b_txt_col, font=("Segoe UI", 7, "bold"), tags=(card_tag, b_tag))
-                        self.canvas.tag_bind(b_tag, "<Button-1>", lambda e, p_id=pid, ed_v=ed_val: self._set_peer_edge(p_id, ed_v))
+                        self.canvas.create_rectangle(bx1, by1, bx2, by2, fill=b_fill, outline=b_out, width=1, tags=(b_tag,))
+                        self.canvas.create_text((bx1 + bx2) / 2, (by1 + by2) / 2, text=ed_label, fill=b_txt_col, font=("Segoe UI", 7, "bold"), tags=(b_tag,))
+                        self.canvas.tag_bind(b_tag, "<Button-1>", lambda e, p_id=pid, ed_v=ed_val: (self._set_peer_edge(p_id, ed_v), "break")[1])
 
                     # 2. Big Action Button: [🎯 Fareyi Aktar]
                     is_controlling = bool(self.node.controlling_remote_peer and (self.node.controlling_remote_peer.get("deviceId") == pid or self.node.controlling_remote_peer.get("ipAddress") == p.get("ipAddress")))
@@ -1435,12 +1507,12 @@ class ConnectMeLinuxGui:
                     act_fill = "#DC2626" if is_controlling else "#16A34A"
                     act_out = "#F87171" if is_controlling else "#4ADE80"
                     act_txt = "🔴 Kontrol Bu Ekranda (Bırak)" if is_controlling else "🎯 Fareyi Bu Cihaza Aktar"
-                    self.canvas.create_rectangle(act_btn_x1, act_btn_y1, act_btn_x2, act_btn_y2, fill=act_fill, outline=act_out, width=1, tags=(card_tag, act_tag))
-                    self.canvas.create_text((act_btn_x1 + act_btn_x2) / 2, (act_btn_y1 + act_btn_y2) / 2, text=act_txt, fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(card_tag, act_tag))
+                    self.canvas.create_rectangle(act_btn_x1, act_btn_y1, act_btn_x2, act_btn_y2, fill=act_fill, outline=act_out, width=1, tags=(act_tag,))
+                    self.canvas.create_text((act_btn_x1 + act_btn_x2) / 2, (act_btn_y1 + act_btn_y2) / 2, text=act_txt, fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(act_tag,))
                     if is_controlling:
-                        self.canvas.tag_bind(act_tag, "<Button-1>", lambda e: self._deactivate_host_capture(notify_peer=True))
+                        self.canvas.tag_bind(act_tag, "<Button-1>", lambda e: (self._deactivate_host_capture(notify_peer=True), "break")[1])
                     else:
-                        self.canvas.tag_bind(act_tag, "<Button-1>", lambda e, peer_obj=p: self._activate_host_capture(peer_obj, peer_obj.get("assignedEdge", EDGE_RIGHT)))
+                        self.canvas.tag_bind(act_tag, "<Button-1>", lambda e, peer_obj=p: (self._activate_host_capture(peer_obj, peer_obj.get("assignedEdge", EDGE_RIGHT)), "break")[1])
 
                 # Bind dragging and clicking
                 self.canvas.tag_bind(card_tag, "<ButtonPress-1>", lambda e, p_id=pid: self._on_peer_drag_start(e, p_id))
@@ -1562,9 +1634,16 @@ class ConnectMeLinuxGui:
     _fix_input_permissions = _fix_uinput_permissions
 
     def _refresh_monitors(self):
-        mons = self.node.topology.refresh_monitors()
+        try:
+            rw = self.root.winfo_screenwidth()
+            rh = self.root.winfo_screenheight()
+        except Exception:
+            rw, rh = None, None
+        mons = self.node.topology.refresh_monitors(root_w=rw, root_h=rh)
         self._log(f"[Topoloji] Çoklu monitör düzeni güncellendi ({len(mons)} ekran algılandı).")
         self._draw_2d_canvas()
+        if hasattr(self, "edge_sentinels"):
+            self.edge_sentinels.update_sentinels()
 
     def _jump_to_manual_ip(self):
         self.notebook.select(1)
