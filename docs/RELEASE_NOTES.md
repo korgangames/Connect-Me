@@ -1,3 +1,30 @@
+# Connect Me v1.8.6 — 120Hz Akıcı Android Fare, WASAPI Ses Alıcısı & Karanlık Mod Güncellemesi
+
+Bu sürüm; Windows'tan Android'e fare geçişinde yaşanan 10 FPS takılma sorununu, Android'den Windows'a ses aktarımında bilgisayarın donması ve sesin duyulmaması hatasını, hatalı sürüm etiketlerini ve düşük kontrastlı açılır menü sorunlarını çözer.
+
+---
+
+### 🌟 v1.8.6 Yenilikleri ve Düzeltmeleri:
+
+* **🖱️ Android 120Hz Donanım Hızlandırmalı Akıcı Fare Hareketi (10 FPS Sorunu Çözüldü):**
+  - **Sorun:** Windows'tan Android'e geçildiğinde farenin 10 FPS civarında kasılması ve gecikmesi. Gelen her UDP fare paketinde (saniyede 125-1000 paket) `WindowManager.updateViewLayout` üzerinden sistem seviyesinde senkronize IPC çağrısı yapılıyor ve bu durum Android arayüz iş parçacığını kilitliyordu.
+  - **Çözüm:** İmleç bindirmesi tek seferlik tam ekran şeffaf kapsayıcıya (`MATCH_PARENT, MATCH_PARENT`) taşındı. İmleç konumu ekranın donanım VSYNC yenileme hızına (`Choreographer.postFrameCallback`) senkron GPU `translationX/translationY` dönüşümleriyle güncellenir. IPC yükü sıfıra indirilerek Android ekranında 120Hz/144Hz yerel akıcılık sağlandı.
+
+* **🎧 Android'den Windows'a Kesintisiz Ses Aktarımı & Windows Donmasının Giderilmesi:**
+  - **Sorun:** Android'den ses aktarımı açıldığında Windows bilgisayarın ağır şekilde kasmaya başlaması ve arayüzde aktif görünmesine rağmen sesin çalınmaması. WinMM waveOut yapısında 64-bit bellek ofset kayması nedeniyle `lpData` göstericisinin bozulması ve hata durumunda saniyede 100 kez aygıtın yeniden başlatılmaya çalışılarak Windows Ses Hizmeti'nin (`audiosrv` / `audiodg.exe`) kilitlenmesi.
+  - **Çözüm:** Windows ses alıcı motoru modern WASAPI (`IAudioClient` ve `IAudioRenderClient`) paylaşımlı mod mimarisine geçirildi. Gelen UDP ses paketleri kilitlenmeyen (lock-free) ultra düşük gecikmeli bir jitter kuyruğuna alınarak bağımsız bir arka plan iş parçacığı tarafından işlenir. Ağ iş parçacığı mikrosaniyeler içinde döndüğü için işlemci kullanımı sıfıra indirildi; ses takılmasız ve berrak çalınır.
+
+* **🎨 Yüksek Kontrastlı Karanlık Mod Açılır Menüleri (Windows, Linux & Android):**
+  - **Windows:** Ses çıkış aygıtı dropdown kutusundaki beyaz arka plan üzerine açık gri yazı sorunu giderildi. Koyu arka plan (`#161B22`), ince kenarlık (`#30363D`), parlak beyaz metinler (`#F0F6FC`) ve mavi vurgu (`#0969DA`) ile yüksek kontrastlı modern bir WPF şablonu uygulandı.
+  - **Linux:** Tkinter `TCombobox` ve açılır liste kutusu (`Listbox`) koyu paletle (`#1E293B`) ve parlak yazılarla güncellendi.
+  - **Android:** Ses matrisi seçim penceresi net okunabilirlik sağlayan koyu tema (`Theme_DeviceDefault_Dialog_Alert`) ile güçlendirildi.
+
+* **🏷️ Sürüm Etiketi Temizliği:**
+  - Windows arayüzünün sol üst köşesinde kalan eski `v1.7.2` rozeti kaldırıldı; sürüm yalnızca sağ alt durum çubuğunda dinamik olarak görüntüleniyor.
+  - Linux ana başlığındaki mükerrer versiyon gösterimi sadeleştirildi.
+
+---
+
 # Connect Me v1.8.5 — Kesintisiz Fare Aktarımı, Ses Matrisi Otomatik Uygulama & Kararlılık Güncellemesi
 
 Bu sürüm; çoklu cihaz (Linux, Windows, Android) eşleşmelerinde farenin beklenmedik şekilde kopmasını, Linux ekran kenarından otomatik geçişin arayüze ihtiyaç duymadan 1000Hz donanım seviyesinde çalışmasını ve ses yönlendirme seçiminin anında varsayılana sıfırlanması sorununu kökten çözer.

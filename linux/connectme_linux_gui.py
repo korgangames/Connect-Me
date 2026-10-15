@@ -505,6 +505,20 @@ class ConnectMeLinuxGui:
         style.configure("Danger.TButton", font=("Segoe UI", 10), background="#DC2626", foreground="#FFFFFF")
         style.map("Danger.TButton", background=[("active", "#B91C1C")])
 
+        # Dropdown Menüler (High-Contrast Dark Mode Combobox & Popdown Listbox)
+        style.configure("TCombobox", background="#1E293B", foreground="#F8FAFC", fieldbackground="#1E293B",
+                        arrowcolor="#38BDF8", darkcolor="#1E293B", lightcolor="#1E293B", bordercolor="#334155")
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", "#1E293B"), ("active", "#1E293B"), ("focus", "#0F172A")],
+                  foreground=[("readonly", "#F8FAFC"), ("active", "#38BDF8"), ("focus", "#38BDF8")],
+                  selectbackground=[("readonly", "#0284C7")],
+                  selectforeground=[("readonly", "#FFFFFF")])
+        self.root.option_add("*TCombobox*Listbox.background", "#1E293B")
+        self.root.option_add("*TCombobox*Listbox.foreground", "#F8FAFC")
+        self.root.option_add("*TCombobox*Listbox.selectBackground", "#0284C7")
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        self.root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 10))
+
     def _build_ui(self):
         # Üst Başlık Barı
         header_frame = ttk.Frame(self.root, padding=16)
@@ -512,7 +526,7 @@ class ConnectMeLinuxGui:
 
         title_box = ttk.Frame(header_frame)
         title_box.pack(side=tk.LEFT)
-        ttk.Label(title_box, text=f"⚡ Connect Me v{VERSION} — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(title_box, text="⚡ Connect Me — Nobara Linux", style="Header.TLabel").pack(anchor=tk.W)
         ttk.Label(title_box, text="KDE Plasma Wayland Çoklu Monitör & KVM Kontrol Paneli", style="SubHeader.TLabel").pack(anchor=tk.W)
 
         status_box = ttk.Frame(header_frame)

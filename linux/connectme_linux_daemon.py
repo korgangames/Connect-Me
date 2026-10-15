@@ -51,7 +51,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.5"
+    return "1.8.6"
 
 VERSION = _resolve_app_version()
 

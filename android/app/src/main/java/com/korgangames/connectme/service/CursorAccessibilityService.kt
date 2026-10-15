@@ -16,9 +16,11 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.DisplayMetrics
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.korgangames.connectme.network.ConnectMeService
@@ -44,9 +46,35 @@ class CursorAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var windowManager: WindowManager? = null
+    private var overlayContainer: FrameLayout? = null
     private var cursorView: CursorPointerView? = null
     private var overlayParams: WindowManager.LayoutParams? = null
     private var isOverlayAttached = false
+
+    @Volatile
+    private var isFrameScheduled = false
+
+    private val frameCallback = Choreographer.FrameCallback {
+        isFrameScheduled = false
+        val cv = cursorView ?: return@FrameCallback
+        cv.translationX = cursorX
+        cv.translationY = cursorY
+        if (isCursorActiveOnAndroid && cv.visibility != View.VISIBLE) {
+            cv.visibility = View.VISIBLE
+        }
+    }
+
+    private fun scheduleCursorRender() {
+        if (!isFrameScheduled) {
+            isFrameScheduled = true
+            mainHandler.post {
+                if (!isOverlayAttached) {
+                    ensureOverlayCreated()
+                }
+                Choreographer.getInstance().postFrameCallback(frameCallback)
+            }
+        }
+    }
 
     var screenWidth = 1080
         private set
@@ -183,10 +211,10 @@ class CursorAccessibilityService : AccessibilityService() {
                 WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
             }
 
-            val view = CursorPointerView(this)
+            val container = FrameLayout(this)
             val params = WindowManager.LayoutParams(
-                64,
-                64,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
                 overlayType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -196,12 +224,21 @@ class CursorAccessibilityService : AccessibilityService() {
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                x = cursorX.roundToInt()
-                y = cursorY.roundToInt()
+                x = 0
+                y = 0
             }
 
+            val view = CursorPointerView(this)
+            val cursorLp = FrameLayout.LayoutParams(64, 64).apply {
+                gravity = Gravity.TOP or Gravity.START
+            }
+            view.translationX = cursorX
+            view.translationY = cursorY
+            container.addView(view, cursorLp)
+
             try {
-                wm.addView(view, params)
+                wm.addView(container, params)
+                overlayContainer = container
                 cursorView = view
                 overlayParams = params
                 isOverlayAttached = true
@@ -211,7 +248,8 @@ class CursorAccessibilityService : AccessibilityService() {
                 if (Settings.canDrawOverlays(this)) {
                     try {
                         params.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                        wm.addView(view, params)
+                        wm.addView(container, params)
+                        overlayContainer = container
                         cursorView = view
                         overlayParams = params
                         isOverlayAttached = true
@@ -225,13 +263,14 @@ class CursorAccessibilityService : AccessibilityService() {
 
     private fun removeOverlay() {
         mainHandler.post {
-            if (isOverlayAttached && cursorView != null) {
+            if (isOverlayAttached && overlayContainer != null) {
                 try {
-                    windowManager?.removeView(cursorView)
+                    windowManager?.removeView(overlayContainer)
                 } catch (_: Exception) {
                 }
             }
             isOverlayAttached = false
+            overlayContainer = null
             cursorView = null
         }
     }
@@ -273,13 +312,14 @@ class CursorAccessibilityService : AccessibilityService() {
         mainHandler.post {
             ensureOverlayCreated()
             cursorView?.visibility = View.VISIBLE
+            cursorView?.translationX = cursorX
+            cursorView?.translationY = cursorY
             cursorView?.triggerPulse()
-            updateCursorLayoutPosition()
         }
     }
 
     /**
-     * Processes high-frequency relative mouse movement from Windows.
+     * Processes high-frequency relative mouse movement from Windows at native 120Hz.
      */
     fun onRemoteMouseMove(packet: MouseMovePacket) {
         if (!isCursorActiveOnAndroid) {
@@ -351,23 +391,8 @@ class CursorAccessibilityService : AccessibilityService() {
         cursorX = nextX.coerceIn(0f, (screenWidth - 1).toFloat())
         cursorY = nextY.coerceIn(0f, (screenHeight - 1).toFloat())
 
-        mainHandler.post {
-            if (!isOverlayAttached) ensureOverlayCreated()
-            cursorView?.visibility = View.VISIBLE
-            updateCursorLayoutPosition()
-        }
-    }
-
-    private fun updateCursorLayoutPosition() {
-        val wm = windowManager ?: return
-        val view = cursorView ?: return
-        val params = overlayParams ?: return
-        params.x = cursorX.roundToInt()
-        params.y = cursorY.roundToInt()
-        try {
-            wm.updateViewLayout(view, params)
-        } catch (_: Exception) {
-        }
+        // 120Hz Hardware-accelerated GPU render (zero WindowManager IPC)
+        scheduleCursorRender()
     }
 
     fun onRemoteMouseButton(packet: MouseButtonPacket) {

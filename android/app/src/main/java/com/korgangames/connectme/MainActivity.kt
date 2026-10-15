@@ -1219,7 +1219,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("🎧 Ses Çıkış Matrisi (Tüm Cihazlar)")
             .setSingleChoiceItems(items.toTypedArray(), checkedIndex) { dialog, which ->
                 dialog.dismiss()
