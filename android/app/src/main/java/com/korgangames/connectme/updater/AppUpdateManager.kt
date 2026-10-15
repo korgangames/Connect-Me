@@ -57,7 +57,7 @@ object AppUpdateManager {
                 val tag = loc.substringAfterLast("/").trim()
                 if (tag.isNotEmpty()) tag else null
             } else null
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             null
         }
     }
@@ -193,7 +193,6 @@ object AppUpdateManager {
                 } else {
                     mainHandler.post { onResult(null, "Bağlantı hatası: ${e.message}") }
                 }
-            }
             }
         }
     }

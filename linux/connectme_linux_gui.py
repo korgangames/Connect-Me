@@ -2198,29 +2198,21 @@ X-GNOME-Autostart-enabled=true
     def _check_for_updates(self, is_manual: bool = False):
         try:
             self._log("🔍 [Güncelleme] GitHub Releases üzerinden yeni sürüm denetleniyor...")
-            req = urllib.request.Request(
-                "https://api.github.com/repos/korgangames/Connect-Me/releases/latest",
-                headers={"User-Agent": f"ConnectMe-Linux/{VERSION}", "Accept": "application/vnd.github.v3+json"}
-            )
-            with urllib.request.urlopen(req, timeout=12) as response:
-                if response.status == 200:
-                    data = json.loads(response.read().decode("utf-8"))
-                    remote_tag = data.get("tag_name", "").strip()
-                    if remote_tag:
-                        r_parts = [int(p) for p in remote_tag.lstrip("v").split(".") if p.isdigit()]
-                        c_parts = [int(p) for p in VERSION.split(".") if p.isdigit()]
-                        is_newer = False
-                        for i in range(max(len(r_parts), len(c_parts))):
-                            r = r_parts[i] if i < len(r_parts) else 0
-                            c = c_parts[i] if i < len(c_parts) else 0
-                            if r > c:
-                                is_newer = True
-                                break
-                            elif r < c:
-                                break
+            remote_tag = None
+            tar_url = None
+            title = None
 
-                        if is_newer:
-                            tar_url = data.get("html_url", "https://github.com/korgangames/Connect-Me/releases")
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/korgangames/Connect-Me/releases/latest",
+                    headers={"User-Agent": f"ConnectMe-Linux/{VERSION}", "Accept": "application/vnd.github.v3+json"}
+                )
+                with urllib.request.urlopen(req, timeout=12) as response:
+                    if response.status == 200:
+                        data = json.loads(response.read().decode("utf-8"))
+                        remote_tag = data.get("tag_name", "").strip()
+                        title = data.get("name", remote_tag)
+                        if remote_tag:
                             clean_tag = remote_tag.lstrip("v").lstrip("V")
                             fallback_url = None
                             for a in data.get("assets", []):
@@ -2232,20 +2224,54 @@ X-GNOME-Autostart-enabled=true
                                         break
                                     elif fallback_url is None:
                                         fallback_url = a.get("browser_download_url", tar_url)
-                            if fallback_url and tar_url == data.get("html_url", "https://github.com/korgangames/Connect-Me/releases"):
+                            if fallback_url and not tar_url:
                                 tar_url = fallback_url
-                            self.root.after(0, lambda: self._on_new_update_found(remote_tag, tar_url, data.get("name", remote_tag)))
-                            return
+            except Exception as api_err:
+                self._log(f"[Güncelleme] API doğrudan yanıt vermedi ({api_err}), GitHub yönlendirmesi deneniyor...")
+
+            # Fallback: GitHub web 302 redirect (Rate limit aşımı durumunda API yerine çalışır)
+            if not remote_tag:
+                try:
+                    class NoRedirect(urllib.request.HTTPRedirectHandler):
+                        def redirect_request(self, req, fp, code, msg, headers, newurl):
+                            self.redir = newurl
+                            return None
+                    nr = NoRedirect()
+                    opener = urllib.request.build_opener(nr)
+                    try:
+                        opener.open(urllib.request.Request("https://github.com/korgangames/Connect-Me/releases/latest", headers={"User-Agent": "Mozilla/5.0"}), timeout=8)
+                    except urllib.error.HTTPError as he:
+                        target = getattr(nr, "redir", None) or he.headers.get("Location")
+                        if target:
+                            t = target.rstrip("/").split("/")[-1].strip()
+                            if t:
+                                remote_tag = t
+                                title = f"Connect Me {remote_tag}"
+                                tar_url = f"https://github.com/korgangames/Connect-Me/releases/download/{remote_tag}/ConnectMe-Linux-x64.tar.gz"
+                except Exception:
+                    pass
+
+            if remote_tag:
+                r_parts = [int(p) for p in remote_tag.lstrip("v").split(".") if p.isdigit()]
+                c_parts = [int(p) for p in VERSION.split(".") if p.isdigit()]
+                is_newer = False
+                for i in range(max(len(r_parts), len(c_parts))):
+                    r = r_parts[i] if i < len(r_parts) else 0
+                    c = c_parts[i] if i < len(c_parts) else 0
+                    if r > c:
+                        is_newer = True
+                        break
+                    elif r < c:
+                        break
+
+                if is_newer:
+                    if not tar_url:
+                        tar_url = f"https://github.com/korgangames/Connect-Me/releases/download/{remote_tag}/ConnectMe-Linux-x64.tar.gz"
+                    self.root.after(0, lambda: self._on_new_update_found(remote_tag, tar_url, title or remote_tag))
+                    return
 
             if is_manual:
                 self.root.after(0, lambda: messagebox.showinfo("Connect Me Güncel", f"Tebrikler! Connect Me zaten en son sürümde (v{VERSION})."))
-        except urllib.error.HTTPError as he:
-            err_msg = f"GitHub HTTP {he.code}: {he.reason}"
-            if he.code == 404:
-                err_msg = "GitHub 404 Not Found (Depo 'Private' olabilir, güncelleme için 'Public' olmalıdır)."
-            self._log(f"[Güncelleme Hatası] {err_msg}")
-            if is_manual:
-                self.root.after(0, lambda: messagebox.showwarning("Güncelleme Hatası", f"Güncelleme kontrolü başarısız oldu:\n\n{err_msg}"))
         except Exception as ex:
             self._log(f"[Güncelleme Hatası] {ex}")
             if is_manual:
@@ -2353,7 +2379,8 @@ X-GNOME-Autostart-enabled=true
                     self.node.stop()
                 except Exception:
                     pass
-                os.execv(sys.executable, [sys.executable] + sys.argv)
+                script_path = str(Path(__file__).resolve())
+                os.execv(sys.executable, [sys.executable, script_path])
 
             self.root.after(0, _notify_and_restart)
 

@@ -41,7 +41,19 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 MAGIC_0 = 0x43  # 'C'
 MAGIC_1 = 0x4D  # 'M'
 PROTO_VER = 0x01
-VERSION = "1.8.2"
+
+def _resolve_app_version() -> str:
+    for candidate in [Path(__file__).resolve().parent / "VERSION", Path(__file__).resolve().parent.parent / "VERSION"]:
+        if candidate.exists():
+            try:
+                v = candidate.read_text(encoding="utf-8").strip()
+                if v:
+                    return v
+            except Exception:
+                pass
+    return "1.8.4"
+
+VERSION = _resolve_app_version()
 
 DISCOVERY_UDP_PORT = 42849
 FAST_INPUT_UDP_PORT = 42850

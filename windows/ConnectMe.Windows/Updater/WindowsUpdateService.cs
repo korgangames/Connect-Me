@@ -224,12 +224,17 @@ public static class WindowsUpdateService
             throw new InvalidOperationException("Mevcut uygulamanın konumu belirlenemedi.");
         }
 
+        string? currentDir = Path.GetDirectoryName(currentExe);
+        string newVersionFile = Path.Combine(Path.GetDirectoryName(newExe) ?? extractDir, "VERSION");
+
         // Güncelleme komut betiği (.cmd) - Ping ile bekleme ve kilit kalkana kadar döngü
         string cmdPath = Path.Combine(tempDir, "apply_update.cmd");
         string cmdContent = $@"@echo off
 setlocal
 set ""SRC={newExe}""
 set ""DST={currentExe}""
+set ""SRC_VER={newVersionFile}""
+set ""DST_DIR={currentDir}""
 set /a ATTEMPTS=0
 
 :retry
@@ -239,6 +244,8 @@ if %ATTEMPTS% gtr 40 goto fail
 ping 127.0.0.1 -n 2 >nul
 copy /y ""%SRC%"" ""%DST%"" >nul 2>&1
 if errorlevel 1 goto retry
+
+if exist ""%SRC_VER%"" copy /y ""%SRC_VER%"" ""%DST_DIR%\VERSION"" >nul 2>&1
 
 start """" ""%DST%""
 goto cleanup

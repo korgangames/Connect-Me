@@ -38,8 +38,9 @@ jobs:
           $ver = (Get-Content VERSION).Trim()
           dotnet publish windows/ConnectMe.Windows/ConnectMe.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$ver -p:AssemblyVersion=$ver -p:FileVersion=$ver -p:InformationalVersion="v$ver" -o publish/windows
           Move-Item publish/windows/ConnectMe.Windows.exe publish/windows/ConnectMe.exe
+          Copy-Item VERSION publish/windows/VERSION
           New-Item -ItemType Directory -Force -Path publish/dist
-          Compress-Archive -Path publish/windows/ConnectMe.exe -DestinationPath "publish/dist/ConnectMe-Windows-x64-v$ver.zip"
+          Compress-Archive -Path publish/windows/ConnectMe.exe,publish/windows/VERSION -DestinationPath "publish/dist/ConnectMe-Windows-x64-v$ver.zip"
           Copy-Item "publish/dist/ConnectMe-Windows-x64-v$ver.zip" "publish/dist/ConnectMe-Windows-x64.zip"
 
       - name: Upload Windows Build Artifact
@@ -106,6 +107,7 @@ jobs:
           VER=$(tr -d '\r\n ' < VERSION)
           mkdir -p package/ConnectMe-Linux
           cp -r linux/* package/ConnectMe-Linux/
+          cp VERSION package/ConnectMe-Linux/
           chmod +x package/ConnectMe-Linux/*.sh package/ConnectMe-Linux/*.py
           mkdir -p publish/dist
           tar -czvf "publish/dist/ConnectMe-Linux-x64-v${VER}.tar.gz" -C package ConnectMe-Linux
