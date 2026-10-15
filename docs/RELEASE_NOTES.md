@@ -1,3 +1,29 @@
+# Connect Me v1.8.8 — Kristal Netliğinde Ses Aktarımı & Statik Gürültü Giderme Güncellemesi
+
+Bu sürüm; Android'den Windows'a ses aktarıldığında sesin yalnızca statik beyaz gürültü / cızırtı olarak duyulması sorununu, ses tampon boyutu ve bellek hizalama hatalarını çözer.
+
+---
+
+### 🌟 v1.8.8 Yenilikleri ve Düzeltmeleri:
+
+* **🎧 Kristal Netliğinde Windows WinMM Ses Çalma (Statik Gürültü Kökten Çözüldü):**
+  - **Sorun:** Android'den ses aktarıldığında konuşmaların ve müziğin sadece bozuk statik gürültü ve cızırtı olarak duyulması. `waveOutPrepareHeader` çağrısının 4096 baytlık rastgele başlatılmamış bellek bloklarıyla önceden hazırlanması ve her gelen 1920 baytlık paketin arkasından 2176 baytlık RAM çöpünün çalınarak sesin boğulması ve 2x yavaşlaması.
+  - **Çözüm:** `WindowsAudioPlaybackEngine` dinamik ve tam boyutlu `waveOutPrepareHeader` / `waveOutUnprepareHeader` mimarisine geçirildi. Her paket yalnızca kendi gerçek bayt uzunluğunda hazırlanıp donanıma verilir; RAM artıklarından kaynaklanan beyaz gürültü ve gecikme tamamen yok edildi.
+  - **Dinamik Format:** Gelen sesin örnekleme hızı (`SampleRate`), kanal sayısı (`Channels`) ve bit derinliği paketten dinamik olarak okunup ses sürücüsüne birebir aktarılır.
+  - **Ses Ayarlama Güvenliği:** Yazılımsal ses seviyesi hesaplaması `BinaryPrimitives` kullanılarak 16-bit little-endian işaretli tamsayılar için matematiksel taşma ve bit kayması olmadan optimize edildi.
+
+* **📱 Android Ses Yakalama Senkronizasyonu (Pacing & Hizalama):**
+  - Android `AudioRecord` okuması `READ_BLOCKING` moduna alınarak doğrudan donanım ses saatiyle senkronize edildi.
+  - 16-bit Stereo için 4 baytlık çerçeve hizalaması (`frame alignment`) garanti altına alınarak bayt kaymalarından doğabilecek faz/gürültü bozulmaları engellendi.
+  - Sessizlik anlarında yapay `Thread.sleep` kaldırıldı; ses yakalama motoru sürekli akıcı kalarak tampon taşması ve atlamaları engellendi.
+
+* **🐧 Linux Çapraz Platform Paket Format Uyumu:**
+  - PipeWire / PulseAudio UDP ses paketi başlığı Windows ve Android protokolü ile birebir uyumlu hale getirildi (`<BIBHH`).
+
+---
+
+# Connect Me v1.8.7 — Windows-Android Kesintisiz Ses Köprüsü & 120Hz İmleç Düzeltmesi
+
 # Connect Me v1.8.6 — 120Hz Akıcı Android Fare, WASAPI Ses Alıcısı & Karanlık Mod Güncellemesi
 
 Bu sürüm; Windows'tan Android'e fare geçişinde yaşanan 10 FPS takılma sorununu, Android'den Windows'a ses aktarımında bilgisayarın donması ve sesin duyulmaması hatasını, hatalı sürüm etiketlerini ve düşük kontrastlı açılır menü sorunlarını çözer.

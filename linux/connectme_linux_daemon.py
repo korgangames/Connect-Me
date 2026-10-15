@@ -51,7 +51,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.6"
+    return "1.8.8"
 
 VERSION = _resolve_app_version()
 
@@ -3327,7 +3327,7 @@ class ConnectMeLinuxNode:
                     break
                 self.audio_seq = (self.audio_seq + 1) & 0xFFFF
                 # MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, channels(1B), sample_rate(4B), bits_per_sample(1B), seq(2B), pcm_len(2B)
-                hdr = struct.pack("<BBBBBIHBH", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, 2, 48000, 16, self.audio_seq, len(raw))
+                hdr = struct.pack("<BBBBBIBHH", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, 2, 48000, 16, self.audio_seq, len(raw))
                 sock.sendto(hdr + raw, (target_ip, AUDIO_STREAM_UDP_PORT))
             except Exception:
                 break
@@ -3379,7 +3379,7 @@ class ConnectMeLinuxNode:
                 if data[3] != PACKET_AUDIO_CHUNK:
                     continue
 
-                ch, sr, bits, seq, payload_len = struct.unpack("<BIHBH", data[4:14])
+                ch, sr, bits, seq, payload_len = struct.unpack("<BIBHH", data[4:14])
                 pcm_data = data[14:14 + payload_len] if len(data) >= 14 + payload_len else data[14:]
                 if not pcm_data:
                     continue

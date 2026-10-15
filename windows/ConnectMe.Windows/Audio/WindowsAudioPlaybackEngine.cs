@@ -22,10 +22,10 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     private const int WAVE_FORMAT_PCM = 1;
 
     private const int NUM_RING_BUFFERS = 16;
-    private const int BUFFER_SIZE = 4096;
+    private const int MAX_BUFFER_SIZE = 8192;
 
     private readonly ConnectMeNetworkNode _network;
-    private readonly ConcurrentQueue<byte[]> _audioQueue = new();
+    private readonly ConcurrentQueue<AudioChunkPacket> _audioQueue = new();
     private readonly AutoResetEvent _dataAvailable = new(false);
     private readonly object _waveLock = new();
 
@@ -106,10 +106,8 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
 
     private readonly IntPtr[] _buffers = new IntPtr[NUM_RING_BUFFERS];
     private readonly IntPtr[] _headers = new IntPtr[NUM_RING_BUFFERS];
+    private readonly bool[] _isPrepared = new bool[NUM_RING_BUFFERS];
     private int _writeIndex;
-
-    private static readonly int DwBufferLengthOffset =
-        Marshal.OffsetOf<WAVEHDR>(nameof(WAVEHDR.dwBufferLength)).ToInt32();
 
     public WindowsAudioPlaybackEngine(ConnectMeNetworkNode network)
     {
@@ -151,7 +149,7 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
             _audioQueue.TryDequeue(out _);
         }
 
-        _audioQueue.Enqueue(packet.PcmData);
+        _audioQueue.Enqueue(packet);
         _dataAvailable.Set();
 
         // Throttle UI update callback to at most every 500ms (prevent UI thread overhead)
@@ -179,16 +177,23 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                 continue;
             }
 
-            if (!_audioQueue.TryDequeue(out var pcmChunk))
+            if (!_audioQueue.TryDequeue(out var packet))
             {
                 // Sleep until audio arrives or timeout 10ms
                 _dataAvailable.WaitOne(10);
                 continue;
             }
 
+            if (packet.PcmData == null || packet.PcmData.Length == 0)
+                continue;
+
+            int sampleRate = packet.SampleRate > 0 ? (int)packet.SampleRate : 48000;
+            int channels = packet.Channels > 0 ? packet.Channels : 2;
+            int bitsPerSample = packet.BitsPerSample > 0 ? packet.BitsPerSample : 16;
+
             lock (_waveLock)
             {
-                EnsureWaveOutOpenLocked(48000, 2, 16);
+                EnsureWaveOutOpenLocked(sampleRate, channels, bitsPerSample);
                 if (_hWaveOut == IntPtr.Zero)
                 {
                     Thread.Sleep(20);
@@ -199,9 +204,9 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                 {
                     if (_volume < 0.999f)
                     {
-                        ApplyVolume(pcmChunk, _volume);
+                        ApplyVolume(packet.PcmData, _volume);
                     }
-                    PlayPcmBufferLocked(pcmChunk);
+                    PlayPcmBufferLocked(packet);
                 }
             }
         }
@@ -217,10 +222,9 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         int samples = pcm.Length / 2;
         for (int i = 0; i < samples; i++)
         {
-            short val = (short)(pcm[i * 2] | (pcm[i * 2 + 1] << 8));
+            short val = System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(pcm.AsSpan(i * 2, 2));
             val = (short)Math.Clamp((int)(val * vol), short.MinValue, short.MaxValue);
-            pcm[i * 2] = (byte)(val & 0xFF);
-            pcm[i * 2 + 1] = (byte)((val >> 8) & 0xFF);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(i * 2, 2), val);
         }
     }
 
@@ -268,19 +272,12 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
             _currentBitsPerSample = bitsPerSample;
             _writeIndex = 0;
 
-            // Pre-allocate static ring buffers and headers upfront
+            // Pre-allocate ring buffers and headers
             for (int i = 0; i < NUM_RING_BUFFERS; i++)
             {
-                _buffers[i] = Marshal.AllocHGlobal(BUFFER_SIZE);
-                var hdr = new WAVEHDR
-                {
-                    lpData = _buffers[i],
-                    dwBufferLength = (uint)BUFFER_SIZE,
-                    dwFlags = 0
-                };
+                _buffers[i] = Marshal.AllocHGlobal(MAX_BUFFER_SIZE);
                 _headers[i] = Marshal.AllocHGlobal(Marshal.SizeOf<WAVEHDR>());
-                Marshal.StructureToPtr(hdr, _headers[i], false);
-                waveOutPrepareHeader(_hWaveOut, _headers[i], (uint)Marshal.SizeOf<WAVEHDR>());
+                _isPrepared[i] = false;
             }
 
             _network.Log($"[Ses & Kulaklık Köprüsü] 🎧 WinMM ses çıkışı hazır ({sampleRate} Hz, {channels} kanal, {bitsPerSample} bit, Aygıt #{targetDevId}).");
@@ -292,10 +289,17 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         }
     }
 
-    private void PlayPcmBufferLocked(byte[] pcm)
+    private void PlayPcmBufferLocked(in AudioChunkPacket packet)
     {
-        if (_hWaveOut == IntPtr.Zero || pcm.Length == 0)
+        if (_hWaveOut == IntPtr.Zero || packet.PcmData == null || packet.PcmData.Length == 0)
             return;
+
+        int bytesPerFrame = Math.Max(1, packet.Channels * (packet.BitsPerSample / 8));
+        int alignedLen = packet.PcmData.Length - (packet.PcmData.Length % bytesPerFrame);
+        if (alignedLen <= 0)
+            return;
+
+        int copyLen = Math.Min(alignedLen, MAX_BUFFER_SIZE);
 
         int idx = _writeIndex;
         _writeIndex = (_writeIndex + 1) % NUM_RING_BUFFERS;
@@ -305,14 +309,29 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         if (pBuf == IntPtr.Zero || pHdr == IntPtr.Zero)
             return;
 
-        int copyLen = Math.Min(pcm.Length, BUFFER_SIZE);
-        Marshal.Copy(pcm, 0, pBuf, copyLen);
+        // If previously prepared, safely unprepare before modifying and re-preparing
+        if (_isPrepared[idx])
+        {
+            waveOutUnprepareHeader(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
+            _isPrepared[idx] = false;
+        }
 
-        // Update dwBufferLength in the pre-allocated WAVEHDR using exact runtime 64-bit offset
-        Marshal.WriteInt32(pHdr, DwBufferLengthOffset, copyLen);
+        Marshal.Copy(packet.PcmData, 0, pBuf, copyLen);
 
-        // Submit to waveOut driver directly with 0 dynamic allocations
-        waveOutWrite(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
+        var hdr = new WAVEHDR
+        {
+            lpData = pBuf,
+            dwBufferLength = (uint)copyLen,
+            dwFlags = 0
+        };
+        Marshal.StructureToPtr(hdr, pHdr, false);
+
+        int prepRes = waveOutPrepareHeader(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
+        if (prepRes == MMSYSERR_NOERROR)
+        {
+            _isPrepared[idx] = true;
+            waveOutWrite(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
+        }
     }
 
     private void CloseWaveOutLocked()
@@ -326,7 +345,11 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                 {
                     if (_headers[i] != IntPtr.Zero)
                     {
-                        try { waveOutUnprepareHeader(_hWaveOut, _headers[i], (uint)Marshal.SizeOf<WAVEHDR>()); } catch { }
+                        if (_isPrepared[i])
+                        {
+                            try { waveOutUnprepareHeader(_hWaveOut, _headers[i], (uint)Marshal.SizeOf<WAVEHDR>()); } catch { }
+                            _isPrepared[i] = false;
+                        }
                         try { Marshal.FreeHGlobal(_headers[i]); } catch { }
                         _headers[i] = IntPtr.Zero;
                     }

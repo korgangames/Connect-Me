@@ -163,7 +163,7 @@ class AudioStreamEngine private constructor() {
             return
         }
 
-        val pcmChunkSize = 1920
+        val pcmChunkSize = 1920 // 480 samples * 2 channels * 2 bytes = 10ms @ 48kHz
         val pcmBuffer = ByteArray(pcmChunkSize)
         val packetBuffer = ByteArray(14 + pcmChunkSize)
         var sequence: Short = 0
@@ -171,18 +171,23 @@ class AudioStreamEngine private constructor() {
         while (isRunning.get()) {
             val record = audioRecord ?: break
             val bytesRead = try {
-                record.read(pcmBuffer, 0, pcmChunkSize)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    record.read(pcmBuffer, 0, pcmChunkSize, AudioRecord.READ_BLOCKING)
+                } else {
+                    record.read(pcmBuffer, 0, pcmChunkSize)
+                }
             } catch (t: Throwable) {
                 -1
             }
+
             if (bytesRead > 0) {
-                // Silence suppression: Do not flood network when audio is completely silent
-                if (isBufferSilent(pcmBuffer, bytesRead)) {
-                    try {
-                        Thread.sleep(10)
-                    } catch (_: InterruptedException) {
-                        break
-                    }
+                // Ensure strict 4-byte frame alignment (16-bit Stereo: 2 ch * 2 bytes = 4 bytes per frame)
+                val validBytes = bytesRead - (bytesRead % 4)
+                if (validBytes <= 0) continue
+
+                // Silence suppression: Do not flood network when audio is completely silent,
+                // but do NOT sleep because READ_BLOCKING naturally paces the loop with audio ADC hardware clock
+                if (isBufferSilent(pcmBuffer, validBytes)) {
                     continue
                 }
 
@@ -195,10 +200,10 @@ class AudioStreamEngine private constructor() {
                 bb.putInt(SAMPLE_RATE)
                 bb.put(BITS_PER_SAMPLE.toByte())
                 bb.putShort(sequence++)
-                bb.putShort(bytesRead.toShort())
-                bb.put(pcmBuffer, 0, bytesRead)
+                bb.putShort(validBytes.toShort())
+                bb.put(pcmBuffer, 0, validBytes)
 
-                val packetLength = 14 + bytesRead
+                val packetLength = 14 + validBytes
                 try {
                     val datagram = DatagramPacket(packetBuffer, packetLength, targetAddr, AUDIO_UDP_PORT)
                     udpSocket?.send(datagram)
