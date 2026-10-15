@@ -45,10 +45,10 @@ class AndroidAudioPlaybackEngine private constructor() {
             val channelConfig = AudioFormat.CHANNEL_OUT_STEREO
             val audioEncoding = AudioFormat.ENCODING_PCM_16BIT
             val minBufSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioEncoding)
-            val bufferSize = (minBufSize * 2).coerceAtLeast(7680)
+            val bufferSize = minBufSize.coerceAtLeast(3840)
 
             val track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                AudioTrack.Builder()
+                val builder = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -64,7 +64,12 @@ class AndroidAudioPlaybackEngine private constructor() {
                     )
                     .setBufferSizeInBytes(bufferSize)
                     .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                }
+
+                builder.build()
             } else {
                 @Suppress("DEPRECATION")
                 AudioTrack(

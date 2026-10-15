@@ -206,11 +206,11 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
 
                         if (pcmChunk.Length > 0 && _udpClient != null)
                         {
-                            // Split into standard chunks of up to 1920 bytes (~10ms)
+                            // Split into MTU-safe chunks of up to 960 bytes (~5ms @ 48kHz Stereo)
                             int offset = 0;
                             while (offset < pcmChunk.Length && _isRunning)
                             {
-                                int chunkLen = Math.Min(1920, pcmChunk.Length - offset);
+                                int chunkLen = Math.Min(960, pcmChunk.Length - offset);
                                 byte[] subChunk = new byte[chunkLen];
                                 Buffer.BlockCopy(pcmChunk, offset, subChunk, 0, chunkLen);
 

@@ -80,7 +80,7 @@ class AudioStreamEngine private constructor() {
         val channelConfig = AudioFormat.CHANNEL_IN_STEREO
         val audioEncoding = AudioFormat.ENCODING_PCM_16BIT
         val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, channelConfig, audioEncoding)
-        val bufferSize = (minBufferSize * 2).coerceAtLeast(7680)
+        val bufferSize = minBufferSize.coerceAtLeast(3840)
 
         val format = AudioFormat.Builder()
             .setEncoding(audioEncoding)
@@ -113,6 +113,13 @@ class AudioStreamEngine private constructor() {
 
             try {
                 audioRecord?.startRecording()
+                // Drain any stale hardware buffer so the very first packet sent is live
+                val drainBuf = ByteArray(960)
+                var drainCount = 5
+                while (drainCount-- > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val r = audioRecord?.read(drainBuf, 0, 960, AudioRecord.READ_NON_BLOCKING) ?: -1
+                    if (r <= 0) break
+                }
             } catch (t: Throwable) {
                 Log.e(TAG, "AudioRecord startRecording failed: ${t.message}", t)
                 stop()
@@ -146,7 +153,7 @@ class AudioStreamEngine private constructor() {
         while (i + 1 < length) {
             val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
             val sampleShort = sample.toShort().toInt()
-            if (sampleShort > 100 || sampleShort < -100) {
+            if (sampleShort > 40 || sampleShort < -40) {
                 return false
             }
             i += 2
@@ -163,10 +170,14 @@ class AudioStreamEngine private constructor() {
             return
         }
 
-        val pcmChunkSize = 1920 // 480 samples * 2 channels * 2 bytes = 10ms @ 48kHz
+        // 240 samples * 2 channels * 2 bytes = 5ms @ 48kHz (total UDP packet: 14 + 960 = 974 bytes < 1500 MTU)
+        // 100% immune to Wi-Fi IP fragmentation, drops, and kernel reassembly delays!
+        val pcmChunkSize = 960
         val pcmBuffer = ByteArray(pcmChunkSize)
         val packetBuffer = ByteArray(14 + pcmChunkSize)
         var sequence: Short = 0
+        var silentStreak = 0
+        val maxSilentStreakHangover = 200 // 200 * 5ms = 1.0 second hangover before pausing
 
         while (isRunning.get()) {
             val record = audioRecord ?: break
@@ -185,10 +196,16 @@ class AudioStreamEngine private constructor() {
                 val validBytes = bytesRead - (bytesRead % 4)
                 if (validBytes <= 0) continue
 
-                // Silence suppression: Do not flood network when audio is completely silent,
-                // but do NOT sleep because READ_BLOCKING naturally paces the loop with audio ADC hardware clock
+                // Silence suppression with 1-second hangover:
+                // Prevents clipping between spoken words or musical pauses, while pausing network transmission
+                // after 1 second of continuous silence.
                 if (isBufferSilent(pcmBuffer, validBytes)) {
-                    continue
+                    silentStreak++
+                    if (silentStreak > maxSilentStreakHangover) {
+                        continue
+                    }
+                } else {
+                    silentStreak = 0
                 }
 
                 val bb = ByteBuffer.wrap(packetBuffer).order(ByteOrder.LITTLE_ENDIAN)

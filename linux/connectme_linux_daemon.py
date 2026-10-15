@@ -3319,7 +3319,7 @@ class ConnectMeLinuxNode:
 
     def _audio_streaming_worker(self, target_ip: str) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        chunk_size = 1920  # 480 samples * 2 ch * 2 bytes = 10ms @ 48kHz
+        chunk_size = 960  # 240 samples * 2 ch * 2 bytes = 5ms @ 48kHz (MTU-safe 974B UDP packet)
         while self.audio_streaming and self.audio_proc and self.audio_proc.stdout:
             try:
                 raw = self.audio_proc.stdout.read(chunk_size)

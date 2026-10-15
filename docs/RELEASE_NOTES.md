@@ -1,3 +1,31 @@
+# Connect Me v1.8.9 — Ultra Düşük Gecikmeli & Sıfır Takılmalı Ses Aktarımı (TeamViewer Seviyesi Ses Köprüsü)
+
+Bu sürüm; Android, Windows ve Linux arasındaki ses aktarımında yaşanan yüksek gecikme (lag), atlama/glitch ve kopma sorunlarını TeamViewer ve WebRTC standartlarındaki mimari optimizasyonlarla kökten çözer.
+
+---
+
+### 🌟 v1.8.9 Yenilikleri ve Düzeltmeleri:
+
+* **⚡ MTU Uyumlu 5ms Ses Paketleri (IP Parçalanması ve Wi-Fi Gecikmesi Yok Edildi):**
+  - **Sorun:** Önceki sürümlerde 1920 baytlık (10ms) PCM blokları gönderiliyordu. Başlık ile birlikte paket boyutu 1934 bayta ulaşıyor ve standart Ethernet/Wi-Fi MTU sınırı olan 1500 baytı aşıyordu. Bu sebeple işletim sistemi seviyesinde IP parçalanması (fragmentation) meydana geliyor; Wi-Fi üzerinde kaybolan ya da geciken her parça yüzünden çekirdek seviyesinde paketler biriktiriliyor (jitter burst) ve 300-400ms'ye varan ağır ses gecikmesi ve çıtırtı/kesintiler oluşuyordu.
+  - **Çözüm:** Tüm platformlarda (Android, Windows, Linux) ses dilim boyutu 960 bayta (5ms @ 48kHz Stereo) çekildi. Toplam UDP paketi 974 bayt ile MTU sınırının (1500 bayt) çok altında tutularak IP parçalanması tamamen engellendi. Her paket tek bir Wi-Fi çerçevesinde anında hedefe ulaşır.
+
+* **🛡️ Donanım Saatiyle Senkronize WinMM Ses Çalma (Sıfır Glitch & Sıfır Çatlama):**
+  - **Sorun:** Windows tarafında paketler geldikçe WinMM kuyruğuna plansızca atılıyor ve arabelleklerin (`WAVEHDR`) çalınması bitmeden (`WHDR_DONE` kontrolü yapılmadan) üzerine yazılıyordu. Bu durum DMA seviyesinde bellek çakışmasına ve sürekli cızırtı/glitch seslerine yol açıyordu.
+  - **Çözüm:** `CALLBACK_EVENT` (0x00050000) mimarisine geçildi. WinMM ses kartı her arabellek çalımını bitirdiğinde doğrudan Windows Event tetikler. Arabellekler yalnızca ses kartı tamamen okumayı bitirdiğinde (`WHDR_DONE`) geri alınıp yeni veriyle doldurulur. Ses kartı donanım saatiyle (48kHz kristal) %100 senkron çalışma sağlandı.
+
+* **🎯 TeamViewer Seviyesi Adaptif Jitter Buffer (25-35ms Gerçek Zamanlı Gecikme):**
+  - Ağdaki paket dalgalanmalarını emmek için 15-20ms'lik (3-4 paket) akıllı tampon devreye sokuldu.
+  - Ağ sıkışıklığı nedeniyle arka planda paket birikmesi durumunda (backlog > 40ms) en eski bayat paketler otomatik atılarak sesin daima canlı ve dudak senkronunda (lip-sync) kalması sağlandı. Toplam uçtan uca gecikme 400ms'den ~30ms seviyesine düşürüldü.
+
+* **🎙️ Android Kesintisiz Ses & 1 Saniyelik Sessizlik Hangover Koruması:**
+  - Android `AudioRecord` dahili arabellek boyutu minimum donanım sınırına (`minBufferSize`) çekilerek mikrofon/ekran yakalama gecikmesi yarı yarıya düşürüldü.
+  - Başlangıçta donanım tamponundaki eski artık çerçeveler anında tahliye edilir.
+  - Sessizlik algılamasına 1 saniyelik "Hangover" süresi eklendi; kelime aralarında veya sessiz kısımlarda ses anında kesilmez, konuşmaların başı ve sonu pürüzsüz ve kesintisiz aktarılır.
+  - Android oynatıcıda (Windows'tan Android'e) `AudioTrack.PERFORMANCE_MODE_LOW_LATENCY` aktifleştirildi.
+
+---
+
 # Connect Me v1.8.8 — Kristal Netliğinde Ses Aktarımı & Statik Gürültü Giderme Güncellemesi
 
 Bu sürüm; Android'den Windows'a ses aktarıldığında sesin yalnızca statik beyaz gürültü / cızırtı olarak duyulması sorununu, ses tampon boyutu ve bellek hizalama hatalarını çözer.

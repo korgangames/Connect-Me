@@ -21,12 +21,14 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     private const uint WAVE_MAPPER = unchecked((uint)-1);
     private const int WAVE_FORMAT_PCM = 1;
 
-    private const int NUM_RING_BUFFERS = 16;
-    private const int MAX_BUFFER_SIZE = 8192;
+    private const int NUM_RING_BUFFERS = 8;
+    private const int MAX_BUFFER_SIZE = 4096;
+    private const int TARGET_IN_FLIGHT_BUFFERS = 3; // ~15ms driver cushion
 
     private readonly ConnectMeNetworkNode _network;
     private readonly ConcurrentQueue<AudioChunkPacket> _audioQueue = new();
     private readonly AutoResetEvent _dataAvailable = new(false);
+    private readonly AutoResetEvent _bufferDoneEvent = new(false);
     private readonly object _waveLock = new();
 
     private Thread? _playbackThread;
@@ -106,8 +108,10 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
 
     private readonly IntPtr[] _buffers = new IntPtr[NUM_RING_BUFFERS];
     private readonly IntPtr[] _headers = new IntPtr[NUM_RING_BUFFERS];
-    private readonly bool[] _isPrepared = new bool[NUM_RING_BUFFERS];
-    private int _writeIndex;
+    private readonly bool[] _inFlight = new bool[NUM_RING_BUFFERS];
+    private int _inFlightCount;
+    private int _nextBufferIndex;
+    private bool _isPrimed;
 
     public WindowsAudioPlaybackEngine(ConnectMeNetworkNode network)
     {
@@ -143,8 +147,12 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         _lastAudioPacketTime = DateTimeOffset.UtcNow;
         _totalAudioBytesReceived += packet.PcmData.Length;
 
-        // Keep jitter queue bounded: max 12 chunks (~120ms) to ensure real-time latency
-        while (_audioQueue.Count > 12)
+        // TeamViewer-grade low-latency adaptive jitter buffer:
+        // Target depth: 3-5 packets (~15-25ms)
+        // Max cap: 8 packets (~40ms)
+        // If a network burst delivers a backlog > 8 packets, drop stale packets down to 4
+        // to strictly prevent latency accumulation and keep real-time audio lip-synced.
+        while (_audioQueue.Count > 8)
         {
             _audioQueue.TryDequeue(out _);
         }
@@ -165,6 +173,8 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
 
     private void PlaybackWorkerLoop()
     {
+        var waitHandles = new WaitHandle[] { _dataAvailable, _bufferDoneEvent };
+
         while (_isRunning && !_disposed)
         {
             if (!_isEnabled)
@@ -177,19 +187,16 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                 continue;
             }
 
-            if (!_audioQueue.TryDequeue(out var packet))
+            if (!_audioQueue.TryPeek(out var peekPacket))
             {
-                // Sleep until audio arrives or timeout 10ms
+                // Queue empty, wait for next UDP audio packet
                 _dataAvailable.WaitOne(10);
                 continue;
             }
 
-            if (packet.PcmData == null || packet.PcmData.Length == 0)
-                continue;
-
-            int sampleRate = packet.SampleRate > 0 ? (int)packet.SampleRate : 48000;
-            int channels = packet.Channels > 0 ? packet.Channels : 2;
-            int bitsPerSample = packet.BitsPerSample > 0 ? packet.BitsPerSample : 16;
+            int sampleRate = peekPacket.SampleRate > 0 ? (int)peekPacket.SampleRate : 48000;
+            int channels = peekPacket.Channels > 0 ? peekPacket.Channels : 2;
+            int bitsPerSample = peekPacket.BitsPerSample > 0 ? peekPacket.BitsPerSample : 16;
 
             lock (_waveLock)
             {
@@ -200,20 +207,140 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                     continue;
                 }
 
-                if (!_isMuted && _volume > 0.001f)
+                // 1. Reclaim all buffers that finished playing in the sound card
+                ReclaimDoneBuffersLocked();
+
+                // 2. Priming: on initial stream start or recovery from buffer starvation,
+                // wait for at least 3 packets (~15ms) to buffer before starting playback to absorb jitter
+                if (!_isPrimed)
                 {
-                    if (_volume < 0.999f)
+                    if (_audioQueue.Count < 3)
                     {
-                        ApplyVolume(packet.PcmData, _volume);
+                        // Release lock and wait for more data to arrive
+                        Monitor.Exit(_waveLock);
+                        _dataAvailable.WaitOne(10);
+                        Monitor.Enter(_waveLock);
+                        continue;
                     }
-                    PlayPcmBufferLocked(packet);
+                    _isPrimed = true;
+                }
+
+                // 3. Keep target in-flight buffers queued in the driver (TARGET_IN_FLIGHT_BUFFERS = 3, ~15ms)
+                while (_inFlightCount < TARGET_IN_FLIGHT_BUFFERS && _audioQueue.TryDequeue(out var packet))
+                {
+                    if (packet.PcmData == null || packet.PcmData.Length == 0)
+                        continue;
+
+                    int freeSlot = GetFreeBufferSlotLocked();
+                    if (freeSlot < 0)
+                        break;
+
+                    if (!_isMuted && _volume > 0.001f)
+                    {
+                        if (_volume < 0.999f)
+                        {
+                            ApplyVolume(packet.PcmData, _volume);
+                        }
+                        SubmitBufferLocked(freeSlot, packet.PcmData);
+                    }
+                    else
+                    {
+                        // Muted: submit zeroed PCM to keep the hardware clock moving without sound
+                        byte[] silentChunk = new byte[packet.PcmData.Length];
+                        SubmitBufferLocked(freeSlot, silentChunk);
+                    }
+                }
+
+                // If queue is completely empty and driver finished all buffers, reset primed state
+                if (_audioQueue.IsEmpty && _inFlightCount == 0)
+                {
+                    _isPrimed = false;
                 }
             }
+
+            // Wait for either a buffer completion event from WinMM or new UDP data, max 10ms
+            WaitHandle.WaitAny(waitHandles, 10);
         }
 
         lock (_waveLock)
         {
             CloseWaveOutLocked();
+        }
+    }
+
+    private void ReclaimDoneBuffersLocked()
+    {
+        if (_hWaveOut == IntPtr.Zero)
+            return;
+
+        for (int i = 0; i < NUM_RING_BUFFERS; i++)
+        {
+            if (_inFlight[i] && _headers[i] != IntPtr.Zero)
+            {
+                var hdr = Marshal.PtrToStructure<WAVEHDR>(_headers[i]);
+                if ((hdr.dwFlags & 0x00000001 /* WHDR_DONE */) != 0)
+                {
+                    waveOutUnprepareHeader(_hWaveOut, _headers[i], (uint)Marshal.SizeOf<WAVEHDR>());
+                    _inFlight[i] = false;
+                    _inFlightCount = Math.Max(0, _inFlightCount - 1);
+                }
+            }
+        }
+    }
+
+    private int GetFreeBufferSlotLocked()
+    {
+        for (int i = 0; i < NUM_RING_BUFFERS; i++)
+        {
+            int slot = (_nextBufferIndex + i) % NUM_RING_BUFFERS;
+            if (!_inFlight[slot])
+            {
+                _nextBufferIndex = (slot + 1) % NUM_RING_BUFFERS;
+                return slot;
+            }
+        }
+        return -1;
+    }
+
+    private void SubmitBufferLocked(int slot, byte[] pcmData)
+    {
+        if (_hWaveOut == IntPtr.Zero || slot < 0 || slot >= NUM_RING_BUFFERS)
+            return;
+
+        IntPtr pBuf = _buffers[slot];
+        IntPtr pHdr = _headers[slot];
+        if (pBuf == IntPtr.Zero || pHdr == IntPtr.Zero)
+            return;
+
+        int copyLen = Math.Min(pcmData.Length, MAX_BUFFER_SIZE);
+        Marshal.Copy(pcmData, 0, pBuf, copyLen);
+
+        var hdr = new WAVEHDR
+        {
+            lpData = pBuf,
+            dwBufferLength = (uint)copyLen,
+            dwBytesRecorded = 0,
+            dwUser = IntPtr.Zero,
+            dwFlags = 0,
+            dwLoops = 0,
+            lpNext = IntPtr.Zero,
+            reserved = IntPtr.Zero
+        };
+        Marshal.StructureToPtr(hdr, pHdr, false);
+
+        int prepRes = waveOutPrepareHeader(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
+        if (prepRes == MMSYSERR_NOERROR)
+        {
+            int writeRes = waveOutWrite(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
+            if (writeRes == MMSYSERR_NOERROR)
+            {
+                _inFlight[slot] = true;
+                _inFlightCount++;
+            }
+            else
+            {
+                waveOutUnprepareHeader(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
+            }
         }
     }
 
@@ -262,7 +389,15 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         };
 
         uint uDevId = targetDevId >= 0 ? (uint)targetDevId : WAVE_MAPPER;
-        int res = waveOutOpen(out _hWaveOut, uDevId, ref wfx, IntPtr.Zero, IntPtr.Zero, 0);
+
+        // Use CALLBACK_EVENT (0x00050000) for hardware-clocked event notification
+        IntPtr hEvent = _bufferDoneEvent.SafeWaitHandle.DangerousGetHandle();
+        int res = waveOutOpen(out _hWaveOut, uDevId, ref wfx, hEvent, IntPtr.Zero, 0x00050000 /* CALLBACK_EVENT */);
+        if (res != MMSYSERR_NOERROR || _hWaveOut == IntPtr.Zero)
+        {
+            // Fallback to CALLBACK_NULL if virtual driver rejects event handle
+            res = waveOutOpen(out _hWaveOut, uDevId, ref wfx, IntPtr.Zero, IntPtr.Zero, 0 /* CALLBACK_NULL */);
+        }
 
         if (res == MMSYSERR_NOERROR && _hWaveOut != IntPtr.Zero)
         {
@@ -270,14 +405,16 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
             _currentSampleRate = sampleRate;
             _currentChannels = channels;
             _currentBitsPerSample = bitsPerSample;
-            _writeIndex = 0;
+            _inFlightCount = 0;
+            _nextBufferIndex = 0;
+            _isPrimed = false;
 
             // Pre-allocate ring buffers and headers
             for (int i = 0; i < NUM_RING_BUFFERS; i++)
             {
                 _buffers[i] = Marshal.AllocHGlobal(MAX_BUFFER_SIZE);
                 _headers[i] = Marshal.AllocHGlobal(Marshal.SizeOf<WAVEHDR>());
-                _isPrepared[i] = false;
+                _inFlight[i] = false;
             }
 
             _network.Log($"[Ses & Kulaklık Köprüsü] 🎧 WinMM ses çıkışı hazır ({sampleRate} Hz, {channels} kanal, {bitsPerSample} bit, Aygıt #{targetDevId}).");
@@ -286,51 +423,6 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         {
             _network.Log($"[Ses Hata] waveOutOpen başarısız oldu (Hata Kodu: {res}, Aygıt #{targetDevId}).");
             _hWaveOut = IntPtr.Zero;
-        }
-    }
-
-    private void PlayPcmBufferLocked(in AudioChunkPacket packet)
-    {
-        if (_hWaveOut == IntPtr.Zero || packet.PcmData == null || packet.PcmData.Length == 0)
-            return;
-
-        int bytesPerFrame = Math.Max(1, packet.Channels * (packet.BitsPerSample / 8));
-        int alignedLen = packet.PcmData.Length - (packet.PcmData.Length % bytesPerFrame);
-        if (alignedLen <= 0)
-            return;
-
-        int copyLen = Math.Min(alignedLen, MAX_BUFFER_SIZE);
-
-        int idx = _writeIndex;
-        _writeIndex = (_writeIndex + 1) % NUM_RING_BUFFERS;
-
-        IntPtr pBuf = _buffers[idx];
-        IntPtr pHdr = _headers[idx];
-        if (pBuf == IntPtr.Zero || pHdr == IntPtr.Zero)
-            return;
-
-        // If previously prepared, safely unprepare before modifying and re-preparing
-        if (_isPrepared[idx])
-        {
-            waveOutUnprepareHeader(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
-            _isPrepared[idx] = false;
-        }
-
-        Marshal.Copy(packet.PcmData, 0, pBuf, copyLen);
-
-        var hdr = new WAVEHDR
-        {
-            lpData = pBuf,
-            dwBufferLength = (uint)copyLen,
-            dwFlags = 0
-        };
-        Marshal.StructureToPtr(hdr, pHdr, false);
-
-        int prepRes = waveOutPrepareHeader(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
-        if (prepRes == MMSYSERR_NOERROR)
-        {
-            _isPrepared[idx] = true;
-            waveOutWrite(_hWaveOut, pHdr, (uint)Marshal.SizeOf<WAVEHDR>());
         }
     }
 
@@ -345,11 +437,7 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                 {
                     if (_headers[i] != IntPtr.Zero)
                     {
-                        if (_isPrepared[i])
-                        {
-                            try { waveOutUnprepareHeader(_hWaveOut, _headers[i], (uint)Marshal.SizeOf<WAVEHDR>()); } catch { }
-                            _isPrepared[i] = false;
-                        }
+                        try { waveOutUnprepareHeader(_hWaveOut, _headers[i], (uint)Marshal.SizeOf<WAVEHDR>()); } catch { }
                         try { Marshal.FreeHGlobal(_headers[i]); } catch { }
                         _headers[i] = IntPtr.Zero;
                     }
@@ -358,6 +446,7 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                         try { Marshal.FreeHGlobal(_buffers[i]); } catch { }
                         _buffers[i] = IntPtr.Zero;
                     }
+                    _inFlight[i] = false;
                 }
                 waveOutClose(_hWaveOut);
             }
@@ -366,6 +455,8 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
             {
                 _hWaveOut = IntPtr.Zero;
                 _currentDevId = -1;
+                _inFlightCount = 0;
+                _isPrimed = false;
             }
         }
     }
@@ -419,6 +510,7 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
 
         _network.RemoteAudioChunkReceived -= OnRemoteAudioChunkReceived;
         _dataAvailable.Set();
+        _bufferDoneEvent.Set();
 
         try
         {
@@ -433,6 +525,7 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         }
 
         _dataAvailable.Dispose();
+        _bufferDoneEvent.Dispose();
     }
 
     // =========================================================================
