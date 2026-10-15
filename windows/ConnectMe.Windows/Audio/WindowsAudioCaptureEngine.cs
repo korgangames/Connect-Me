@@ -144,15 +144,14 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             }
 
             var wfe = Marshal.PtrToStructure<WAVEFORMATEX>(pFormat);
-            bool isFloat = wfe.wFormatTag == WAVE_FORMAT_IEEE_FLOAT;
+            int subFormatTag = 0;
             if (wfe.wFormatTag == WAVE_FORMAT_EXTENSIBLE && wfe.cbSize >= 22)
             {
-                var wfExt = Marshal.PtrToStructure<WAVEFORMATEXTENSIBLE>(pFormat);
-                if (wfExt.SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
-                {
-                    isFloat = true;
-                }
+                subFormatTag = Marshal.ReadInt32(pFormat, 24);
             }
+            bool isFloat = (wfe.wFormatTag == WAVE_FORMAT_IEEE_FLOAT) ||
+                           (subFormatTag == 3) ||
+                           (wfe.wBitsPerSample == 32);
 
             uint channels = wfe.nChannels;
             uint sampleRate = wfe.nSamplesPerSec;

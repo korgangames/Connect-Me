@@ -80,7 +80,7 @@ class AudioStreamEngine private constructor() {
         val channelConfig = AudioFormat.CHANNEL_IN_STEREO
         val audioEncoding = AudioFormat.ENCODING_PCM_16BIT
         val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, channelConfig, audioEncoding)
-        val bufferSize = minBufferSize.coerceAtLeast(3840)
+        val bufferSize = (minBufferSize * 2).coerceAtLeast(7680)
 
         val format = AudioFormat.Builder()
             .setEncoding(audioEncoding)
@@ -113,13 +113,6 @@ class AudioStreamEngine private constructor() {
 
             try {
                 audioRecord?.startRecording()
-                // Drain any stale hardware buffer so the very first packet sent is live
-                val drainBuf = ByteArray(960)
-                var drainCount = 5
-                while (drainCount-- > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    val r = audioRecord?.read(drainBuf, 0, 960, AudioRecord.READ_NON_BLOCKING) ?: -1
-                    if (r <= 0) break
-                }
             } catch (t: Throwable) {
                 Log.e(TAG, "AudioRecord startRecording failed: ${t.message}", t)
                 stop()
@@ -148,19 +141,6 @@ class AudioStreamEngine private constructor() {
         }
     }
 
-    private fun isBufferSilent(buffer: ByteArray, length: Int): Boolean {
-        var i = 0
-        while (i + 1 < length) {
-            val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
-            val sampleShort = sample.toShort().toInt()
-            if (sampleShort > 40 || sampleShort < -40) {
-                return false
-            }
-            i += 2
-        }
-        return true
-    }
-
     private fun streamAudioLoop(hostIp: String) {
         val targetAddr = try {
             InetAddress.getByName(hostIp)
@@ -170,22 +150,19 @@ class AudioStreamEngine private constructor() {
             return
         }
 
-        // 240 samples * 2 channels * 2 bytes = 5ms @ 48kHz (total UDP packet: 14 + 960 = 974 bytes < 1500 MTU)
-        // 100% immune to Wi-Fi IP fragmentation, drops, and kernel reassembly delays!
-        val pcmChunkSize = 960
-        val pcmBuffer = ByteArray(pcmChunkSize)
-        val packetBuffer = ByteArray(14 + pcmChunkSize)
+        // Native 10ms hardware read buffer (480 samples * 2 ch * 2 bytes = 1920 bytes @ 48kHz Stereo)
+        val pcmReadSize = 1920
+        val pcmBuffer = ByteArray(pcmReadSize)
+        val packetBuffer = ByteArray(14 + 960)
         var sequence: Short = 0
-        var silentStreak = 0
-        val maxSilentStreakHangover = 200 // 200 * 5ms = 1.0 second hangover before pausing
 
         while (isRunning.get()) {
             val record = audioRecord ?: break
             val bytesRead = try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    record.read(pcmBuffer, 0, pcmChunkSize, AudioRecord.READ_BLOCKING)
+                    record.read(pcmBuffer, 0, pcmReadSize, AudioRecord.READ_BLOCKING)
                 } else {
-                    record.read(pcmBuffer, 0, pcmChunkSize)
+                    record.read(pcmBuffer, 0, pcmReadSize)
                 }
             } catch (t: Throwable) {
                 -1
@@ -196,36 +173,32 @@ class AudioStreamEngine private constructor() {
                 val validBytes = bytesRead - (bytesRead % 4)
                 if (validBytes <= 0) continue
 
-                // Silence suppression with 1-second hangover:
-                // Prevents clipping between spoken words or musical pauses, while pausing network transmission
-                // after 1 second of continuous silence.
-                if (isBufferSilent(pcmBuffer, validBytes)) {
-                    silentStreak++
-                    if (silentStreak > maxSilentStreakHangover) {
-                        continue
+                // Send in MTU-safe chunks of at most 960 bytes (5ms each) to eliminate Wi-Fi IP fragmentation
+                var offset = 0
+                while (offset < validBytes && isRunning.get()) {
+                    val chunkLen = Math.min(960, validBytes - offset)
+
+                    val bb = ByteBuffer.wrap(packetBuffer).order(ByteOrder.LITTLE_ENDIAN)
+                    bb.put(ProtocolConstants.MAGIC_0)
+                    bb.put(ProtocolConstants.MAGIC_1)
+                    bb.put(ProtocolConstants.PROTOCOL_VERSION)
+                    bb.put(0x08.toByte()) // PacketType.AudioChunk
+                    bb.put(CHANNELS.toByte())
+                    bb.putInt(SAMPLE_RATE)
+                    bb.put(BITS_PER_SAMPLE.toByte())
+                    bb.putShort(sequence++)
+                    bb.putShort(chunkLen.toShort())
+                    bb.put(pcmBuffer, offset, chunkLen)
+
+                    val packetLength = 14 + chunkLen
+                    try {
+                        val datagram = DatagramPacket(packetBuffer, packetLength, targetAddr, AUDIO_UDP_PORT)
+                        udpSocket?.send(datagram)
+                    } catch (ex: Throwable) {
+                        if (!isRunning.get()) break
                     }
-                } else {
-                    silentStreak = 0
-                }
 
-                val bb = ByteBuffer.wrap(packetBuffer).order(ByteOrder.LITTLE_ENDIAN)
-                bb.put(ProtocolConstants.MAGIC_0)
-                bb.put(ProtocolConstants.MAGIC_1)
-                bb.put(ProtocolConstants.PROTOCOL_VERSION)
-                bb.put(0x08.toByte()) // PacketType.AudioChunk
-                bb.put(CHANNELS.toByte())
-                bb.putInt(SAMPLE_RATE)
-                bb.put(BITS_PER_SAMPLE.toByte())
-                bb.putShort(sequence++)
-                bb.putShort(validBytes.toShort())
-                bb.put(pcmBuffer, 0, validBytes)
-
-                val packetLength = 14 + validBytes
-                try {
-                    val datagram = DatagramPacket(packetBuffer, packetLength, targetAddr, AUDIO_UDP_PORT)
-                    udpSocket?.send(datagram)
-                } catch (ex: Throwable) {
-                    if (!isRunning.get()) break
+                    offset += chunkLen
                 }
             } else {
                 try {

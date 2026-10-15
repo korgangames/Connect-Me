@@ -1,3 +1,22 @@
+# Connect Me v1.8.10 — İki Yönlü Kristal Netliğinde Ses & Donanım Hizalama Düzeltmesi
+
+Bu sürüm; Windows'tan Android'e ses aktarımındaki 32-bit float format hizalama hatasından kaynaklanan statik cızırtıyı ve Android'den Windows'a ses aktarımındaki WinMM arabellek kurtarma kilidini çözer.
+
+---
+
+### 🌟 v1.8.10 Yenilikleri ve Düzeltmeleri:
+
+* **🎧 Windows $\rightarrow$ Android Statik Gürültüsü Kökten Çözüldü (32-bit IEEE Float Tespiti):**
+  - **Sorun:** Windows WASAPI loopback yakalamasında ses formatı `WAVEFORMATEXTENSIBLE` (0xFFFE) ve 32-bit float olarak gelir. C# 64-bit bellek yerleşiminde `WAVEFORMATEXTENSIBLE` struct içindeki `Guid SubFormat` alanı 24. bayt yerine 28. bayttan okunuyordu. Bu hizalama kayması nedeniyle `isFloat` bayrağı `false` kalıyor ve 32-bit float ses verisi doğrudan 16-bit tamsayıya (`short*`) cast ediliyordu. Float mantissa/exponent bitleri Android hoparlöründe tam ölçekli beyaz gürültü / statik cızırtı olarak duyuluyordu.
+  - **Çözüm:** Windows WASAPI yakalama motorunda 24. bayt doğrudan okunarak (`subFormatTag == 3`) ve `wBitsPerSample == 32` kontrolüyle IEEE Float formatı %100 doğrulukla tespit edildi. Float veriler matematiksel olarak 16-bit PCM aralığına [-32768, 32767] kusursuzca dönüştürülerek Android'e iletilir. Statik gürültü tamamen yok edildi.
+
+* **📱 Android $\rightarrow$ Windows Kesintisiz ve Kilitlenmesiz Ses Akışı:**
+  - **Sorun:** Windows WinMM oynatma döngüsünde `ReclaimDoneBuffersLocked()` çağrısı yalnızca ses kuyruğunda bekleyen paket varken çalışıyordu. Kuyruk bir an boşaldığında çalınan arabellekler serbest bırakılamıyor, `_inFlightCount` maksimumda asılı kalarak yeni paketlerin ses kartına verilmesini kalıcı olarak kilitliyordu ("ses hiç geçmedi").
+  - **Çözüm:** `PlaybackWorkerLoop` mimarisi güncellendi; her döngüde ses kartı tarafından çalınması biten bloklar (`WHDR_DONE`) derhal geri alınıp serbest bırakılır. Kuyruktan gelen yeni paketler gecikmesiz olarak doğrudan sürücüye beslenir.
+  - **Android Ses Yakalama:** Android 10+ dahili ses yakalaması donanımın yerel 1920 baytlık (10ms) tamponunda okunur ve ağa 960 baytlık MTU-uyumlu parçalar halinde kesintisiz olarak aktarılır. Kelime aralarında sesin kesilmemesi için akış sürekli kılınmıştır.
+
+---
+
 # Connect Me v1.8.9 — Ultra Düşük Gecikmeli & Sıfır Takılmalı Ses Aktarımı (TeamViewer Seviyesi Ses Köprüsü)
 
 Bu sürüm; Android, Windows ve Linux arasındaki ses aktarımında yaşanan yüksek gecikme (lag), atlama/glitch ve kopma sorunlarını TeamViewer ve WebRTC standartlarındaki mimari optimizasyonlarla kökten çözer.

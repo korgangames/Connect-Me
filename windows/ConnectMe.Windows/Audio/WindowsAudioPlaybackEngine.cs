@@ -21,9 +21,9 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     private const uint WAVE_MAPPER = unchecked((uint)-1);
     private const int WAVE_FORMAT_PCM = 1;
 
-    private const int NUM_RING_BUFFERS = 8;
-    private const int MAX_BUFFER_SIZE = 4096;
-    private const int TARGET_IN_FLIGHT_BUFFERS = 3; // ~15ms driver cushion
+    private const int NUM_RING_BUFFERS = 16;
+    private const int MAX_BUFFER_SIZE = 8192;
+    private const int TARGET_IN_FLIGHT_BUFFERS = 4; // ~20-40ms driver cushion
 
     private readonly ConnectMeNetworkNode _network;
     private readonly ConcurrentQueue<AudioChunkPacket> _audioQueue = new();
@@ -111,7 +111,6 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     private readonly bool[] _inFlight = new bool[NUM_RING_BUFFERS];
     private int _inFlightCount;
     private int _nextBufferIndex;
-    private bool _isPrimed;
 
     public WindowsAudioPlaybackEngine(ConnectMeNetworkNode network)
     {
@@ -147,12 +146,8 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         _lastAudioPacketTime = DateTimeOffset.UtcNow;
         _totalAudioBytesReceived += packet.PcmData.Length;
 
-        // TeamViewer-grade low-latency adaptive jitter buffer:
-        // Target depth: 3-5 packets (~15-25ms)
-        // Max cap: 8 packets (~40ms)
-        // If a network burst delivers a backlog > 8 packets, drop stale packets down to 4
-        // to strictly prevent latency accumulation and keep real-time audio lip-synced.
-        while (_audioQueue.Count > 8)
+        // Bounded jitter queue: max 12 chunks to absorb network jitter while enforcing low latency
+        while (_audioQueue.Count > 12)
         {
             _audioQueue.TryDequeue(out _);
         }
@@ -187,78 +182,54 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                 continue;
             }
 
-            if (!_audioQueue.TryPeek(out var peekPacket))
-            {
-                // Queue empty, wait for next UDP audio packet
-                _dataAvailable.WaitOne(10);
-                continue;
-            }
-
-            int sampleRate = peekPacket.SampleRate > 0 ? (int)peekPacket.SampleRate : 48000;
-            int channels = peekPacket.Channels > 0 ? peekPacket.Channels : 2;
-            int bitsPerSample = peekPacket.BitsPerSample > 0 ? peekPacket.BitsPerSample : 16;
-
             lock (_waveLock)
             {
-                EnsureWaveOutOpenLocked(sampleRate, channels, bitsPerSample);
-                if (_hWaveOut == IntPtr.Zero)
-                {
-                    Thread.Sleep(20);
-                    continue;
-                }
-
-                // 1. Reclaim all buffers that finished playing in the sound card
+                // ALWAYS reclaim any buffers that finished playing in the sound card
                 ReclaimDoneBuffersLocked();
 
-                // 2. Priming: on initial stream start or recovery from buffer starvation,
-                // wait for at least 3 packets (~15ms) to buffer before starting playback to absorb jitter
-                if (!_isPrimed)
+                // If audio packets are waiting in the jitter queue, feed the driver
+                if (_audioQueue.TryPeek(out var peekPacket))
                 {
-                    if (_audioQueue.Count < 3)
+                    int sampleRate = peekPacket.SampleRate > 0 ? (int)peekPacket.SampleRate : 48000;
+                    int channels = peekPacket.Channels > 0 ? peekPacket.Channels : 2;
+                    int bitsPerSample = peekPacket.BitsPerSample > 0 ? peekPacket.BitsPerSample : 16;
+
+                    EnsureWaveOutOpenLocked(sampleRate, channels, bitsPerSample);
+                    if (_hWaveOut != IntPtr.Zero)
                     {
-                        // Release lock and wait for more data to arrive
-                        Monitor.Exit(_waveLock);
-                        _dataAvailable.WaitOne(10);
-                        Monitor.Enter(_waveLock);
-                        continue;
-                    }
-                    _isPrimed = true;
-                }
-
-                // 3. Keep target in-flight buffers queued in the driver (TARGET_IN_FLIGHT_BUFFERS = 3, ~15ms)
-                while (_inFlightCount < TARGET_IN_FLIGHT_BUFFERS && _audioQueue.TryDequeue(out var packet))
-                {
-                    if (packet.PcmData == null || packet.PcmData.Length == 0)
-                        continue;
-
-                    int freeSlot = GetFreeBufferSlotLocked();
-                    if (freeSlot < 0)
-                        break;
-
-                    if (!_isMuted && _volume > 0.001f)
-                    {
-                        if (_volume < 0.999f)
+                        // Submit chunks up to TARGET_IN_FLIGHT_BUFFERS
+                        while (_inFlightCount < TARGET_IN_FLIGHT_BUFFERS && _audioQueue.TryDequeue(out var packet))
                         {
-                            ApplyVolume(packet.PcmData, _volume);
-                        }
-                        SubmitBufferLocked(freeSlot, packet.PcmData);
-                    }
-                    else
-                    {
-                        // Muted: submit zeroed PCM to keep the hardware clock moving without sound
-                        byte[] silentChunk = new byte[packet.PcmData.Length];
-                        SubmitBufferLocked(freeSlot, silentChunk);
-                    }
-                }
+                            if (packet.PcmData == null || packet.PcmData.Length == 0)
+                                continue;
 
-                // If queue is completely empty and driver finished all buffers, reset primed state
-                if (_audioQueue.IsEmpty && _inFlightCount == 0)
-                {
-                    _isPrimed = false;
+                            int slot = GetFreeBufferSlotLocked();
+                            if (slot < 0)
+                                break;
+
+                            if (!_isMuted && _volume > 0.001f)
+                            {
+                                if (_volume < 0.999f)
+                                {
+                                    ApplyVolume(packet.PcmData, _volume);
+                                }
+                                SubmitBufferLocked(slot, packet.PcmData);
+                            }
+                            else
+                            {
+                                // Muted: submit zeroed PCM to keep the hardware clock moving without sound
+                                byte[] silentChunk = new byte[packet.PcmData.Length];
+                                SubmitBufferLocked(slot, silentChunk);
+                            }
+                        }
+                    }
                 }
             }
 
-            // Wait for either a buffer completion event from WinMM or new UDP data, max 10ms
+            // Wait for either:
+            // 1) A buffer finishes playing in the sound card (_bufferDoneEvent)
+            // 2) A new packet arrives over the network (_dataAvailable)
+            // 3) Max 10ms timeout for regular pacing
             WaitHandle.WaitAny(waitHandles, 10);
         }
 
@@ -407,7 +378,6 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
             _currentBitsPerSample = bitsPerSample;
             _inFlightCount = 0;
             _nextBufferIndex = 0;
-            _isPrimed = false;
 
             // Pre-allocate ring buffers and headers
             for (int i = 0; i < NUM_RING_BUFFERS; i++)
@@ -456,7 +426,6 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                 _hWaveOut = IntPtr.Zero;
                 _currentDevId = -1;
                 _inFlightCount = 0;
-                _isPrimed = false;
             }
         }
     }
