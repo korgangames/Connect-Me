@@ -147,7 +147,6 @@ public partial class MainWindow : Window
             RefreshPeersList();
             UpdateSelectedPeerPairingPanel();
             RedrawDisplayArrangementCanvas();
-            RefreshAudioSinksComboBox();
         });
     }
 
@@ -2138,115 +2137,135 @@ public partial class MainWindow : Window
         public override string ToString() => DisplayText;
     }
 
+    private bool _isRefreshingAudioSinks = false;
+
     private void RefreshAudioSinksComboBox()
     {
         if (AudioTargetComboBox == null) return;
-
-        var previouslySelected = AudioTargetComboBox.SelectedItem as AudioSinkUiItem;
-        var items = new List<AudioSinkUiItem>();
-
-        // 1. Local Sinks
-        foreach (var s in _network.LocalAudioSinks)
+        _isRefreshingAudioSinks = true;
+        try
         {
-            items.Add(new AudioSinkUiItem
-            {
-                DisplayText = $"[💻 Bu Bilgisayar] {s.SinkName}",
-                DeviceId = _network.LocalDeviceId,
-                DeviceName = _network.LocalDeviceName,
-                Platform = "windows",
-                SinkId = s.SinkId,
-                SinkName = s.SinkName,
-                IpAddress = _network.LocalIpv4,
-                IsDisableOption = false
-            });
-        }
+            var previouslySelected = AudioTargetComboBox.SelectedItem as AudioSinkUiItem;
+            var items = new List<AudioSinkUiItem>();
 
-        // 2. Remote Sinks from connected peers
-        foreach (var peer in _network.MutuallyPairedPeers)
-        {
-            string icon = peer.Platform.ToLowerInvariant() switch
+            // 1. Local Sinks
+            foreach (var s in _network.LocalAudioSinks)
             {
-                "android" => "📱",
-                "linux" or "linux-nobara" => "🐧",
-                _ => "💻"
-            };
+                items.Add(new AudioSinkUiItem
+                {
+                    DisplayText = $"[💻 Bu Bilgisayar] {s.SinkName}",
+                    DeviceId = _network.LocalDeviceId,
+                    DeviceName = _network.LocalDeviceName,
+                    Platform = "windows",
+                    SinkId = s.SinkId,
+                    SinkName = s.SinkName,
+                    IpAddress = _network.LocalIpv4,
+                    IsDisableOption = false
+                });
+            }
 
-            if (_network.RemoteAudioSinks.TryGetValue(peer.DeviceId, out var remoteList) && remoteList.Count > 0)
+            // 2. Remote Sinks from connected peers
+            foreach (var peer in _network.MutuallyPairedPeers)
             {
-                foreach (var rs in remoteList)
+                string icon = peer.Platform.ToLowerInvariant() switch
+                {
+                    "android" => "📱",
+                    "linux" or "linux-nobara" => "🐧",
+                    _ => "💻"
+                };
+
+                if (_network.RemoteAudioSinks.TryGetValue(peer.DeviceId, out var remoteList) && remoteList.Count > 0)
+                {
+                    foreach (var rs in remoteList)
+                    {
+                        items.Add(new AudioSinkUiItem
+                        {
+                            DisplayText = $"[{icon} {peer.DeviceName}] {rs.SinkName}",
+                            DeviceId = peer.DeviceId,
+                            DeviceName = peer.DeviceName,
+                            Platform = peer.Platform,
+                            SinkId = rs.SinkId,
+                            SinkName = rs.SinkName,
+                            IpAddress = peer.IpAddress,
+                            IsDisableOption = false
+                        });
+                    }
+                }
+                else
                 {
                     items.Add(new AudioSinkUiItem
                     {
-                        DisplayText = $"[{icon} {peer.DeviceName}] {rs.SinkName}",
+                        DisplayText = $"[{icon} {peer.DeviceName}] Varsayılan Ses Çıkışı",
                         DeviceId = peer.DeviceId,
                         DeviceName = peer.DeviceName,
                         Platform = peer.Platform,
-                        SinkId = rs.SinkId,
-                        SinkName = rs.SinkName,
+                        SinkId = "default",
+                        SinkName = "Varsayılan Ses Çıkışı",
                         IpAddress = peer.IpAddress,
                         IsDisableOption = false
                     });
                 }
             }
-            else
+
+            // 3. Disable / Local mode option
+            items.Add(new AudioSinkUiItem
             {
-                items.Add(new AudioSinkUiItem
+                DisplayText = "⚪ [Yerel Mod] Her cihaz kendi sesini çalsın (Yönlendirmeyi Kapat)",
+                DeviceId = "NONE",
+                DeviceName = "NONE",
+                Platform = "",
+                SinkId = "NONE",
+                SinkName = "Yerel Mod",
+                IpAddress = "",
+                IsDisableOption = true
+            });
+
+            AudioTargetComboBox.ItemsSource = items;
+
+            if (_network.ActiveAudioRoute != null && _network.ActiveAudioRoute.TargetDeviceId != "NONE")
+            {
+                var match = items.FirstOrDefault(i => i.DeviceId == _network.ActiveAudioRoute.TargetDeviceId && (i.SinkId == _network.ActiveAudioRoute.TargetSinkId || _network.ActiveAudioRoute.TargetSinkId == "default"));
+                if (match != null)
                 {
-                    DisplayText = $"[{icon} {peer.DeviceName}] Varsayılan Ses Çıkışı",
-                    DeviceId = peer.DeviceId,
-                    DeviceName = peer.DeviceName,
-                    Platform = peer.Platform,
-                    SinkId = "default",
-                    SinkName = "Varsayılan Ses Çıkışı",
-                    IpAddress = peer.IpAddress,
-                    IsDisableOption = false
-                });
+                    AudioTargetComboBox.SelectedItem = match;
+                    return;
+                }
             }
-        }
 
-        // 3. Disable / Local mode option
-        items.Add(new AudioSinkUiItem
-        {
-            DisplayText = "⚪ [Yerel Mod] Her cihaz kendi sesini çalsın (Yönlendirmeyi Kapat)",
-            DeviceId = "NONE",
-            DeviceName = "NONE",
-            Platform = "",
-            SinkId = "NONE",
-            SinkName = "Yerel Mod",
-            IpAddress = "",
-            IsDisableOption = true
-        });
-
-        AudioTargetComboBox.ItemsSource = items;
-
-        if (previouslySelected != null)
-        {
-            var match = items.FirstOrDefault(i => i.DeviceId == previouslySelected.DeviceId && i.SinkId == previouslySelected.SinkId);
-            if (match != null)
+            if (previouslySelected != null)
             {
-                AudioTargetComboBox.SelectedItem = match;
-                return;
+                var match = items.FirstOrDefault(i => i.DeviceId == previouslySelected.DeviceId && i.SinkId == previouslySelected.SinkId);
+                if (match != null)
+                {
+                    AudioTargetComboBox.SelectedItem = match;
+                    return;
+                }
             }
-        }
 
-        if (_network.ActiveAudioRoute != null)
+            AudioTargetComboBox.SelectedIndex = 0;
+        }
+        finally
         {
-            var match = items.FirstOrDefault(i => i.DeviceId == _network.ActiveAudioRoute.TargetDeviceId && i.SinkId == _network.ActiveAudioRoute.TargetSinkId);
-            if (match != null)
-            {
-                AudioTargetComboBox.SelectedItem = match;
-                return;
-            }
+            _isRefreshingAudioSinks = false;
         }
+    }
 
-        AudioTargetComboBox.SelectedIndex = 0;
+    private void AudioTargetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRefreshingAudioSinks) return;
+        if (AudioTargetComboBox?.SelectedItem is not AudioSinkUiItem item) return;
+        ApplyAudioRoute(item);
     }
 
     private void AudioApplyRouteBtn_Click(object sender, RoutedEventArgs e)
     {
         if (AudioTargetComboBox?.SelectedItem is not AudioSinkUiItem item)
             return;
+        ApplyAudioRoute(item);
+    }
 
+    private void ApplyAudioRoute(AudioSinkUiItem item)
+    {
         if (item.IsDisableOption)
         {
             _ = _network.SetAndBroadcastAudioRouteAsync(null);

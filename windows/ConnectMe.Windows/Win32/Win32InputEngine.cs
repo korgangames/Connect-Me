@@ -338,7 +338,7 @@ public sealed class Win32InputEngine : IDisposable
                     break;
             }
 
-            if (pushHit && _incomingPushAccum >= 8)
+            if (pushHit && _incomingPushAccum >= 28)
             {
                 var targetPeer = _controllingRemotePeer;
                 var entranceOnHost = SpatialTopologyEngine.GetOppositeEdge(_incomingEntryEdge);

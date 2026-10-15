@@ -333,7 +333,7 @@ class CursorAccessibilityService : AccessibilityService() {
         // ONLY allow return if pushing against the configured shared edge facing the PC!
         // Touching or pushing against any other frame edge keeps the cursor on Android.
         if (pushingSharedEdge && outwardDelta > 0f && !isLeftButtonDown) {
-            val requiredResistance = 6f
+            val requiredResistance = 25f
             returnEdgePushAccum += outwardDelta
             if (returnEdgePushAccum >= requiredResistance) {
                 returnEdgePushAccum = 0f

@@ -156,14 +156,7 @@ class ScreenEdgeSentinels:
         if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.is_active:
             return
 
-        active_edge_peers: Dict[int, dict] = {}
-        for p in self.node.peers.values():
-            if p.get("isMutuallyPaired"):
-                edge = p.get("assignedEdge", EDGE_RIGHT)
-                if edge not in active_edge_peers:
-                    active_edge_peers[edge] = p
-
-        if not active_edge_peers:
+        if not any(p.get("isMutuallyPaired") for p in self.node.peers.values()):
             return
 
         try:
@@ -188,40 +181,48 @@ class ScreenEdgeSentinels:
         mon = self.node.topology.find_monitor_at(cur_x, cur_y)
 
         # Right Edge
-        if cur_x >= max_x - 6 and EDGE_RIGHT in active_edge_peers:
+        if cur_x >= max_x - 6:
             if not mon or not self.node.topology.is_internal_seam(mon, EDGE_RIGHT, cur_x, cur_y):
                 norm_pos = max(0.0, min(1.0, (cur_y - mon.virtualY) / float(max(1, mon.height)))) if mon else 0.5
-                self.set_cooldown(1.2)
-                if self.on_edge_triggered:
-                    self.on_edge_triggered(active_edge_peers[EDGE_RIGHT], EDGE_RIGHT, norm_pos)
-                return
+                target = self.node.resolve_peer_for_edge_and_norm(EDGE_RIGHT, norm_pos)
+                if target:
+                    self.set_cooldown(1.2)
+                    if self.on_edge_triggered:
+                        self.on_edge_triggered(target, EDGE_RIGHT, norm_pos)
+                    return
 
         # Left Edge
-        if cur_x <= min_x + 6 and EDGE_LEFT in active_edge_peers:
+        if cur_x <= min_x + 6:
             if not mon or not self.node.topology.is_internal_seam(mon, EDGE_LEFT, cur_x, cur_y):
                 norm_pos = max(0.0, min(1.0, (cur_y - mon.virtualY) / float(max(1, mon.height)))) if mon else 0.5
-                self.set_cooldown(1.2)
-                if self.on_edge_triggered:
-                    self.on_edge_triggered(active_edge_peers[EDGE_LEFT], EDGE_LEFT, norm_pos)
-                return
+                target = self.node.resolve_peer_for_edge_and_norm(EDGE_LEFT, norm_pos)
+                if target:
+                    self.set_cooldown(1.2)
+                    if self.on_edge_triggered:
+                        self.on_edge_triggered(target, EDGE_LEFT, norm_pos)
+                    return
 
         # Top Edge
-        if cur_y <= min_y + 6 and EDGE_TOP in active_edge_peers:
+        if cur_y <= min_y + 6:
             if not mon or not self.node.topology.is_internal_seam(mon, EDGE_TOP, cur_x, cur_y):
                 norm_pos = max(0.0, min(1.0, (cur_x - mon.virtualX) / float(max(1, mon.width)))) if mon else 0.5
-                self.set_cooldown(1.2)
-                if self.on_edge_triggered:
-                    self.on_edge_triggered(active_edge_peers[EDGE_TOP], EDGE_TOP, norm_pos)
-                return
+                target = self.node.resolve_peer_for_edge_and_norm(EDGE_TOP, norm_pos)
+                if target:
+                    self.set_cooldown(1.2)
+                    if self.on_edge_triggered:
+                        self.on_edge_triggered(target, EDGE_TOP, norm_pos)
+                    return
 
         # Bottom Edge
-        if cur_y >= max_y - 6 and EDGE_BOTTOM in active_edge_peers:
+        if cur_y >= max_y - 6:
             if not mon or not self.node.topology.is_internal_seam(mon, EDGE_BOTTOM, cur_x, cur_y):
                 norm_pos = max(0.0, min(1.0, (cur_x - mon.virtualX) / float(max(1, mon.width)))) if mon else 0.5
-                self.set_cooldown(1.2)
-                if self.on_edge_triggered:
-                    self.on_edge_triggered(active_edge_peers[EDGE_BOTTOM], EDGE_BOTTOM, norm_pos)
-                return
+                target = self.node.resolve_peer_for_edge_and_norm(EDGE_BOTTOM, norm_pos)
+                if target:
+                    self.set_cooldown(1.2)
+                    if self.on_edge_triggered:
+                        self.on_edge_triggered(target, EDGE_BOTTOM, norm_pos)
+                    return
 
 
 class HostCaptureOverlay:
@@ -280,7 +281,7 @@ class HostCaptureOverlay:
         grab_tag = " [Donanım 1000Hz]" if grab_ok else " [Yazılımsal Takip]"
         lbl = tk.Label(
             self.overlay,
-            text=f"🟢 Kontrol '{peer_name}' Ekranında{grab_tag}  |  Geri Dönüş: [ESC], [ScrollLock] veya",
+            text=f"🟢 Kontrol '{peer_name}' Ekranında{grab_tag}  |  Geri Dönüş: [ScrollLock] tuşu veya",
             fg="#4ADE80",
             bg="#0F172A",
             font=("Segoe UI", 9, "bold")
@@ -385,7 +386,7 @@ class HostCaptureOverlay:
     def _on_key_press(self, event):
         if not self.is_active or not self.active_peer:
             return
-        if event.keysym in ("Escape", "Scroll_Lock"):
+        if event.keysym == "Scroll_Lock":
             self.deactivate(notify_peer=True)
             return
 
@@ -550,7 +551,7 @@ class ConnectMeLinuxGui:
         u_box.pack(fill=tk.X)
         self.uinput_warn_lbl = ttk.Label(
             u_box,
-            text="⚠️ Linux Fare Yetkisi Gerekiyor (Wayland): İmlecin serbestçe hareket etmesi için /dev/uinput izni verilmelidir.",
+            text="⚠️ Linux Donanım Fare/Klavye İzni Gerekiyor: Ekran kenarından otomatik geçiş ve donanım yakalama için aygıt izinleri (/dev/input, /dev/uinput) verilmelidir.",
             font=("Segoe UI", 10, "bold"),
             foreground="#F59E0B"
         )
@@ -562,7 +563,12 @@ class ConnectMeLinuxGui:
             command=self._fix_uinput_permissions
         )
         self.uinput_fix_btn.pack(side=tk.RIGHT, padx=4)
-        if self.node.injector.mode in ("none", "xdotool") or (os.path.exists("/dev/uinput") and not os.access("/dev/uinput", os.W_OK)):
+        needs_perm = (
+            self.node.injector.mode in ("none", "xdotool")
+            or (os.path.exists("/dev/uinput") and not os.access("/dev/uinput", os.W_OK))
+            or (hasattr(self.node, "hardware_grabber") and not self.node.hardware_grabber.can_grab())
+        )
+        if needs_perm:
             self.uinput_banner.pack(fill=tk.X, padx=16, pady=(4, 0))
 
         # Çoklu Sekme (Notebook)
@@ -769,6 +775,7 @@ class ConnectMeLinuxGui:
         self.audio_target_var = tk.StringVar()
         self.audio_target_combo = ttk.Combobox(sel_row, textvariable=self.audio_target_var, state="readonly", width=48, font=("Segoe UI", 10))
         self.audio_target_combo.pack(side=tk.LEFT, padx=4)
+        self.audio_target_combo.bind("<<ComboboxSelected>>", self._on_audio_combo_selected)
 
         # Buttons row
         btn_row = ttk.Frame(matrix_card, style="Card.TFrame")
@@ -806,91 +813,102 @@ class ConnectMeLinuxGui:
                   foreground="#94A3B8").pack(anchor=tk.W, pady=2)
 
         self._audio_sink_items: List[Dict[str, Any]] = []
+        self._is_refreshing_audio_sinks = False
         self._refresh_audio_sinks_dropdown()
+
+    def _on_audio_combo_selected(self, event=None):
+        if getattr(self, "_is_refreshing_audio_sinks", False):
+            return
+        self._apply_audio_route_click()
 
     def _refresh_audio_sinks_dropdown(self):
         if not hasattr(self, "audio_target_combo"):
             return
 
-        items: List[Dict[str, Any]] = [
-            {
-                "displayText": "⚪ Yerel Mod / Devre Dışı (Herkes kendi sesini çalsın)",
-                "deviceId": "NONE",
-                "deviceName": "Yerel Mod",
-                "sinkId": "NONE",
-                "sinkName": "Devre Dışı",
-                "ipAddress": "",
-                "isDisable": True
-            }
-        ]
+        self._is_refreshing_audio_sinks = True
+        try:
+            items: List[Dict[str, Any]] = [
+                {
+                    "displayText": "⚪ Yerel Mod / Devre Dışı (Herkes kendi sesini çalsın)",
+                    "deviceId": "NONE",
+                    "deviceName": "Yerel Mod",
+                    "sinkId": "NONE",
+                    "sinkName": "Devre Dışı",
+                    "ipAddress": "",
+                    "isDisable": True
+                }
+            ]
 
-        # 1. Local Linux Sinks
-        local_sinks = getattr(self.node, "local_audio_sinks", [])
-        if not local_sinks:
-            local_sinks = self.node.enumerate_local_audio_sinks()
-            self.node.local_audio_sinks = local_sinks
+            # 1. Local Linux Sinks with real LAN IP (not 127.0.0.1, so remote peers can stream to it!)
+            local_ip = self._get_local_ip()
+            local_sinks = getattr(self.node, "local_audio_sinks", [])
+            if not local_sinks:
+                local_sinks = self.node.enumerate_local_audio_sinks()
+                self.node.local_audio_sinks = local_sinks
 
-        for s in local_sinks:
-            def_str = " (Varsayılan)" if s.get("isDefault") else ""
-            items.append({
-                "displayText": f"[Bu Bilgisayar] {s.get('sinkName', 'Ses Çıkışı')}{def_str}",
-                "deviceId": self.node.device_id,
-                "deviceName": self.node.device_name,
-                "sinkId": s.get("sinkId", "default"),
-                "sinkName": s.get("sinkName", "Varsayılan Ses Çıkışı"),
-                "ipAddress": "127.0.0.1",
-                "isDisable": False
-            })
-
-        # 2. Remote Paired Peers' Sinks
-        for peer in self.node.peers.values():
-            if not peer.get("isMutuallyPaired"):
-                continue
-            dev_id = peer.get("deviceId", "")
-            dev_name = peer.get("deviceName", dev_id)
-            dev_ip = peer.get("ipAddress", "")
-            remote_sinks = self.node.remote_audio_sinks.get(dev_id, [])
-
-            if remote_sinks:
-                for rs in remote_sinks:
-                    def_str = " (Varsayılan)" if rs.get("isDefault") else ""
-                    items.append({
-                        "displayText": f"[{dev_name}] {rs.get('sinkName', 'Ses Çıkışı')}{def_str}",
-                        "deviceId": dev_id,
-                        "deviceName": dev_name,
-                        "sinkId": rs.get("sinkId", "default"),
-                        "sinkName": rs.get("sinkName", "Ses Çıkışı"),
-                        "ipAddress": dev_ip,
-                        "isDisable": False
-                    })
-            else:
+            for s in local_sinks:
+                def_str = " (Varsayılan)" if s.get("isDefault") else ""
                 items.append({
-                    "displayText": f"[{dev_name}] Varsayılan Ses Çıkışı",
-                    "deviceId": dev_id,
-                    "deviceName": dev_name,
-                    "sinkId": "default",
-                    "sinkName": "Varsayılan Ses Çıkışı",
-                    "ipAddress": dev_ip,
+                    "displayText": f"[Bu Bilgisayar] {s.get('sinkName', 'Ses Çıkışı')}{def_str}",
+                    "deviceId": self.node.device_id,
+                    "deviceName": self.node.device_name,
+                    "sinkId": s.get("sinkId", "default"),
+                    "sinkName": s.get("sinkName", "Varsayılan Ses Çıkışı"),
+                    "ipAddress": local_ip,
                     "isDisable": False
                 })
 
-        self._audio_sink_items = items
-        display_names = [it["displayText"] for it in items]
-        self.audio_target_combo["values"] = display_names
+            # 2. Remote Paired Peers' Sinks
+            for peer in self.node.peers.values():
+                if not peer.get("isMutuallyPaired"):
+                    continue
+                dev_id = peer.get("deviceId", "")
+                dev_name = peer.get("deviceName", dev_id)
+                dev_ip = peer.get("ipAddress", "")
+                remote_sinks = self.node.remote_audio_sinks.get(dev_id, [])
 
-        # Preserve or reflect current route selection
-        curr_route = self.node.active_audio_route
-        match_idx = 0
-        if curr_route and curr_route.get("targetDeviceId") not in (None, "", "NONE"):
-            tgt_dev = curr_route.get("targetDeviceId")
-            tgt_sink = curr_route.get("targetSinkId")
-            for idx, it in enumerate(items):
-                if it["deviceId"] == tgt_dev and (it["sinkId"] == tgt_sink or tgt_sink in ("default", None)):
-                    match_idx = idx
-                    break
+                if remote_sinks:
+                    for rs in remote_sinks:
+                        def_str = " (Varsayılan)" if rs.get("isDefault") else ""
+                        items.append({
+                            "displayText": f"[{dev_name}] {rs.get('sinkName', 'Ses Çıkışı')}{def_str}",
+                            "deviceId": dev_id,
+                            "deviceName": dev_name,
+                            "sinkId": rs.get("sinkId", "default"),
+                            "sinkName": rs.get("sinkName", "Ses Çıkışı"),
+                            "ipAddress": dev_ip,
+                            "isDisable": False
+                        })
+                else:
+                    items.append({
+                        "displayText": f"[{dev_name}] Varsayılan Ses Çıkışı",
+                        "deviceId": dev_id,
+                        "deviceName": dev_name,
+                        "sinkId": "default",
+                        "sinkName": "Varsayılan Ses Çıkışı",
+                        "ipAddress": dev_ip,
+                        "isDisable": False
+                    })
 
-        self.audio_target_combo.current(match_idx)
-        self._on_audio_route_changed_gui(curr_route)
+            self._audio_sink_items = items
+            display_names = [it["displayText"] for it in items]
+            self.audio_target_combo["values"] = display_names
+
+            # Preserve or reflect current route selection
+            curr_route = self.node.active_audio_route
+            match_idx = 0
+            if curr_route and curr_route.get("targetDeviceId") not in (None, "", "NONE"):
+                tgt_dev = curr_route.get("targetDeviceId")
+                tgt_sink = curr_route.get("targetSinkId")
+                for idx, it in enumerate(items):
+                    if it["deviceId"] == tgt_dev and (it["sinkId"] == tgt_sink or tgt_sink in ("default", None)):
+                        match_idx = idx
+                        break
+
+            self.audio_target_combo.current(match_idx)
+            self._on_audio_route_changed_gui(curr_route)
+        finally:
+            self._is_refreshing_audio_sinks = False
 
     def _apply_audio_route_click(self):
         idx = self.audio_target_combo.current()
@@ -1149,9 +1167,6 @@ class ConnectMeLinuxGui:
                     text=f"Durum: 🎧 Dinliyor (UDP Port: 42852){bytes_info}",
                     foreground="#38BDF8"
                 )
-
-        if hasattr(self, "_refresh_audio_sinks_dropdown"):
-            self._refresh_audio_sinks_dropdown()
 
     def _reset_canvas_layout(self):
         self.peer_canvas_coords.clear()
@@ -1513,6 +1528,9 @@ class ConnectMeLinuxGui:
                         py1 = offset_y + (loc_h - card_h) / 2.0
                     self.peer_canvas_coords[pid] = (px1, py1)
 
+                p["canvasX"] = px1
+                p["canvasY"] = py1
+
                 px2 = px1 + card_w
                 py2 = py1 + card_h
 
@@ -1766,7 +1784,9 @@ class ConnectMeLinuxGui:
             res = subprocess.run(["pkexec", "sh", "-c", cmd], capture_output=True, text=True, timeout=30.0)
             if res.returncode == 0:
                 self.node.injector._init_injector()
-                if self.node.injector.mode != "none":
+                if hasattr(self.node, "hardware_grabber"):
+                    self.node.hardware_grabber._refresh_and_start_device_threads()
+                if self.node.injector.mode != "none" or (hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.can_grab()):
                     self.uinput_banner.pack_forget()
                     self.injector_badge.configure(text=f" Girdi: {self.node.injector.mode.upper()} ", foreground="#4ADE80")
                     messagebox.showinfo("Başarılı", "✅ Linux donanım sürücüsü ve aygıt izinleri (/dev/uinput, /dev/input/event*) başarıyla etkinleştirildi!\nFare ve klavye donanım seviyesinde 1000Hz hızla sorunsuz çalışacaktır.")

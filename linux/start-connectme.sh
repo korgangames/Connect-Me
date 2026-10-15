@@ -9,10 +9,8 @@ LOG_DIR="$HOME/.config/connectme"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/gui.log"
 
-# 1. Eğer /dev/uinput henüz yazılabilir değilse sessiz izin vermeyi dene
-if [ -e /dev/uinput ] && [ ! -w /dev/uinput ]; then
-    sudo -n chmod 666 /dev/uinput 2>/dev/null || true
-fi
+# 1. Eğer /dev/uinput veya /dev/input/event* henüz yazılabilir değilse sessiz izin vermeyi dene
+sudo -n chmod 666 /dev/uinput /dev/input/event* 2>/dev/null || true
 
 # 2. ydotoold kuruluysa ve çalışmıyorsa arka planda soket ile başlat
 if command -v ydotoold >/dev/null 2>&1 && ! pgrep -x ydotoold >/dev/null 2>&1; then

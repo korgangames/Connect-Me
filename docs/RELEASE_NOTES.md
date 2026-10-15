@@ -1,3 +1,27 @@
+# Connect Me v1.8.5 — Kesintisiz Fare Aktarımı, Ses Matrisi Otomatik Uygulama & Kararlılık Güncellemesi
+
+Bu sürüm; çoklu cihaz (Linux, Windows, Android) eşleşmelerinde farenin beklenmedik şekilde kopmasını, Linux ekran kenarından otomatik geçişin arayüze ihtiyaç duymadan 1000Hz donanım seviyesinde çalışmasını ve ses yönlendirme seçiminin anında varsayılana sıfırlanması sorununu kökten çözer.
+
+---
+
+### 🌟 v1.8.5 Yenilikleri ve Düzeltmeleri:
+
+* **🖱️ Kesintisiz Fare Aktarımı ve İstemsiz Geri Düşmelerin Engellenmesi:**
+  - **ESC Tuşu Koruması:** Acil durum geri dönüş tuşundan `ESC` kaldırıldı (yalnızca `Scroll Lock` tuşu kontrolü geri alır). Oyunlarda, tam ekran videolarda, menülerde veya pencerelerde ESC basıldığında imlecin istemsizce Linux'a geri dönmesi engellendi.
+  - **Kenar Direnci Artırıldı (Windows & Android):** Karşı cihazlardan (Windows ve Android) Linux'a geri dönüş eşiği 6-8 pikselden 25-28 piksele yükseltildi. Windows'ta Başlat menüsüne, ekranın solundaki simgelere veya pencerelere tıklarken imlecin Linux'a geri kaçması önlendi.
+  - **Ani Geri Sekme (Bounce-back) Koruması:** Linux'a dönüş yapıldığında işletim sistemi imleci sınır çizgisinden 60 piksel içeriye kaydırılır. Böylece imlecin ekran kenarında asılı kalıp anında karşı cihaza tekrar fırlatılması engellendi.
+  - **Klavye Donanım Thread Kapanma Hatası Giderildi:** ScrollLock tuşuna basıldığında evdev klavye dinleme thread'ini sonlandıran `break` hatası giderildi; donanım yakalama her zaman canlı kalır.
+  - **Linux Donanım İzinleri (`/dev/input/event*`):** `start-connectme.sh` ve grafiksel izin onarıcı `/dev/input/event*` aygıtlarını da kapsayacak şekilde güncellendi. Wayland üzerinde Connect Me penceresi arka plandayken bile 1000Hz donanım seviyesinde kenar geçişi kesintisiz çalışır.
+  - **Çoklu Cihaz Kenar Çakışması Çözüldü:** Hem Windows hem Android aynı kenara (örn. Sağ Kenar) yerleştirildiğinde, 2D kanvastaki dikey konumlarına göre kenar akıllıca dilimlenir; fareyi ekranın üst sağına götürdüğünüzde birinci cihaza, alt sağına götürdüğünüzde ikinci cihaza otomatik geçer.
+
+* **🎧 Ses Matrisi Çıkış Seçimi & Otomatik Yönlendirme Düzeltildi:**
+  - **Açılır Menü Sıfırlanma Hatası Giderildi:** Linux ve Windows arayüzlerinde saniyelik ağ kalp atışı (heartbeat) paketleri nedeniyle ses hedefi açılır kutusunun anında "Varsayılana / Yerel Moda" dönmesi sorunu çözüldü. Menü yalnızca cihazlar eklendiğinde veya ağ rotası değiştiğinde güncellenir.
+  - **Tek Tıkla Otomatik Yönlendirme:** Açılır menüden bir hoparlör veya kulaklık seçtiğiniz anda ek bir butona basmaya gerek kalmadan ses yönlendirmesi otomatik olarak tüm bağlı cihazlara yayılır ve aktifleşir.
+  - **Gerçek Ağ IP'si ile Yayın:** Linux yerel ses çıkışları `127.0.0.1` yerine yerel ağ IP'si ile paylaşılır. Bu sayede Android ve Windows cihazları Linux ses aygıtlarını doğrudan hedefler; Windows'un kendi sesini loopback üzerinden kendine çalıp çökmesi veya kasması engellenir.
+  - **PipeWire Oynatma Düzeltmesi:** Linux `pw-play` format parametresi `--format=s16` olarak düzeltildi.
+
+---
+
 # Connect Me v1.8.4 — Ses Matrisi Akustik Döngü Önleme, Windows Kararlılık & Performans Güncellemesi
 
 Bu sürüm; ses çıkışı yönlendirmesinde karşılaşılan sonsuz akustik geri besleme (yankı / döngü), Windows çökmesi ve arayüz donmalarını kökten çözen kritik kararlılık ve performans iyileştirmelerini içerir.

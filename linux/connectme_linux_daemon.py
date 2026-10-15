@@ -51,7 +51,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.4"
+    return "1.8.5"
 
 VERSION = _resolve_app_version()
 
@@ -1151,6 +1151,19 @@ class LinuxHardwareInputGrabber:
                 self.cur_y = min_y + vh // 2
         self._edge_cooldown_until = time.time() + 1.2
 
+        # Physically nudge OS cursor away from the boundary edge to prevent instant bounce back
+        try:
+            if edge == EDGE_RIGHT:
+                self.node.injector.move_relative(-60, 0)
+            elif edge == EDGE_LEFT:
+                self.node.injector.move_relative(60, 0)
+            elif edge == EDGE_TOP:
+                self.node.injector.move_relative(0, 60)
+            elif edge == EDGE_BOTTOM:
+                self.node.injector.move_relative(0, -60)
+        except Exception:
+            pass
+
     def can_grab(self) -> bool:
         """Returns True if evdev is importable and at least one physical pointer is accessible."""
         try:
@@ -1259,11 +1272,11 @@ class LinuxHardwareInputGrabber:
                                 self.node.send_mouse_scroll(self.active_peer, event.value * 120, 0)
 
                     elif event.type == ecodes.EV_KEY:
-                        # Emergency return hotkey: ESC or Scroll Lock
-                        if event.code in (ecodes.KEY_ESC, ecodes.KEY_SCROLLLOCK) and event.value == 1:
-                            self.node.log("[Donanım Yakalama] ⬅️ [ESC / ScrollLock] tuşuna basıldı, kontrol Linux'a geri alınıyor.")
+                        # Emergency return hotkey: Scroll Lock only (ESC is preserved for apps/games)
+                        if event.code == ecodes.KEY_SCROLLLOCK and event.value == 1:
+                            self.node.log("[Donanım Yakalama] ⬅️ [ScrollLock] tuşuna basıldı, kontrol Linux'a geri alınıyor.")
                             threading.Thread(target=self.deactivate, args=(True,), daemon=True).start()
-                            break
+                            continue
 
                         # Mouse buttons
                         if event.code == ecodes.BTN_LEFT:
@@ -1310,14 +1323,7 @@ class LinuxHardwareInputGrabber:
         if self.is_active or time.time() < self._edge_cooldown_until:
             return
 
-        active_edge_peers: Dict[int, dict] = {}
-        for p in self.node.peers.values():
-            if p.get("isMutuallyPaired"):
-                edge = p.get("assignedEdge", EDGE_RIGHT)
-                if edge not in active_edge_peers:
-                    active_edge_peers[edge] = p
-
-        if not active_edge_peers:
+        if not any(p.get("isMutuallyPaired") for p in self.node.peers.values()):
             self._accum_push = 0.0
             return
 
@@ -1373,7 +1379,12 @@ class LinuxHardwareInputGrabber:
             self._push_edge = EDGE_NONE
             return
 
-        target_peer = active_edge_peers.get(hit_edge)
+        if hit_edge in (EDGE_LEFT, EDGE_RIGHT):
+            norm_pos = max(0.02, min(0.98, rel_y / float(max(1, mon.height))))
+        else:
+            norm_pos = max(0.02, min(0.98, rel_x / float(max(1, mon.width))))
+
+        target_peer = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos)
         if not target_peer:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
@@ -1389,11 +1400,6 @@ class LinuxHardwareInputGrabber:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
             self._edge_cooldown_until = time.time() + 1.2
-
-            if hit_edge in (EDGE_LEFT, EDGE_RIGHT):
-                norm_pos = max(0.02, min(0.98, rel_y / float(max(1, mon.height))))
-            else:
-                norm_pos = max(0.02, min(0.98, rel_x / float(max(1, mon.width))))
 
             peer_name = target_peer.get("deviceName", "Cihaz")
             self.node.log(f"[Otomatik Kenar Geçişi] 🎯 İmleç {hit_edge}. kenardan '{peer_name}' cihazına otomatik aktarılıyor (norm={norm_pos:.2f}).")
@@ -1650,6 +1656,23 @@ class ConnectMeLinuxNode:
             peer["assignedEdge"] = EDGE_RIGHT
             peer["edgeOffset"] = 0.5
         self.log("[Ekran Düzeni] 📐 Ekran yerleşim düzeni varsayılana sıfırlandı.")
+
+    def resolve_peer_for_edge_and_norm(self, edge: int, norm_pos: float = 0.5) -> Optional[dict]:
+        """Resolves the target peer for a screen edge based on normalized cursor position and 2D arrangement."""
+        candidates = [p for p in self.peers.values() if p.get("isMutuallyPaired") and p.get("assignedEdge", EDGE_RIGHT) == edge]
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        if edge in (EDGE_LEFT, EDGE_RIGHT):
+            candidates.sort(key=lambda p: (p.get("canvasY") if p.get("canvasY") is not None else 0))
+        else:
+            candidates.sort(key=lambda p: (p.get("canvasX") if p.get("canvasX") is not None else 0))
+
+        n = len(candidates)
+        idx = max(0, min(n - 1, int(norm_pos * n)))
+        return candidates[idx]
 
     def switch_control_to_peer(self, peer: dict, local_exit_edge: int = EDGE_NONE, norm_pos: float = 0.5) -> bool:
         """Switches mouse/keyboard control from Linux host to remote peer (Android or Windows)."""
@@ -3225,10 +3248,22 @@ class ConnectMeLinuxNode:
             self.stop_audio_streaming()
 
         rec_cmd = None
-        if shutil.which("pw-record"):
-            rec_cmd = ["pw-record", "--target=@DEFAULT_AUDIO_SINK@.monitor", "--format=s16", "--rate=48000", "--channels=2", "-"]
-        elif shutil.which("parec"):
+        # Prioritize parec with @DEFAULT_MONITOR@ (universal PipeWire/PulseAudio desktop audio monitor)
+        if shutil.which("parec"):
             rec_cmd = ["parec", "-d", "@DEFAULT_MONITOR@", "--format=s16le", "--rate=48000", "--channels=2"]
+        elif shutil.which("pw-record"):
+            def_sink = ""
+            if shutil.which("pactl"):
+                try:
+                    res = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True, timeout=1.0)
+                    if res.returncode == 0:
+                        def_sink = res.stdout.strip()
+                except Exception:
+                    pass
+            if def_sink:
+                rec_cmd = ["pw-record", f"--target={def_sink}.monitor", "--format=s16", "--rate=48000", "--channels=2", "-"]
+            else:
+                rec_cmd = ["pw-record", "--format=s16", "--rate=48000", "--channels=2", "-"]
 
         if not rec_cmd:
             self.log("[Ses Hatası] ❌ pw-record veya parec bulunamadı (PipeWire/PulseAudio gereklidir).")
@@ -3243,16 +3278,16 @@ class ConnectMeLinuxNode:
             )
             time.sleep(0.05)
             if self.audio_proc.poll() is not None:
-                if shutil.which("pw-record"):
+                if shutil.which("parec"):
                     self.audio_proc = subprocess.Popen(
-                        ["pw-record", "--format=s16", "--rate=48000", "--channels=2", "-"],
+                        ["parec", "--format=s16le", "--rate=48000", "--channels=2"],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
                         bufsize=3840,
                     )
-                elif shutil.which("parec"):
+                elif shutil.which("pw-record"):
                     self.audio_proc = subprocess.Popen(
-                        ["parec", "--format=s16le", "--rate=48000", "--channels=2"],
+                        ["pw-record", "--format=s16", "--rate=48000", "--channels=2", "-"],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
                         bufsize=3840,
@@ -3381,7 +3416,7 @@ class ConnectMeLinuxNode:
                             target_arg = ["-D", self.audio_rx_target_sink]
 
                     if shutil.which("pw-play"):
-                        play_cmd = ["pw-play"] + target_arg + ["--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]
+                        play_cmd = ["pw-play"] + target_arg + ["--format=s16", f"--rate={sr}", f"--channels={ch}", "-"]
                     elif shutil.which("paplay"):
                         play_cmd = ["paplay"] + target_arg + ["--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}"]
                     elif shutil.which("aplay"):
