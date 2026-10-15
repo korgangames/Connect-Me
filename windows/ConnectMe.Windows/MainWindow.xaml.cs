@@ -2224,7 +2224,11 @@ public partial class MainWindow : Window
 
             if (_network.ActiveAudioRoute != null && _network.ActiveAudioRoute.TargetDeviceId != "NONE")
             {
-                var match = items.FirstOrDefault(i => i.DeviceId == _network.ActiveAudioRoute.TargetDeviceId && (i.SinkId == _network.ActiveAudioRoute.TargetSinkId || _network.ActiveAudioRoute.TargetSinkId == "default"));
+                // Pass 1: exact deviceId AND exact sinkId
+                var match = items.FirstOrDefault(i => i.DeviceId == _network.ActiveAudioRoute.TargetDeviceId && i.SinkId == _network.ActiveAudioRoute.TargetSinkId);
+                // Pass 2: deviceId fallback
+                match ??= items.FirstOrDefault(i => i.DeviceId == _network.ActiveAudioRoute.TargetDeviceId);
+
                 if (match != null)
                 {
                     AudioTargetComboBox.SelectedItem = match;
@@ -2235,6 +2239,7 @@ public partial class MainWindow : Window
             if (previouslySelected != null)
             {
                 var match = items.FirstOrDefault(i => i.DeviceId == previouslySelected.DeviceId && i.SinkId == previouslySelected.SinkId);
+                match ??= items.FirstOrDefault(i => i.DeviceId == previouslySelected.DeviceId);
                 if (match != null)
                 {
                     AudioTargetComboBox.SelectedItem = match;

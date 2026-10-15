@@ -910,16 +910,24 @@ class ConnectMeLinuxGui:
 
             # Preserve or reflect current route selection
             curr_route = self.node.active_audio_route
-            match_idx = 0
+            match_idx = None
             if curr_route and curr_route.get("targetDeviceId") not in (None, "", "NONE"):
                 tgt_dev = curr_route.get("targetDeviceId")
                 tgt_sink = curr_route.get("targetSinkId")
+                # Pass 1: exact deviceId AND exact sinkId
                 for idx, it in enumerate(items):
-                    if it["deviceId"] == tgt_dev and (it["sinkId"] == tgt_sink or tgt_sink in ("default", None)):
+                    if it["deviceId"] == tgt_dev and it["sinkId"] == tgt_sink:
                         match_idx = idx
                         break
+                # Pass 2: deviceId fallback
+                if match_idx is None:
+                    for idx, it in enumerate(items):
+                        if it["deviceId"] == tgt_dev:
+                            match_idx = idx
+                            break
 
-            self.audio_target_combo.current(match_idx)
+            if match_idx is not None:
+                self.audio_target_combo.current(match_idx)
             self._on_audio_route_changed_gui(curr_route)
         finally:
             self._is_refreshing_audio_sinks = False
@@ -2238,7 +2246,7 @@ X-GNOME-Autostart-enabled=true
 
             try:
                 req = urllib.request.Request(
-                    "https://api.github.com/repos/korgangames/Connect-Me/releases/latest",
+                    f"https://api.github.com/repos/korgangames/Connect-Me/releases/latest?_={int(time.time())}",
                     headers={"User-Agent": f"ConnectMe-Linux/{VERSION}", "Accept": "application/vnd.github.v3+json"}
                 )
                 with urllib.request.urlopen(req, timeout=12) as response:

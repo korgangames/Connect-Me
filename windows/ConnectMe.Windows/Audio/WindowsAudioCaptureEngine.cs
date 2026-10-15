@@ -159,8 +159,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
 
             IntPtr initPtr = Marshal.ReadIntPtr(acVtbl, 3 * IntPtr.Size);
             var init = Marshal.GetDelegateForFunctionPointer<InitializeDelegate>(initPtr);
-            Guid emptyGuid = Guid.Empty;
-            int initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 1000000 /* 100ms */, 0, pFormat, ref emptyGuid);
+            int initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 1000000 /* 100ms */, 0, pFormat, IntPtr.Zero);
             if (initHr != 0)
             {
                 CaptureStatusChanged?.Invoke($"WASAPI loopback başlatılamadı (0x{initHr:X}).");
@@ -414,7 +413,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
     private delegate int GetMixFormatDelegate(IntPtr thisPtr, out IntPtr ppFormat);
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    private delegate int InitializeDelegate(IntPtr thisPtr, int shareMode, uint streamFlags, long hnsBuffer, long hnsPeriod, IntPtr pFormat, ref Guid sessionGuid);
+    private delegate int InitializeDelegate(IntPtr thisPtr, int shareMode, uint streamFlags, long hnsBuffer, long hnsPeriod, IntPtr pFormat, IntPtr sessionGuid);
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int GetServiceDelegate(IntPtr thisPtr, ref Guid riid, out IntPtr ppv);

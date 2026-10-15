@@ -43,7 +43,7 @@ object AppUpdateManager {
 
     private fun getLatestTagFromWebRedirect(): String? {
         return try {
-            val url = URL(GITHUB_WEB_LATEST_URL)
+            val url = URL("$GITHUB_WEB_LATEST_URL?_=${System.currentTimeMillis() / 1000}")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false
                 requestMethod = "HEAD"
@@ -79,7 +79,7 @@ object AppUpdateManager {
                 var apkFileName = ""
                 var fileSize = 0L
 
-                val url = URL(GITHUB_LATEST_RELEASE_URL)
+                val url = URL("$GITHUB_LATEST_RELEASE_URL?_=${System.currentTimeMillis() / 1000}")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = 8000

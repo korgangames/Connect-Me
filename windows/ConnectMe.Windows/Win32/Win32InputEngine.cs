@@ -57,6 +57,8 @@ public sealed class Win32InputEngine : IDisposable
     private int _lastCursorY;
     private int _anchorX;
     private int _anchorY;
+    private int _lastRemoteAnchorX;
+    private int _lastRemoteAnchorY;
 
     private bool _shiftDown;
     private bool _ctrlDown;
@@ -153,6 +155,8 @@ public sealed class Win32InputEngine : IDisposable
                       ?? new PhysicalMonitorDescriptor { MonitorId = "P", Name = "Monitör P", VirtualX = 0, VirtualY = 0, Width = 1920, Height = 1080, IsPrimary = true };
         _anchorX = primary.VirtualX + primary.Width / 2;
         _anchorY = primary.VirtualY + primary.Height / 2;
+        _lastRemoteAnchorX = _anchorX;
+        _lastRemoteAnchorY = _anchorY;
         SetCursorPos(_anchorX, _anchorY);
 
         // Estimate remote cursor coordinates on entry
@@ -239,7 +243,7 @@ public sealed class Win32InputEngine : IDisposable
             return;
         }
 
-        if (DateTimeOffset.UtcNow - _lastReturnToLocalTime < TimeSpan.FromMilliseconds(500))
+        if (DateTimeOffset.UtcNow - _lastReturnToLocalTime < TimeSpan.FromMilliseconds(150))
             return;
 
         // Receiving secondary mode: remote peer is handing cursor control over to this machine
@@ -501,7 +505,7 @@ public sealed class Win32InputEngine : IDisposable
 
                         var transition = _topology.EvaluateCursorStep(clampedX, clampedY, dx, dy);
                         if (transition.ShouldTransition && transition.TargetPeer != null &&
-                            (DateTimeOffset.UtcNow - _lastReturnToLocalTime > TimeSpan.FromMilliseconds(350)))
+                            (DateTimeOffset.UtcNow - _lastReturnToLocalTime > TimeSpan.FromMilliseconds(120)))
                         {
                             SwitchControlToPeer(
                                 transition.TargetPeer,
@@ -519,10 +523,13 @@ public sealed class Win32InputEngine : IDisposable
                     {
                         case WM_MOUSEMOVE:
                         {
-                            int dx = info.pt.X - _anchorX;
-                            int dy = info.pt.Y - _anchorY;
+                            int dx = info.pt.X - _lastRemoteAnchorX;
+                            int dy = info.pt.Y - _lastRemoteAnchorY;
                             if (dx != 0 || dy != 0)
                             {
+                                _lastRemoteAnchorX = info.pt.X;
+                                _lastRemoteAnchorY = info.pt.Y;
+
                                 remote.RemoteCursorX = Math.Clamp(remote.RemoteCursorX + dx, 0, remote.ScreenWidth);
                                 remote.RemoteCursorY = Math.Clamp(remote.RemoteCursorY + dy, 0, remote.ScreenHeight);
 
@@ -530,7 +537,14 @@ public sealed class Win32InputEngine : IDisposable
                                     remote,
                                     (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
                                     (short)Math.Clamp(dy, short.MinValue, short.MaxValue));
-                                SetCursorPos(_anchorX, _anchorY);
+
+                                // Re-center anchor only when cursor drifts away (>80px) to prevent 1000Hz SetCursorPos hook throttling
+                                if (Math.Abs(info.pt.X - _anchorX) > 80 || Math.Abs(info.pt.Y - _anchorY) > 80)
+                                {
+                                    SetCursorPos(_anchorX, _anchorY);
+                                    _lastRemoteAnchorX = _anchorX;
+                                    _lastRemoteAnchorY = _anchorY;
+                                }
                             }
                             // Suppress local cursor movement so it remains anchored at (_anchorX, _anchorY)
                             return (IntPtr)1;

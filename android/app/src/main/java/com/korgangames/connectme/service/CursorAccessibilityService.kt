@@ -51,12 +51,8 @@ class CursorAccessibilityService : AccessibilityService() {
     private var overlayParams: WindowManager.LayoutParams? = null
     private var isOverlayAttached = false
 
-    @Volatile
-    private var isFrameScheduled = false
-
-    private val frameCallback = Choreographer.FrameCallback {
-        isFrameScheduled = false
-        val cv = cursorView ?: return@FrameCallback
+    private val renderRunnable = Runnable {
+        val cv = cursorView ?: return@Runnable
         cv.translationX = cursorX
         cv.translationY = cursorY
         if (isCursorActiveOnAndroid && cv.visibility != View.VISIBLE) {
@@ -65,15 +61,8 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     private fun scheduleCursorRender() {
-        if (!isFrameScheduled) {
-            isFrameScheduled = true
-            mainHandler.post {
-                if (!isOverlayAttached) {
-                    ensureOverlayCreated()
-                }
-                Choreographer.getInstance().postFrameCallback(frameCallback)
-            }
-        }
+        mainHandler.removeCallbacks(renderRunnable)
+        mainHandler.post(renderRunnable)
     }
 
     var screenWidth = 1080
@@ -326,8 +315,14 @@ class CursorAccessibilityService : AccessibilityService() {
             isCursorActiveOnAndroid = true
         }
 
-        val nextX = cursorX + packet.deltaX
-        val nextY = cursorY + packet.deltaY
+        val density = try { resources.displayMetrics.density } catch (_: Throwable) { 2.5f }
+        val speedMultiplier = (density * 0.85f).coerceIn(1.6f, 3.2f)
+
+        val moveDx = packet.deltaX * speedMultiplier
+        val moveDy = packet.deltaY * speedMultiplier
+
+        val nextX = cursorX + moveDx
+        val nextY = cursorY + moveDy
 
         // Detect if cursor is hitting the configured shared boundary facing the PC
         var pushingSharedEdge = false
@@ -337,33 +332,33 @@ class CursorAccessibilityService : AccessibilityService() {
 
         when (activeEntranceEdge) {
             ProtocolConstants.EDGE_LEFT -> {
-                if (packet.deltaX < 0 && (cursorX <= 6f || nextX < 0f)) {
+                if (moveDx < 0 && (cursorX <= 6f || nextX < 0f)) {
                     pushingSharedEdge = true
-                    outwardDelta = -packet.deltaX.toFloat()
+                    outwardDelta = -moveDx
                     returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
                     oppositeWindowsEdge = ProtocolConstants.EDGE_RIGHT
                 }
             }
             ProtocolConstants.EDGE_RIGHT -> {
-                if (packet.deltaX > 0 && (cursorX >= (screenWidth - 6f) || nextX > screenWidth)) {
+                if (moveDx > 0 && (cursorX >= (screenWidth - 6f) || nextX > screenWidth)) {
                     pushingSharedEdge = true
-                    outwardDelta = packet.deltaX.toFloat()
+                    outwardDelta = moveDx
                     returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
                     oppositeWindowsEdge = ProtocolConstants.EDGE_LEFT
                 }
             }
             ProtocolConstants.EDGE_TOP -> {
-                if (packet.deltaY < 0 && (cursorY <= 6f || nextY < 0f)) {
+                if (moveDy < 0 && (cursorY <= 6f || nextY < 0f)) {
                     pushingSharedEdge = true
-                    outwardDelta = -packet.deltaY.toFloat()
+                    outwardDelta = -moveDy
                     returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
                     oppositeWindowsEdge = ProtocolConstants.EDGE_BOTTOM
                 }
             }
             ProtocolConstants.EDGE_BOTTOM -> {
-                if (packet.deltaY > 0 && (cursorY >= (screenHeight - 6f) || nextY > screenHeight)) {
+                if (moveDy > 0 && (cursorY >= (screenHeight - 6f) || nextY > screenHeight)) {
                     pushingSharedEdge = true
-                    outwardDelta = packet.deltaY.toFloat()
+                    outwardDelta = moveDy
                     returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
                     oppositeWindowsEdge = ProtocolConstants.EDGE_TOP
                 }

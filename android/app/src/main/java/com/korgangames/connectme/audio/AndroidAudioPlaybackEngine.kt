@@ -9,6 +9,7 @@ import android.util.Log
 import com.korgangames.connectme.protocol.ProtocolConstants
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -76,12 +77,17 @@ class AndroidAudioPlaybackEngine private constructor() {
                 )
             }
 
-            track.play()
+            try {
+                track.play()
+            } catch (t: Throwable) {
+                Log.w(TAG, "AudioTrack play deferred: ${t.message}")
+            }
             audioTrack = track
 
-            val socket = DatagramSocket(ProtocolConstants.AUDIO_STREAM_UDP_PORT).apply {
+            val socket = DatagramSocket(null).apply {
                 reuseAddress = true
-                receiveBufferSize = 256 * 1024
+                receiveBufferSize = 512 * 1024
+                bind(InetSocketAddress(ProtocolConstants.AUDIO_STREAM_UDP_PORT))
             }
             udpSocket = socket
 
@@ -110,6 +116,8 @@ class AndroidAudioPlaybackEngine private constructor() {
 
         while (isRunning.get()) {
             try {
+                // In Java DatagramPacket, reset packet length before each receive to prevent truncation
+                packet.length = buffer.size
                 socket.receive(packet)
 
                 // Anti-Loopback / Anti-Feedback Protection
@@ -133,6 +141,9 @@ class AndroidAudioPlaybackEngine private constructor() {
                 if (len >= 14 && buffer[0] == 'C'.code.toByte() && buffer[1] == 'M'.code.toByte() && buffer[3] == 0x08.toByte()) {
                     val pcmLen = ByteBuffer.wrap(buffer, 12, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
                     if (pcmLen > 0 && 14 + pcmLen <= len) {
+                        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                            try { track.play() } catch (_: Throwable) {}
+                        }
                         track.write(buffer, 14, pcmLen)
                     }
                 }
@@ -159,6 +170,8 @@ class AndroidAudioPlaybackEngine private constructor() {
         receiveThread = null
 
         try {
+            audioTrack?.pause()
+            audioTrack?.flush()
             audioTrack?.stop()
         } catch (_: Throwable) {}
         try {

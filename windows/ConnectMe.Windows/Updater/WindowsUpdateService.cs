@@ -54,7 +54,8 @@ public static class WindowsUpdateService
             string zipName = "";
             long size = 0;
 
-            using var resp = await _http.GetAsync(GITHUB_LATEST_RELEASE_URL, ct);
+            string url = $"{GITHUB_LATEST_RELEASE_URL}?_={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+            using var resp = await _http.GetAsync(url, ct);
             if (resp.IsSuccessStatusCode)
             {
                 var jsonStream = await resp.Content.ReadAsStreamAsync(ct);

@@ -1236,8 +1236,8 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     pendingAudioTarget = pairedPeers.firstOrNull { it.deviceId == selectedTarget.targetDeviceId }
                     Toast.makeText(this, "Ses '${selectedTarget.targetDeviceName}' (${selectedTarget.targetSinkName}) hedefine yönlendirildi!", Toast.LENGTH_SHORT).show()
-                    // Prompt for projection if not already streaming on Android 10+
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && AudioStreamService.activeProjection == null) {
+                    // Prompt for projection to get a fresh token on Android 10+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         try {
                             val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                             mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
