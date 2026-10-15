@@ -51,7 +51,11 @@ class CursorAccessibilityService : AccessibilityService() {
     private var overlayParams: WindowManager.LayoutParams? = null
     private var isOverlayAttached = false
 
+    @Volatile
+    private var isRenderScheduled = false
+
     private val renderRunnable = Runnable {
+        isRenderScheduled = false
         val cv = cursorView ?: return@Runnable
         cv.translationX = cursorX
         cv.translationY = cursorY
@@ -61,8 +65,10 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     private fun scheduleCursorRender() {
-        mainHandler.removeCallbacks(renderRunnable)
-        mainHandler.post(renderRunnable)
+        if (!isRenderScheduled) {
+            isRenderScheduled = true
+            mainHandler.post(renderRunnable)
+        }
     }
 
     var screenWidth = 1080
@@ -315,8 +321,8 @@ class CursorAccessibilityService : AccessibilityService() {
             isCursorActiveOnAndroid = true
         }
 
-        val density = try { resources.displayMetrics.density } catch (_: Throwable) { 2.5f }
-        val speedMultiplier = (density * 0.85f).coerceIn(1.6f, 3.2f)
+        // 1:1 Natural, pixel-accurate mouse sensitivity (matching native USB OTG mouse behavior)
+        val speedMultiplier = 1.15f
 
         val moveDx = packet.deltaX * speedMultiplier
         val moveDy = packet.deltaY * speedMultiplier

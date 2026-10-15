@@ -73,6 +73,8 @@ public sealed class Win32InputEngine : IDisposable
     private int _suppressedEntryX;
     private int _suppressedEntryY;
     private long _lastInjectedCursorTime;
+    private bool _isResettingCursorToAnchor;
+    private long _resetAnchorTimeout;
 
     public PeerDeviceNode? ActiveRemotePeer { get; private set; }
     public bool IsHooksInstalled => _mouseHookId != IntPtr.Zero && _keyboardHookId != IntPtr.Zero;
@@ -157,6 +159,8 @@ public sealed class Win32InputEngine : IDisposable
         _anchorY = primary.VirtualY + primary.Height / 2;
         _lastRemoteAnchorX = _anchorX;
         _lastRemoteAnchorY = _anchorY;
+        _isResettingCursorToAnchor = true;
+        _resetAnchorTimeout = Environment.TickCount64 + 100;
         SetCursorPos(_anchorX, _anchorY);
 
         // Estimate remote cursor coordinates on entry
@@ -191,6 +195,7 @@ public sealed class Win32InputEngine : IDisposable
             return;
 
         ActiveRemotePeer = null;
+        _isResettingCursorToAnchor = false;
         _lastReturnToLocalTime = DateTimeOffset.UtcNow;
 
         // Release any held modifiers to ensure Windows host doesn't retain stuck keys
@@ -523,6 +528,23 @@ public sealed class Win32InputEngine : IDisposable
                     {
                         case WM_MOUSEMOVE:
                         {
+                            // Check if this WM_MOUSEMOVE was caused by our SetCursorPos reset to (_anchorX, _anchorY)
+                            if (_isResettingCursorToAnchor)
+                            {
+                                if (Math.Abs(info.pt.X - _anchorX) <= 2 && Math.Abs(info.pt.Y - _anchorY) <= 2)
+                                {
+                                    _isResettingCursorToAnchor = false;
+                                    _lastRemoteAnchorX = info.pt.X;
+                                    _lastRemoteAnchorY = info.pt.Y;
+                                    return (IntPtr)1;
+                                }
+
+                                if (Environment.TickCount64 > _resetAnchorTimeout)
+                                {
+                                    _isResettingCursorToAnchor = false;
+                                }
+                            }
+
                             int dx = info.pt.X - _lastRemoteAnchorX;
                             int dy = info.pt.Y - _lastRemoteAnchorY;
                             if (dx != 0 || dy != 0)
@@ -538,12 +560,12 @@ public sealed class Win32InputEngine : IDisposable
                                     (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
                                     (short)Math.Clamp(dy, short.MinValue, short.MaxValue));
 
-                                // Re-center anchor only when cursor drifts away (>80px) to prevent 1000Hz SetCursorPos hook throttling
-                                if (Math.Abs(info.pt.X - _anchorX) > 80 || Math.Abs(info.pt.Y - _anchorY) > 80)
+                                // Re-center anchor smoothly when cursor drifts (>60px) to prevent hitting screen boundaries
+                                if (Math.Abs(info.pt.X - _anchorX) > 60 || Math.Abs(info.pt.Y - _anchorY) > 60)
                                 {
+                                    _isResettingCursorToAnchor = true;
+                                    _resetAnchorTimeout = Environment.TickCount64 + 100;
                                     SetCursorPos(_anchorX, _anchorY);
-                                    _lastRemoteAnchorX = _anchorX;
-                                    _lastRemoteAnchorY = _anchorY;
                                 }
                             }
                             // Suppress local cursor movement so it remains anchored at (_anchorX, _anchorY)

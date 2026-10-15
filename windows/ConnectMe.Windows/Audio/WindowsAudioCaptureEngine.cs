@@ -34,6 +34,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
     public bool IsCapturing => _isRunning;
     public long TotalAudioBytesSent => _totalAudioBytesSent;
     public string? TargetIp => _targetIp;
+    public bool MuteLocalWhileStreaming { get; set; } = true;
 
     public event Action<string>? CaptureStatusChanged;
 
@@ -110,6 +111,10 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
         IntPtr acVtbl = IntPtr.Zero;
         IntPtr pCaptureClient = IntPtr.Zero;
         IntPtr pFormat = IntPtr.Zero;
+        IntPtr pEndpointVol = IntPtr.Zero;
+        bool originalMuteState = false;
+        bool hasMuted = false;
+        Guid emptyGuid = Guid.Empty;
 
         try
         {
@@ -158,7 +163,8 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
 
             IntPtr initPtr = Marshal.ReadIntPtr(acVtbl, 3 * IntPtr.Size);
             var init = Marshal.GetDelegateForFunctionPointer<InitializeDelegate>(initPtr);
-            int initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 1000000 /* 100ms */, 0, pFormat, IntPtr.Zero);
+            // Ultra-low latency: 20ms driver buffer (200,000 in 100-ns units)
+            int initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 200000 /* 20ms */, 0, pFormat, IntPtr.Zero);
             if (initHr != 0)
             {
                 CaptureStatusChanged?.Invoke($"WASAPI loopback başlatılamadı (0x{initHr:X}).");
@@ -173,6 +179,27 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             {
                 CaptureStatusChanged?.Invoke("IAudioCaptureClient servisi alınamadı.");
                 return;
+            }
+
+            // Optionally mute the local physical speakers during streaming (only remote device plays audio)
+            if (MuteLocalWhileStreaming)
+            {
+                try
+                {
+                    Guid iidEndpointVol = new Guid("5BC64442-78A7-4082-8F6F-7983A4F6F48F");
+                    int volHr = activate(pDevice, ref iidEndpointVol, 1 /* CLSCTX_INPROC_SERVER */, IntPtr.Zero, out pEndpointVol);
+                    if (volHr == 0 && pEndpointVol != IntPtr.Zero)
+                    {
+                        var epVol = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(pEndpointVol);
+                        epVol.GetMute(out originalMuteState);
+                        if (!originalMuteState)
+                        {
+                            epVol.SetMute(true, ref emptyGuid);
+                            hasMuted = true;
+                        }
+                    }
+                }
+                catch { }
             }
 
             IntPtr ccVtbl = Marshal.ReadIntPtr(pCaptureClient);
@@ -193,12 +220,18 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
 
             while (_isRunning && !_disposed)
             {
-                int gbHr = getBuffer(pCaptureClient, out IntPtr pData, out uint numFramesToRead, out uint flags, out _, out _);
-                if (gbHr == 0 && numFramesToRead > 0 && pData != IntPtr.Zero)
+                bool hadData = false;
+
+                // Drain all available audio packets in the WASAPI buffer to eliminate lag
+                while (_isRunning && !_disposed)
                 {
+                    int gbHr = getBuffer(pCaptureClient, out IntPtr pData, out uint numFramesToRead, out uint flags, out _, out _);
+                    if (gbHr != 0 || numFramesToRead == 0 || pData == IntPtr.Zero)
+                        break;
+
+                    hadData = true;
                     bool isSilent = (flags & 0x01 /* AUDCLNT_BUFFERFLAGS_SILENT */) != 0;
 
-                    // If silent (no music/video playing), do not flood network with silent UDP packets
                     if (!isSilent)
                     {
                         byte[] pcmChunk = ConvertToPcm16Stereo(pData, numFramesToRead, channels, sampleRate, isFloat, isSilent: false);
@@ -236,7 +269,14 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
                     releaseBuffer(pCaptureClient, numFramesToRead);
                 }
 
-                Thread.Sleep(5);
+                if (!hadData)
+                {
+                    Thread.Sleep(2);
+                }
+                else
+                {
+                    Thread.Sleep(1);
+                }
             }
         }
         catch (Exception ex)
@@ -245,6 +285,20 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
         }
         finally
         {
+            if (hasMuted && pEndpointVol != IntPtr.Zero)
+            {
+                try
+                {
+                    var epVol = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(pEndpointVol);
+                    epVol.SetMute(false, ref emptyGuid);
+                }
+                catch { }
+            }
+            if (pEndpointVol != IntPtr.Zero)
+            {
+                try { Marshal.Release(pEndpointVol); } catch { }
+            }
+
             if (pAudioClient != IntPtr.Zero && acVtbl != IntPtr.Zero)
             {
                 try
@@ -428,4 +482,29 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int ReleaseBufferDelegate(IntPtr thisPtr, uint numFramesRead);
+
+    [Guid("5BC64442-78A7-4082-8F6F-7983A4F6F48F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioEndpointVolume
+    {
+        int RegisterControlChangeNotify(IntPtr pNotify);
+        int UnregisterControlChangeNotify(IntPtr pNotify);
+        int GetChannelCount(out uint pnChannelCount);
+        int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+        int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+        int GetMasterVolumeLevel(out float pfLevelDB);
+        int GetMasterVolumeLevelScalar(out float pfLevel);
+        int SetChannelVolumeLevel(uint nChannel, float fLevelDB, ref Guid pguidEventContext);
+        int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, ref Guid pguidEventContext);
+        int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+        int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+        [PreserveSig]
+        int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+        [PreserveSig]
+        int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
+        int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
+        int VolumeStepUp(ref Guid pguidEventContext);
+        int VolumeStepDown(ref Guid pguidEventContext);
+        int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+        int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
+    }
 }

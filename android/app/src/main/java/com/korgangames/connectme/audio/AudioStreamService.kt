@@ -62,10 +62,6 @@ class AudioStreamService : Service() {
                     return START_NOT_STICKY
                 }
 
-                // 1. In Android 14+ (API 34+), startForeground with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                // MUST be called before calling MediaProjectionManager.getMediaProjection().
-                startForegroundAudio()
-
                 var projection = activeProjection
                 if (resultCode == Activity.RESULT_OK && resultData != null) {
                     try {
@@ -85,11 +81,8 @@ class AudioStreamService : Service() {
                     }
                 }
 
-                if (projection == null) {
-                    Log.w(TAG, "Cannot start AudioStreamService without active MediaProjection")
-                    stopAudioStreaming()
-                    return START_NOT_STICKY
-                }
+                // 1. In Android 14+ (API 34+), startForeground with correct FGS types
+                startForegroundAudio(projection != null)
 
                 val started = AudioStreamEngine.instance.start(hostIp, projection)
                 if (!started) {
@@ -100,7 +93,7 @@ class AudioStreamService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startForegroundAudio() {
+    private fun startForegroundAudio(hasProjection: Boolean) {
         try {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -128,23 +121,29 @@ class AudioStreamService : Service() {
                 .build()
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val fgsType = if (hasProjection) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                }
                 try {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                    )
+                    startForeground(NOTIFICATION_ID, notification, fgsType)
                 } catch (se: SecurityException) {
-                    Log.w(TAG, "startForeground with MEDIA_PROJECTION failed, falling back to basic foreground: ${se.message}")
-                    startForeground(NOTIFICATION_ID, notification)
+                    Log.w(TAG, "startForeground with specific FGS type failed: ${se.message}")
+                    try {
+                        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                    } catch (_: Throwable) {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
                 }
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val fgsType = if (hasProjection) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                }
                 try {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                    )
+                    startForeground(NOTIFICATION_ID, notification, fgsType)
                 } catch (se: SecurityException) {
                     startForeground(NOTIFICATION_ID, notification)
                 }

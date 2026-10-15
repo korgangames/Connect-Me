@@ -1732,24 +1732,20 @@ class ConnectMeService : Service() {
                 AndroidAudioPlaybackEngine.instance.stop()
                 val myIp = getLocalIpv4Address()
                 if (target.targetIp.isNotEmpty() && target.targetIp != "127.0.0.1" && target.targetIp != myIp) {
-                    if (AudioStreamService.activeProjection != null) {
-                        val intent = Intent(this, AudioStreamService::class.java).apply {
-                            action = AudioStreamService.ACTION_START_AUDIO
-                            putExtra("hostIp", target.targetIp)
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            try {
-                                startForegroundService(intent)
-                            } catch (t: Throwable) {
-                                startService(intent)
-                            }
-                        } else {
+                    val intent = Intent(this, AudioStreamService::class.java).apply {
+                        action = AudioStreamService.ACTION_START_AUDIO
+                        putExtra("hostIp", target.targetIp)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            startForegroundService(intent)
+                        } catch (t: Throwable) {
                             startService(intent)
                         }
-                        log("[Ses Matrisi] 📡 Ses Yayını -> '${target.targetDeviceName}' (${target.targetSinkName}) hedefine akıyor.")
                     } else {
-                        log("[Ses Matrisi] ℹ️ Ses Yayını -> '${target.targetDeviceName}' seçildi. Dahili ses aktarımı için ekran/ses izni bekleniyor.")
+                        startService(intent)
                     }
+                    log("[Ses Matrisi] 📡 Ses Yayını -> '${target.targetDeviceName}' (${target.targetSinkName}) hedefine akıyor.")
                 }
             }
         } catch (t: Throwable) {

@@ -780,6 +780,14 @@
                                             Cursor="Hand"
                                             Content="🔍 Çıkışları Yenile"/>
                                 </WrapPanel>
+                                <CheckBox x:Name="AudioMuteLocalSpeakersCheckBox"
+                                          Content="🔊 Yayındayken bu bilgisayarın hoparlörünü sessize al (Yalnızca hedeften dinle)"
+                                          IsChecked="True"
+                                          Foreground="#94A3B8"
+                                          FontSize="11.5"
+                                          Margin="0,8,0,0"
+                                          Checked="AudioMuteLocalSpeakersCheckBox_Changed"
+                                          Unchecked="AudioMuteLocalSpeakersCheckBox_Changed"/>
                             </StackPanel>
                         </Border>
 

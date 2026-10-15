@@ -2310,6 +2310,14 @@ public partial class MainWindow : Window
         AppendLog($"🔍 [Ses Matrisi] Ses çıkış aygıtları tarandı ({localSinks.Count} yerel aygıt).");
     }
 
+    private void AudioMuteLocalSpeakersCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_audioCapture != null && AudioMuteLocalSpeakersCheckBox != null)
+        {
+            _audioCapture.MuteLocalWhileStreaming = AudioMuteLocalSpeakersCheckBox.IsChecked == true;
+        }
+    }
+
     private void OnPeerDisconnectedAudio(PeerDeviceNode peer)
     {
         Dispatcher.InvokeAsync(RefreshAudioSinksComboBox);

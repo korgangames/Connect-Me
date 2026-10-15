@@ -65,15 +65,6 @@ class AudioStreamEngine private constructor() {
             return false
         }
 
-        // Enforce Android 10+ and active MediaProjection for system audio capture.
-        // Never fall back to room microphone!
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || mediaProjection == null) {
-            Log.w(TAG, "Dahili sistem sesi yakalama için Android 10+ ve MediaProjection izni zorunludur.")
-            stop()
-            onStatusChanged?.invoke(false, "Dahili ses yakalama için ekran/ses izni verilmedi.")
-            return false
-        }
-
         targetHostIp = hostIp
         isRunning.set(true)
 
@@ -88,57 +79,100 @@ class AudioStreamEngine private constructor() {
             .setChannelMask(channelConfig)
             .build()
 
-        try {
-            val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
-                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                .build()
+        var record: AudioRecord? = null
+        var captureMode = "Bilinmiyor"
 
-            val record = AudioRecord.Builder()
-                .setAudioPlaybackCaptureConfig(captureConfig)
-                .setAudioFormat(format)
-                .setBufferSizeInBytes(bufferSize)
-                .build()
-
-            if (record.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioPlaybackCapture AudioRecord initialization failed!")
-                try { record.release() } catch (_: Throwable) {}
-                stop()
-                onStatusChanged?.invoke(false, "Ses yakalama motoru başlatılamadı.")
-                return false
-            }
-
-            audioRecord = record
-
+        // 1. Try AudioPlaybackCapture (internal system audio) if MediaProjection exists (Android 10+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaProjection != null) {
             try {
-                audioRecord?.startRecording()
+                val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
+                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                    .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                    .build()
+
+                val rec = AudioRecord.Builder()
+                    .setAudioPlaybackCaptureConfig(captureConfig)
+                    .setAudioFormat(format)
+                    .setBufferSizeInBytes(bufferSize)
+                    .build()
+
+                if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                    record = rec
+                    captureMode = "Dahili Sistem Sesi"
+                    Log.i(TAG, "AudioPlaybackCapture ($captureMode) başarıyla hazırlandı.")
+                } else {
+                    try { rec.release() } catch (_: Throwable) {}
+                }
             } catch (t: Throwable) {
-                Log.e(TAG, "AudioRecord startRecording failed: ${t.message}", t)
-                stop()
-                onStatusChanged?.invoke(false, "Ses kaydı başlatılamadı: ${t.message}")
-                return false
+                Log.w(TAG, "AudioPlaybackCapture başarısız oldu, mikrofona geçiliyor: ${t.message}")
             }
+        }
 
-            udpSocket = DatagramSocket()
+        // 2. High-fidelity hardware audio / microphone fallback (for speech, calls, or when projection is omitted)
+        if (record == null) {
+            val sourcesToTry = intArrayOf(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.CAMCORDER,
+                MediaRecorder.AudioSource.DEFAULT
+            )
+            for (source in sourcesToTry) {
+                try {
+                    val rec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        AudioRecord.Builder()
+                            .setAudioSource(source)
+                            .setAudioFormat(format)
+                            .setBufferSizeInBytes(bufferSize)
+                            .build()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        AudioRecord(source, SAMPLE_RATE, channelConfig, audioEncoding, bufferSize)
+                    }
 
-            isStreaming = true
-            onStatusChanged?.invoke(true, "🟢 Sesi Hedefe Aktarılıyor ($SAMPLE_RATE Hz Stereo)")
-
-            streamThread = Thread({
-                streamAudioLoop(hostIp)
-            }, "ConnectMe-AudioStreamThread").apply {
-                priority = Thread.MAX_PRIORITY
-                start()
+                    if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                        record = rec
+                        captureMode = if (source == MediaRecorder.AudioSource.VOICE_RECOGNITION) "Konuşma / Mikrofon" else "Cihaz Mikrofonu"
+                        Log.i(TAG, "Mikrofon ses yakalama ($captureMode, kaynak: $source) başarıyla hazırlandı.")
+                        break
+                    } else {
+                        try { rec.release() } catch (_: Throwable) {}
+                    }
+                } catch (_: Throwable) {}
             }
+        }
 
-            return true
-        } catch (ex: Throwable) {
-            Log.e(TAG, "Failed to start audio streaming: ${ex.message}", ex)
+        if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "Hiçbir ses yakalama kaynağı başlatılamadı!")
             stop()
-            onStatusChanged?.invoke(false, "Hata: ${ex.message}")
+            onStatusChanged?.invoke(false, "Ses yakalama motoru başlatılamadı.")
             return false
         }
+
+        audioRecord = record
+
+        try {
+            audioRecord?.startRecording()
+        } catch (t: Throwable) {
+            Log.e(TAG, "AudioRecord startRecording failed: ${t.message}", t)
+            stop()
+            onStatusChanged?.invoke(false, "Ses kaydı başlatılamadı: ${t.message}")
+            return false
+        }
+
+        udpSocket = DatagramSocket()
+
+        isStreaming = true
+        onStatusChanged?.invoke(true, "🟢 Ses Aktarılıyor: $captureMode ($SAMPLE_RATE Hz Stereo)")
+
+        streamThread = Thread({
+            streamAudioLoop(hostIp)
+        }, "ConnectMe-AudioStreamThread").apply {
+            priority = Thread.MAX_PRIORITY
+            start()
+        }
+
+        return true
     }
 
     private fun streamAudioLoop(hostIp: String) {

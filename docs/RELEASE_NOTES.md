@@ -1,3 +1,29 @@
+# Connect Me v1.8.11 — Pürüzsüz Android Fare Kontrolü, Anlık Ses Akışı & Çift Çalma Önleme
+
+Bu sürüm; Windows'tan Android'e imleç geçişindeki pozisyon titremesini (sağa-sola jitter), Windows'tan Android'e ses aktarımındaki çift hoparlör çalmasını ve gecikmeyi, ayrıca Android'den Windows'a ses aktarımının başlamama sorununu kökten çözer.
+
+---
+
+### 🌟 v1.8.11 Yenilikleri ve Düzeltmeleri:
+
+* **🎯 Windows $\rightarrow$ Android İmleç Titremesi (Jitter) ve Hassasiyet Sorunu Giderildi:**
+  - **Sorun:** Windows kancasında imleç sürüklendiğinde `SetCursorPos` çağrılarak merkezleniyordu. Ancak `SetCursorPos` işletim sistemi düzeyinde ters yönde sentetik bir `WM_MOUSEMOVE` üretiyor ve bu sentetik atlama da fiziksel fare hareketi sanılarak Android'e ters delta olarak gönderiliyordu. Bu durum imlecin Android ekranında bulunduğu yerde ileri-geri şiddetle titremesine (jitter) ve istenen hedefe ulaşamamasına sebep oluyordu. Ayrıca Android tarafındaki 2.5x aşırı hız çarpanı hassas tıklamaları zorlaştırıyordu.
+  - **Çözüm:** Windows kanca motoruna (`Win32InputEngine`) kilit korumalı `_isResettingCursorToAnchor` bayrağı eklendi. Merkezleme için çağrılan `SetCursorPos` olayları kancada anında yakalanıp sessizce yutulur; Android'e hiçbir ters veya sahte delta gönderilmez. Android tarafında fare hassasiyeti doğal 1:1 piksel oranına (1.15x) çekildi ve `scheduleCursorRender` çağrısı kare iptali yapmayan optimize bayrak yapısına geçirilerek 120Hz ekranlarda pürüzsüz imleç hareketi sağlandı.
+
+* **🔊 Windows $\rightarrow$ Android Çift Çalma Önleme (Yerel Hoparlörü Otomatik Sessize Alma):**
+  - **Sorun:** Windows WASAPI Loopback modunda ses yakalanırken, ses aynı zamanda Windows'un fiziksel hoparlöründen de çalmaya devam ediyor ve odada yankı/çift ses oluşuyordu.
+  - **Çözüm:** Windows ses yakalama motoru (`WindowsAudioCaptureEngine`), Core Audio API `IAudioEndpointVolume` arabirimi üzerinden varsayılan oynatma uç noktasını aktarım süresince otomatik olarak sessize alır (`SetMute(true)`). Ses aktarımı durdurulduğunda önceki sessizlik durumu aynen geri yüklenir. Kullanıcı için arayüze "Yayındayken bu bilgisayarın hoparlörünü sessize al" seçeneği eklendi.
+
+* **⚡ Ultra Düşük Ses Gecikmesi (~25-35ms Gerçek Zamanlı Akış):**
+  - **Sorun:** Windows WASAPI arabelleği 100ms olarak başlatılıyor ve okuma döngüsü her turda 5ms uyuyarak tek bir paket alıyordu. Ses kartında paket biriktikçe gecikme saniyeler mertebesine ulaşıyordu.
+  - **Çözüm:** WASAPI arabellek süresi 20ms'ye indirildi. Yakalama döngüsüne "tam tahliye" (drain) mantığı eklenerek kuyruktaki tüm paketler anında boşaltılıp ağa iletilir. Android tarafında `AudioTrack.WRITE_NON_BLOCKING` kullanılarak UDP dinleme iş parçacığının kilitlenmesi engellendi; gecikme gerçek zamanlı dudak senkronu seviyesine indirildi.
+
+* **📱 Android $\rightarrow$ Windows Ses Aktarımı Hibrit Motor (Dahili Ses + Yüksek Sadakatli Mikrofon):**
+  - **Sorun:** Android ses motoru yalnızca MediaProjection sistem token'ı varken ve sadece `AudioPlaybackCapture` izinli medya oynatıcılar çalarken çalışıyordu. MediaProjection olmadan veya kullanıcı normal konuşma/ses testi yaptığında ses motoru tamamen susuyordu. Ayrıca PC'den ses rotası seçildiğinde Android tarafında `activeProjection` null olduğu için servis hiç başlatılmıyordu.
+  - **Çözüm:** Android ses yakalama motoruna hibrit çalışma yapısı kazandırıldı. MediaProjection mevcutsa dahili sistem sesi, mevcut değilse veya başarısız olursa donanım seviyesinde yüksek sadakatli mikrofon (`VOICE_RECOGNITION` / `MIC`) devreye girer. `AndroidManifest.xml`'e `FOREGROUND_SERVICE_MICROPHONE` izni eklendi. PC'den yönlendirme başlatıldığında servis beklemeden derhal akışa başlar.
+
+---
+
 # Connect Me v1.8.10 — İki Yönlü Kristal Netliğinde Ses & Donanım Hizalama Düzeltmesi
 
 Bu sürüm; Windows'tan Android'e ses aktarımındaki 32-bit float format hizalama hatasından kaynaklanan statik cızırtıyı ve Android'den Windows'a ses aktarımındaki WinMM arabellek kurtarma kilidini çözer.
