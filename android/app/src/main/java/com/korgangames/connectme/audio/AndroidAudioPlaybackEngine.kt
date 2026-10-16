@@ -51,8 +51,8 @@ class AndroidAudioPlaybackEngine private constructor() {
                 val builder = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .setUsage(AudioAttributes.USAGE_GAME)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                             .build()
                     )
                     .setAudioFormat(
@@ -82,6 +82,14 @@ class AndroidAudioPlaybackEngine private constructor() {
                 )
             }
 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    // Restrict internal buffer to 960 frames (~20ms) to eliminate Android Deep Buffer delay
+                    val frameTarget = 960.coerceAtLeast(minBufSize / 4)
+                    track.setBufferSizeInFrames(frameTarget)
+                } catch (_: Throwable) {}
+            }
+
             try {
                 track.play()
             } catch (t: Throwable) {
@@ -103,7 +111,7 @@ class AndroidAudioPlaybackEngine private constructor() {
                 priority = Thread.MAX_PRIORITY
                 start()
             }
-            Log.i(TAG, "Android Audio Playback Engine started on UDP port ${ProtocolConstants.AUDIO_STREAM_UDP_PORT}")
+            Log.i(TAG, "Android Audio Playback Engine started on UDP port ${ProtocolConstants.AUDIO_STREAM_UDP_PORT} (Fast-Path Low Latency)")
             return true
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to start audio playback: ${t.message}", t)
@@ -118,6 +126,7 @@ class AndroidAudioPlaybackEngine private constructor() {
 
         var cachedMyIp: String? = null
         var lastIpCheck = 0L
+        var totalFramesWritten = 0L
 
         while (isRunning.get()) {
             try {
@@ -149,10 +158,27 @@ class AndroidAudioPlaybackEngine private constructor() {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (_: Throwable) {}
                         }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+
+                        // Real-time jitter & latency drift guard:
+                        // If buffered frames inside AudioTrack exceed 2400 (~50ms), flush buffer to lock latency to ~20ms!
+                        val playedFrames = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                        val bufferedFrames = totalFramesWritten - playedFrames
+                        if (bufferedFrames > 2400) {
+                            try {
+                                track.pause()
+                                track.flush()
+                                track.play()
+                            } catch (_: Throwable) {}
+                            totalFramesWritten = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                        }
+
+                        val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                             track.write(buffer, 14, pcmLen, AudioTrack.WRITE_NON_BLOCKING)
                         } else {
                             track.write(buffer, 14, pcmLen)
+                        }
+                        if (written > 0) {
+                            totalFramesWritten += (written / 4)
                         }
                     }
                 }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Interop;
 using ConnectMe.Core.Network;
 using ConnectMe.Core.Protocol;
 using ConnectMe.Core.Topology;
@@ -20,6 +21,12 @@ public sealed class Win32InputEngine : IDisposable
     private const int WM_KEYUP = 0x0101;
     private const int WM_SYSKEYDOWN = 0x0104;
     private const int WM_SYSKEYUP = 0x0105;
+
+    private const int WM_INPUT = 0x00FF;
+    private const uint RID_INPUT = 0x10000003;
+    private const uint RIDEV_INPUTSINK = 0x00000100;
+    private const ushort HID_USAGE_PAGE_GENERIC = 0x01;
+    private const ushort HID_USAGE_GENERIC_MOUSE = 0x02;
 
     private const int WM_MOUSEMOVE = 0x0200;
     private const int WM_LBUTTONDOWN = 0x0201;
@@ -73,8 +80,10 @@ public sealed class Win32InputEngine : IDisposable
     private int _suppressedEntryX;
     private int _suppressedEntryY;
     private long _lastInjectedCursorTime;
-    private bool _isResettingCursorToAnchor;
-    private long _resetAnchorTimeout;
+
+    private bool _rawInputActive;
+    private IntPtr _attachedHwnd = IntPtr.Zero;
+    private HwndSourceHook? _hwndSourceHook;
 
     public PeerDeviceNode? ActiveRemotePeer { get; private set; }
     public bool IsHooksInstalled => _mouseHookId != IntPtr.Zero && _keyboardHookId != IntPtr.Zero;
@@ -97,6 +106,98 @@ public sealed class Win32InputEngine : IDisposable
         _network.RemoteMouseScrollReceived += OnRemoteMouseScrollReceived;
         _network.RemoteKeyEventReceived += OnRemoteKeyEventReceived;
         _network.PeerDisconnected += OnPeerDisconnected;
+    }
+
+    /// <summary>
+    /// Attaches to the main window handle to receive high-precision Raw Input (WM_INPUT) directly from mouse hardware.
+    /// Completely bypasses virtual cursor coordinates and eliminates jitter / reverse synthetic deltas.
+    /// </summary>
+    public void AttachToWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        _attachedHwnd = hwnd;
+
+        try
+        {
+            var rids = new RAWINPUTDEVICE[]
+            {
+                new RAWINPUTDEVICE
+                {
+                    usUsagePage = HID_USAGE_PAGE_GENERIC,
+                    usUsage = HID_USAGE_GENERIC_MOUSE,
+                    dwFlags = RIDEV_INPUTSINK,
+                    hwndTarget = hwnd
+                }
+            };
+
+            bool success = RegisterRawInputDevices(rids, (uint)rids.Length, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
+            if (success)
+            {
+                var source = HwndSource.FromHwnd(hwnd);
+                if (source != null)
+                {
+                    _hwndSourceHook = RawInputHookCallback;
+                    source.AddHook(_hwndSourceHook);
+                    _rawInputActive = true;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private IntPtr RawInputHookCallback(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WM_INPUT)
+        {
+            ProcessRawInput(lParam);
+        }
+        return IntPtr.Zero;
+    }
+
+    private void ProcessRawInput(IntPtr hRawInput)
+    {
+        var remote = ActiveRemotePeer;
+        if (remote == null) return;
+
+        uint dwSize = 0;
+        int headerSize = Marshal.SizeOf<RAWINPUTHEADER>();
+        GetRawInputData(hRawInput, RID_INPUT, IntPtr.Zero, ref dwSize, (uint)headerSize);
+        if (dwSize == 0) return;
+
+        byte[] rawBuffer = new byte[dwSize];
+        unsafe
+        {
+            fixed (byte* pBuf = rawBuffer)
+            {
+                if (GetRawInputData(hRawInput, RID_INPUT, (IntPtr)pBuf, ref dwSize, (uint)headerSize) == dwSize)
+                {
+                    uint dwType = *(uint*)pBuf;
+                    if (dwType == 0 /* RIM_TYPEMOUSE */)
+                    {
+                        int offset = IntPtr.Size == 8 ? 24 : 16;
+                        ushort flags = *(ushort*)(pBuf + offset);
+
+                        // Only process relative mouse moves from physical sensor
+                        if ((flags & 0x01 /* MOUSE_MOVE_ABSOLUTE */) == 0)
+                        {
+                            int dx = *(int*)(pBuf + offset + 12);
+                            int dy = *(int*)(pBuf + offset + 16);
+
+                            if (dx != 0 || dy != 0)
+                            {
+                                remote.RemoteCursorX = Math.Clamp(remote.RemoteCursorX + dx, 0, remote.ScreenWidth);
+                                remote.RemoteCursorY = Math.Clamp(remote.RemoteCursorY + dy, 0, remote.ScreenHeight);
+
+                                _network.SendMouseMove(
+                                    remote,
+                                    (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
+                                    (short)Math.Clamp(dy, short.MinValue, short.MaxValue));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     public void StartHooks()
@@ -159,23 +260,21 @@ public sealed class Win32InputEngine : IDisposable
         _anchorY = primary.VirtualY + primary.Height / 2;
         _lastRemoteAnchorX = _anchorX;
         _lastRemoteAnchorY = _anchorY;
-        _isResettingCursorToAnchor = true;
-        _resetAnchorTimeout = Environment.TickCount64 + 100;
         SetCursorPos(_anchorX, _anchorY);
 
-        // Estimate remote cursor coordinates on entry
+        // Estimate remote cursor coordinates on entry (with comfortable 35px margin away from frame border)
         peer.RemoteCursorX = targetEntranceEdge switch
         {
-            ScreenEdge.Left => 15,
-            ScreenEdge.Right => Math.Max(0, peer.ScreenWidth - 15),
+            ScreenEdge.Left => 35,
+            ScreenEdge.Right => Math.Max(0, peer.ScreenWidth - 35),
             ScreenEdge.Top => (int)(peer.ScreenWidth * Math.Clamp(normalizedPosition, 0.05f, 0.95f)),
             ScreenEdge.Bottom => (int)(peer.ScreenWidth * Math.Clamp(normalizedPosition, 0.05f, 0.95f)),
             _ => peer.ScreenWidth / 2
         };
         peer.RemoteCursorY = targetEntranceEdge switch
         {
-            ScreenEdge.Top => 15,
-            ScreenEdge.Bottom => Math.Max(0, peer.ScreenHeight - 15),
+            ScreenEdge.Top => 35,
+            ScreenEdge.Bottom => Math.Max(0, peer.ScreenHeight - 35),
             ScreenEdge.Left => (int)(peer.ScreenHeight * Math.Clamp(normalizedPosition, 0.05f, 0.95f)),
             ScreenEdge.Right => (int)(peer.ScreenHeight * Math.Clamp(normalizedPosition, 0.05f, 0.95f)),
             _ => peer.ScreenHeight / 2
@@ -195,7 +294,6 @@ public sealed class Win32InputEngine : IDisposable
             return;
 
         ActiveRemotePeer = null;
-        _isResettingCursorToAnchor = false;
         _lastReturnToLocalTime = DateTimeOffset.UtcNow;
 
         // Release any held modifiers to ensure Windows host doesn't retain stuck keys
@@ -228,14 +326,34 @@ public sealed class Win32InputEngine : IDisposable
         effectiveNorm = Math.Clamp(effectiveNorm, 0.02f, 0.98f);
 
         var (entryX, entryY) = _topology.ComputeLocalEntryPoint(effectiveEdge, effectiveNorm, returningPeer);
-        _lastCursorX = entryX;
-        _lastCursorY = entryY;
-        _suppressedEntryX = entryX;
-        _suppressedEntryY = entryY;
-        _suppressAnchorJitterUntil = DateTimeOffset.UtcNow.AddMilliseconds(200);
+
+        // Safe return margin: Place cursor 30 pixels INSIDE the Windows screen so it doesn't immediately bounce back
+        int safeEntryX = entryX;
+        int safeEntryY = entryY;
+        switch (effectiveEdge)
+        {
+            case ScreenEdge.Left:
+                safeEntryX = entryX + 30;
+                break;
+            case ScreenEdge.Right:
+                safeEntryX = entryX - 30;
+                break;
+            case ScreenEdge.Top:
+                safeEntryY = entryY + 30;
+                break;
+            case ScreenEdge.Bottom:
+                safeEntryY = entryY - 30;
+                break;
+        }
+
+        _lastCursorX = safeEntryX;
+        _lastCursorY = safeEntryY;
+        _suppressedEntryX = safeEntryX;
+        _suppressedEntryY = safeEntryY;
+        _suppressAnchorJitterUntil = DateTimeOffset.UtcNow.AddMilliseconds(400);
         _lastInjectedCursorTime = Environment.TickCount64;
 
-        SetCursorPos(entryX, entryY);
+        SetCursorPos(safeEntryX, safeEntryY);
 
         ActiveTargetChanged?.Invoke(null, effectiveEdge, effectiveNorm);
     }
@@ -510,7 +628,7 @@ public sealed class Win32InputEngine : IDisposable
 
                         var transition = _topology.EvaluateCursorStep(clampedX, clampedY, dx, dy);
                         if (transition.ShouldTransition && transition.TargetPeer != null &&
-                            (DateTimeOffset.UtcNow - _lastReturnToLocalTime > TimeSpan.FromMilliseconds(120)))
+                            (DateTimeOffset.UtcNow - _lastReturnToLocalTime > TimeSpan.FromMilliseconds(400)))
                         {
                             SwitchControlToPeer(
                                 transition.TargetPeer,
@@ -528,46 +646,33 @@ public sealed class Win32InputEngine : IDisposable
                     {
                         case WM_MOUSEMOVE:
                         {
-                            // Check if this WM_MOUSEMOVE was caused by our SetCursorPos reset to (_anchorX, _anchorY)
-                            if (_isResettingCursorToAnchor)
+                            // Keep local Windows cursor anchored at screen center (_anchorX, _anchorY)
+                            SetCursorPos(_anchorX, _anchorY);
+
+                            if (!_rawInputActive)
                             {
-                                if (Math.Abs(info.pt.X - _anchorX) <= 2 && Math.Abs(info.pt.Y - _anchorY) <= 2)
+                                // Fallback when RawInput is not available (e.g. headless tests)
+                                if (info.pt.X == _anchorX && info.pt.Y == _anchorY)
                                 {
-                                    _isResettingCursorToAnchor = false;
-                                    _lastRemoteAnchorX = info.pt.X;
-                                    _lastRemoteAnchorY = info.pt.Y;
+                                    _lastRemoteAnchorX = _anchorX;
+                                    _lastRemoteAnchorY = _anchorY;
                                     return (IntPtr)1;
                                 }
 
-                                if (Environment.TickCount64 > _resetAnchorTimeout)
+                                int dx = info.pt.X - _anchorX;
+                                int dy = info.pt.Y - _anchorY;
+                                if (dx != 0 || dy != 0)
                                 {
-                                    _isResettingCursorToAnchor = false;
+                                    remote.RemoteCursorX = Math.Clamp(remote.RemoteCursorX + dx, 0, remote.ScreenWidth);
+                                    remote.RemoteCursorY = Math.Clamp(remote.RemoteCursorY + dy, 0, remote.ScreenHeight);
+
+                                    _network.SendMouseMove(
+                                        remote,
+                                        (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
+                                        (short)Math.Clamp(dy, short.MinValue, short.MaxValue));
                                 }
                             }
 
-                            int dx = info.pt.X - _lastRemoteAnchorX;
-                            int dy = info.pt.Y - _lastRemoteAnchorY;
-                            if (dx != 0 || dy != 0)
-                            {
-                                _lastRemoteAnchorX = info.pt.X;
-                                _lastRemoteAnchorY = info.pt.Y;
-
-                                remote.RemoteCursorX = Math.Clamp(remote.RemoteCursorX + dx, 0, remote.ScreenWidth);
-                                remote.RemoteCursorY = Math.Clamp(remote.RemoteCursorY + dy, 0, remote.ScreenHeight);
-
-                                _network.SendMouseMove(
-                                    remote,
-                                    (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
-                                    (short)Math.Clamp(dy, short.MinValue, short.MaxValue));
-
-                                // Re-center anchor smoothly when cursor drifts (>60px) to prevent hitting screen boundaries
-                                if (Math.Abs(info.pt.X - _anchorX) > 60 || Math.Abs(info.pt.Y - _anchorY) > 60)
-                                {
-                                    _isResettingCursorToAnchor = true;
-                                    _resetAnchorTimeout = Environment.TickCount64 + 100;
-                                    SetCursorPos(_anchorX, _anchorY);
-                                }
-                            }
                             // Suppress local cursor movement so it remains anchored at (_anchorX, _anchorY)
                             return (IntPtr)1;
                         }
@@ -761,6 +866,18 @@ public sealed class Win32InputEngine : IDisposable
     public void Dispose()
     {
         StopHooks();
+        if (_attachedHwnd != IntPtr.Zero && _hwndSourceHook != null)
+        {
+            try
+            {
+                var source = HwndSource.FromHwnd(_attachedHwnd);
+                source?.RemoveHook(_hwndSourceHook);
+            }
+            catch { }
+            _hwndSourceHook = null;
+            _attachedHwnd = IntPtr.Zero;
+        }
+
         _network.RemoteEdgeHandOffReceived -= OnRemoteEdgeHandOffReceived;
         _network.RemoteMouseMoveReceived -= OnRemoteMouseMoveReceived;
         _network.RemoteMouseButtonReceived -= OnRemoteMouseButtonReceived;
@@ -772,6 +889,39 @@ public sealed class Win32InputEngine : IDisposable
     // =========================================================================
     // Win32 Native Interop
     // =========================================================================
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RAWINPUTDEVICE
+    {
+        public ushort usUsagePage;
+        public ushort usUsage;
+        public uint dwFlags;
+        public IntPtr hwndTarget;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RAWINPUTHEADER
+    {
+        public uint dwType;
+        public uint dwSize;
+        public IntPtr hDevice;
+        public IntPtr wParam;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RegisterRawInputDevices(
+        [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] RAWINPUTDEVICE[] pRawInputDevices,
+        uint uiNumDevices,
+        uint cbSize);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetRawInputData(
+        IntPtr hRawInput,
+        uint uiCommand,
+        IntPtr pData,
+        ref uint pcbSize,
+        uint cbSizeHeader);
 
     private delegate IntPtr LowLevelProc(int nCode, IntPtr wParam, IntPtr lParam);
 

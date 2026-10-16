@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using ConnectMe.Core.Network;
@@ -86,6 +87,8 @@ public partial class MainWindow : Window
         _network.Start();
         WindowsFirewallHelper.EnsureFirewallRules();
         _inputEngine.StartHooks();
+        var mainWindowHwnd = new WindowInteropHelper(this).Handle;
+        _inputEngine.AttachToWindow(mainWindowHwnd);
         _clipboardService.AttachToWindow(this);
 
         // Discover and announce local audio sinks across mesh

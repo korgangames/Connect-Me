@@ -217,6 +217,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             }
 
             IPEndPoint remoteEp = new IPEndPoint(parsedIp, _targetPort);
+            timeBeginPeriod(1);
 
             while (_isRunning && !_disposed)
             {
@@ -314,6 +315,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             if (pFormat != IntPtr.Zero) Marshal.FreeCoTaskMem(pFormat);
             if (pAudioClient != IntPtr.Zero) Marshal.Release(pAudioClient);
             if (pDevice != IntPtr.Zero) Marshal.Release(pDevice);
+            try { timeEndPeriod(1); } catch { }
         }
     }
 
@@ -507,4 +509,10 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
         int QueryHardwareSupport(out uint pdwHardwareSupportMask);
         int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
     }
+
+    [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    private static extern uint timeBeginPeriod(uint uMilliseconds);
+
+    [DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+    private static extern uint timeEndPeriod(uint uMilliseconds);
 }

@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.Choreographer
@@ -103,6 +104,8 @@ class CursorAccessibilityService : AccessibilityService() {
     private var downY = 0f
     private var downTimestamp = 0L
     private var returnEdgePushAccum = 0f
+    @Volatile
+    private var lastEdgeHandOffEnterTime = 0L
 
     private var clipboardManager: ClipboardManager? = null
     private var clipboardListener: ClipboardManager.OnPrimaryClipChangedListener? = null
@@ -275,29 +278,31 @@ class CursorAccessibilityService : AccessibilityService() {
      */
     fun onEdgeHandOffEnter(entranceEdge: Byte, normalizedPosition: Float) {
         refreshScreenMetrics()
+        lastEdgeHandOffEnterTime = SystemClock.uptimeMillis()
         activeEntranceEdge = if (entranceEdge != ProtocolConstants.EDGE_NONE) {
             entranceEdge
         } else {
             ProtocolConstants.EDGE_LEFT
         }
 
-        val t = normalizedPosition.coerceIn(0.03f, 0.97f)
+        val t = normalizedPosition.coerceIn(0.05f, 0.95f)
+        val entryMargin = 35f
         when (activeEntranceEdge) {
             ProtocolConstants.EDGE_LEFT -> {
-                cursorX = 10f
+                cursorX = entryMargin
                 cursorY = t * screenHeight
             }
             ProtocolConstants.EDGE_RIGHT -> {
-                cursorX = (screenWidth - 10).toFloat()
+                cursorX = (screenWidth - entryMargin).coerceAtLeast(0f)
                 cursorY = t * screenHeight
             }
             ProtocolConstants.EDGE_TOP -> {
                 cursorX = t * screenWidth
-                cursorY = 10f
+                cursorY = entryMargin
             }
             ProtocolConstants.EDGE_BOTTOM -> {
                 cursorX = t * screenWidth
-                cursorY = (screenHeight - 10).toFloat()
+                cursorY = (screenHeight - entryMargin).coerceAtLeast(0f)
             }
         }
 
@@ -330,6 +335,9 @@ class CursorAccessibilityService : AccessibilityService() {
         val nextX = cursorX + moveDx
         val nextY = cursorY + moveDy
 
+        // Grace period: ignore edge push for 450ms after entering Android to prevent ping-pong bounce
+        val isGracePeriod = (SystemClock.uptimeMillis() - lastEdgeHandOffEnterTime) < 450L
+
         // Detect if cursor is hitting the configured shared boundary facing the PC
         var pushingSharedEdge = false
         var outwardDelta = 0f
@@ -338,7 +346,7 @@ class CursorAccessibilityService : AccessibilityService() {
 
         when (activeEntranceEdge) {
             ProtocolConstants.EDGE_LEFT -> {
-                if (moveDx < 0 && (cursorX <= 6f || nextX < 0f)) {
+                if (!isGracePeriod && moveDx < 0 && (cursorX <= 1.5f || nextX < 0f)) {
                     pushingSharedEdge = true
                     outwardDelta = -moveDx
                     returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
@@ -346,7 +354,7 @@ class CursorAccessibilityService : AccessibilityService() {
                 }
             }
             ProtocolConstants.EDGE_RIGHT -> {
-                if (moveDx > 0 && (cursorX >= (screenWidth - 6f) || nextX > screenWidth)) {
+                if (!isGracePeriod && moveDx > 0 && (cursorX >= (screenWidth - 1.5f) || nextX > screenWidth)) {
                     pushingSharedEdge = true
                     outwardDelta = moveDx
                     returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
@@ -354,7 +362,7 @@ class CursorAccessibilityService : AccessibilityService() {
                 }
             }
             ProtocolConstants.EDGE_TOP -> {
-                if (moveDy < 0 && (cursorY <= 6f || nextY < 0f)) {
+                if (!isGracePeriod && moveDy < 0 && (cursorY <= 1.5f || nextY < 0f)) {
                     pushingSharedEdge = true
                     outwardDelta = -moveDy
                     returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
@@ -362,7 +370,7 @@ class CursorAccessibilityService : AccessibilityService() {
                 }
             }
             ProtocolConstants.EDGE_BOTTOM -> {
-                if (moveDy > 0 && (cursorY >= (screenHeight - 6f) || nextY > screenHeight)) {
+                if (!isGracePeriod && moveDy > 0 && (cursorY >= (screenHeight - 1.5f) || nextY > screenHeight)) {
                     pushingSharedEdge = true
                     outwardDelta = moveDy
                     returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
@@ -374,7 +382,7 @@ class CursorAccessibilityService : AccessibilityService() {
         // ONLY allow return if pushing against the configured shared edge facing the PC!
         // Touching or pushing against any other frame edge keeps the cursor on Android.
         if (pushingSharedEdge && outwardDelta > 0f && !isLeftButtonDown) {
-            val requiredResistance = 25f
+            val requiredResistance = 60f
             returnEdgePushAccum += outwardDelta
             if (returnEdgePushAccum >= requiredResistance) {
                 returnEdgePushAccum = 0f
@@ -385,7 +393,7 @@ class CursorAccessibilityService : AccessibilityService() {
                 ConnectMeService.instance?.sendEdgeHandOffBackToPeer(oppositeWindowsEdge, returnNormPos)
                 return
             }
-        } else if (!pushingSharedEdge || (cursorX > 25f && cursorX < (screenWidth - 25f) && cursorY > 25f && cursorY < (screenHeight - 25f))) {
+        } else if (!pushingSharedEdge || (cursorX > 40f && cursorX < (screenWidth - 40f) && cursorY > 40f && cursorY < (screenHeight - 40f))) {
             returnEdgePushAccum = 0f
         }
 
