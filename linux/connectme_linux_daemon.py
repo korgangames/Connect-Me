@@ -221,6 +221,19 @@ class LinuxMultiMonitorTopology:
             return dx * dx + dy * dy
         return min(self.monitors, key=dist_sq)
 
+    def get_outermost_monitor_for_edge(self, edge: int) -> Optional[PhysicalMonitor]:
+        if not self.monitors:
+            return None
+        if edge == EDGE_LEFT:
+            return min(self.monitors, key=lambda m: m.virtualX)
+        elif edge == EDGE_RIGHT:
+            return max(self.monitors, key=lambda m: m.right)
+        elif edge == EDGE_TOP:
+            return min(self.monitors, key=lambda m: m.virtualY)
+        elif edge == EDGE_BOTTOM:
+            return max(self.monitors, key=lambda m: m.bottom)
+        return self.monitors[0]
+
     @staticmethod
     def _run_cmd(cmd: List[str]) -> Optional[str]:
         if not shutil.which(cmd[0]):
@@ -1105,6 +1118,13 @@ class LinuxHardwareInputGrabber:
         self._edge_cooldown_until = 0.0
         self._supervisor_thread: Optional[threading.Thread] = None
 
+        # Hardware modifier states for remote typing
+        self._shift_down = False
+        self._ctrl_down = False
+        self._alt_down = False
+        self._meta_down = False
+        self._caps_lock = False
+
         self._init_initial_coordinates()
 
     def _init_initial_coordinates(self) -> None:
@@ -1129,24 +1149,45 @@ class LinuxHardwareInputGrabber:
             self.cur_x = int(x)
             self.cur_y = int(y)
 
-    def sync_cursor_at_edge(self, edge: int, norm_pos: float = 0.5) -> None:
+    def sync_cursor_at_edge(self, edge: int, norm_pos: float = 0.5, peer: Optional[dict] = None) -> None:
         """Sets cursor coordinates just inside the returned edge upon handoff back to Linux."""
-        min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
-        norm = max(0.02, min(0.98, float(norm_pos)))
+        target_mon = None
+        if peer and peer.get("attachedMonitorId"):
+            mon_id = peer.get("attachedMonitorId")
+            for m in self.node.topology.monitors:
+                if m.monitorId == mon_id:
+                    target_mon = m
+                    break
+        if not target_mon:
+            target_mon = self.node.topology.get_outermost_monitor_for_edge(edge)
+        if not target_mon and self.node.topology.monitors:
+            target_mon = self.node.topology.monitors[0]
+
+        seg_start = float(peer.get("edgeOffsetStart", 0.0)) if peer else 0.0
+        seg_end = float(peer.get("edgeOffsetEnd", 1.0)) if peer else 1.0
+        mapped_norm = seg_start + max(0.0, min(1.0, float(norm_pos))) * (seg_end - seg_start)
+        norm = max(0.02, min(0.98, mapped_norm))
+
+        inset = 35
         with self._coord_lock:
-            if edge == EDGE_RIGHT:
-                self.cur_x = min_x + vw - 40
-                self.cur_y = min_y + int(vh * norm)
-            elif edge == EDGE_LEFT:
-                self.cur_x = min_x + 40
-                self.cur_y = min_y + int(vh * norm)
-            elif edge == EDGE_TOP:
-                self.cur_x = min_x + int(vw * norm)
-                self.cur_y = min_y + 40
-            elif edge == EDGE_BOTTOM:
-                self.cur_x = min_x + int(vw * norm)
-                self.cur_y = min_y + vh - 40
+            if target_mon:
+                if edge == EDGE_RIGHT:
+                    self.cur_x = target_mon.virtualX + target_mon.width - inset
+                    self.cur_y = target_mon.virtualY + int(target_mon.height * norm)
+                elif edge == EDGE_LEFT:
+                    self.cur_x = target_mon.virtualX + inset
+                    self.cur_y = target_mon.virtualY + int(target_mon.height * norm)
+                elif edge == EDGE_TOP:
+                    self.cur_x = target_mon.virtualX + int(target_mon.width * norm)
+                    self.cur_y = target_mon.virtualY + inset
+                elif edge == EDGE_BOTTOM:
+                    self.cur_x = target_mon.virtualX + int(target_mon.width * norm)
+                    self.cur_y = target_mon.virtualY + target_mon.height - inset
+                else:
+                    self.cur_x = target_mon.virtualX + target_mon.width // 2
+                    self.cur_y = target_mon.virtualY + target_mon.height // 2
             else:
+                min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
                 self.cur_x = min_x + vw // 2
                 self.cur_y = min_y + vh // 2
         self._edge_cooldown_until = time.time() + 1.2
@@ -1242,6 +1283,112 @@ class LinuxHardwareInputGrabber:
             self._threads.append(t)
             t.start()
 
+    def _evdev_to_key_and_char(self, code: int) -> Tuple[Optional[int], int]:
+        try:
+            from evdev import ecodes
+        except ImportError:
+            return None, 0
+
+        # Letters A-Z
+        if ecodes.KEY_A <= code <= ecodes.KEY_Z:
+            offset = code - ecodes.KEY_A
+            vk = 0x41 + offset
+            is_upper = self._shift_down ^ self._caps_lock
+            ch = ord(chr(ord('A') + offset) if is_upper else chr(ord('a') + offset))
+            return vk, ch
+
+        # Top row numbers 0-9
+        if ecodes.KEY_1 <= code <= ecodes.KEY_9:
+            digit = (code - ecodes.KEY_1) + 1
+            vk = 0x30 + digit
+            shift_chars = ")!@#$%^&*("
+            ch = ord(shift_chars[digit]) if self._shift_down else ord(str(digit))
+            return vk, ch
+        if code == ecodes.KEY_0:
+            vk = 0x30
+            ch = ord(')') if self._shift_down else ord('0')
+            return vk, ch
+
+        # Keypad 0-9
+        kp_map = {
+            ecodes.KEY_KP0: (0x60, ord('0')),
+            ecodes.KEY_KP1: (0x61, ord('1')),
+            ecodes.KEY_KP2: (0x62, ord('2')),
+            ecodes.KEY_KP3: (0x63, ord('3')),
+            ecodes.KEY_KP4: (0x64, ord('4')),
+            ecodes.KEY_KP5: (0x65, ord('5')),
+            ecodes.KEY_KP6: (0x66, ord('6')),
+            ecodes.KEY_KP7: (0x67, ord('7')),
+            ecodes.KEY_KP8: (0x68, ord('8')),
+            ecodes.KEY_KP9: (0x69, ord('9')),
+            ecodes.KEY_KPDOT: (0x6E, ord('.')),
+            ecodes.KEY_KPENTER: (0x0D, 13),
+            ecodes.KEY_KPPLUS: (0x6B, ord('+')),
+            ecodes.KEY_KPMINUS: (0x6D, ord('-')),
+            ecodes.KEY_KPASTERISK: (0x6A, ord('*')),
+            ecodes.KEY_KPSLASH: (0x6F, ord('/')),
+        }
+        if code in kp_map:
+            return kp_map[code]
+
+        # Punctuation & Symbols (with Shift awareness)
+        punct_map = {
+            ecodes.KEY_SPACE: (0x20, 32, 32),
+            ecodes.KEY_MINUS: (0xBD, ord('-'), ord('_')),
+            ecodes.KEY_EQUAL: (0xBB, ord('='), ord('+')),
+            ecodes.KEY_LEFTBRACE: (0xDB, ord('['), ord('{')),
+            ecodes.KEY_RIGHTBRACE: (0xDD, ord(']'), ord('}')),
+            ecodes.KEY_BACKSLASH: (0xDC, ord('\\'), ord('|')),
+            ecodes.KEY_SEMICOLON: (0xBA, ord(';'), ord(':')),
+            ecodes.KEY_APOSTROPHE: (0xDE, ord("'"), ord('"')),
+            ecodes.KEY_GRAVE: (0xC0, ord('`'), ord('~')),
+            ecodes.KEY_COMMA: (0xBC, ord(','), ord('<')),
+            ecodes.KEY_DOT: (0xBE, ord('.'), ord('>')),
+            ecodes.KEY_SLASH: (0xBF, ord('/'), ord('?')),
+        }
+        if code in punct_map:
+            vk, unshift_c, shift_c = punct_map[code]
+            return vk, shift_c if self._shift_down else unshift_c
+
+        # Control & Navigation Keys
+        ctrl_map = {
+            ecodes.KEY_BACKSPACE: (0x08, 0),
+            ecodes.KEY_TAB: (0x09, 9),
+            ecodes.KEY_ENTER: (0x0D, 13),
+            ecodes.KEY_ESC: (0x1B, 0),
+            ecodes.KEY_PAGEUP: (0x21, 0),
+            ecodes.KEY_PAGEDOWN: (0x22, 0),
+            ecodes.KEY_END: (0x23, 0),
+            ecodes.KEY_HOME: (0x24, 0),
+            ecodes.KEY_LEFT: (0x25, 0),
+            ecodes.KEY_UP: (0x26, 0),
+            ecodes.KEY_RIGHT: (0x27, 0),
+            ecodes.KEY_DOWN: (0x28, 0),
+            ecodes.KEY_INSERT: (0x2D, 0),
+            ecodes.KEY_DELETE: (0x2E, 0),
+            ecodes.KEY_LEFTMETA: (0x5B, 0),
+            ecodes.KEY_RIGHTMETA: (0x5C, 0),
+            ecodes.KEY_LEFTSHIFT: (0xA0, 0),
+            ecodes.KEY_RIGHTSHIFT: (0xA1, 0),
+            ecodes.KEY_LEFTCTRL: (0xA2, 0),
+            ecodes.KEY_RIGHTCTRL: (0xA3, 0),
+            ecodes.KEY_LEFTALT: (0xA4, 0),
+            ecodes.KEY_RIGHTALT: (0xA5, 0),
+            ecodes.KEY_CAPSLOCK: (0x14, 0),
+            ecodes.KEY_SCROLLLOCK: (0x91, 0),
+        }
+        if code in ctrl_map:
+            return ctrl_map[code]
+
+        # Function Keys F1-F12
+        for i in range(1, 13):
+            if getattr(ecodes, f"KEY_F{i}", None) == code:
+                return 0x6F + i, 0
+
+        # Fallback to injector's mapping
+        vk = self.node.injector._evdev_code_to_vk(code)
+        return vk, 0
+
     def _device_read_loop(self, dev: Any, is_pointer: bool) -> None:
         try:
             import evdev
@@ -1290,9 +1437,31 @@ class LinuxHardwareInputGrabber:
                                 self.node.send_mouse_button(self.active_peer, BUTTON_MIDDLE, event.value == 1)
                         else:
                             # Keyboard key
-                            vk = self.node.injector._evdev_code_to_vk(event.code)
+                            is_down = event.value in (1, 2)
+                            if event.code in (ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT):
+                                self._shift_down = is_down
+                            elif event.code in (ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL):
+                                self._ctrl_down = is_down
+                            elif event.code in (ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT):
+                                self._alt_down = is_down
+                            elif event.code in (ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA):
+                                self._meta_down = is_down
+                            elif event.code == ecodes.KEY_CAPSLOCK and event.value == 1:
+                                self._caps_lock = not self._caps_lock
+
+                            mods = 0
+                            if self._shift_down:
+                                mods |= 1
+                            if self._ctrl_down:
+                                mods |= 2
+                            if self._alt_down:
+                                mods |= 4
+                            if self._meta_down:
+                                mods |= 8
+
+                            vk, char_code = self._evdev_to_key_and_char(event.code)
                             if vk and self.active_peer:
-                                self.node.send_key_event(self.active_peer, vk, event.code, event.value in (1, 2), 0, 0)
+                                self.node.send_key_event(self.active_peer, vk, event.code, is_down, mods, char_code)
 
                     elif event.type == ecodes.EV_SYN:
                         if (acc_dx != 0 or acc_dy != 0) and self.active_peer:
@@ -1384,7 +1553,7 @@ class LinuxHardwareInputGrabber:
         else:
             norm_pos = max(0.02, min(0.98, rel_x / float(max(1, mon.width))))
 
-        target_peer = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos)
+        target_peer = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon.monitorId)
         if not target_peer:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
@@ -1611,18 +1780,46 @@ class ConnectMeLinuxNode:
         except Exception:
             pass
 
+    def get_local_ip(self) -> str:
+        """Determines active local IPv4 address on LAN."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            lip = s.getsockname()[0]
+            s.close()
+            return lip
+        except Exception:
+            return "127.0.0.1"
+
     def get_peer_arrangement(self, device_id: str) -> dict:
         return self.peer_arrangements.get(device_id, {
             "assignedEdge": EDGE_RIGHT,
             "edgeOffset": 0.5,
+            "edgeOffsetStart": 0.0,
+            "edgeOffsetEnd": 1.0,
+            "attachedMonitorId": None,
             "canvasX": None,
             "canvasY": None
         })
 
-    def set_peer_arrangement(self, device_id: str, edge: int, edge_offset: float = 0.5, canvas_x: Optional[float] = None, canvas_y: Optional[float] = None) -> None:
+    def set_peer_arrangement(
+        self,
+        device_id: str,
+        edge: int,
+        edge_offset: float = 0.5,
+        canvas_x: Optional[float] = None,
+        canvas_y: Optional[float] = None,
+        edge_offset_start: float = 0.0,
+        edge_offset_end: float = 1.0,
+        attached_monitor_id: Optional[str] = None
+    ) -> None:
         rec = self.peer_arrangements.setdefault(device_id, {})
         rec["assignedEdge"] = edge
         rec["edgeOffset"] = edge_offset
+        rec["edgeOffsetStart"] = edge_offset_start
+        rec["edgeOffsetEnd"] = edge_offset_end
+        if attached_monitor_id is not None:
+            rec["attachedMonitorId"] = attached_monitor_id
         if canvas_x is not None:
             rec["canvasX"] = canvas_x
         if canvas_y is not None:
@@ -1631,16 +1828,40 @@ class ConnectMeLinuxNode:
         if device_id in self.peers:
             self.peers[device_id]["assignedEdge"] = edge
             self.peers[device_id]["edgeOffset"] = edge_offset
+            self.peers[device_id]["edgeOffsetStart"] = edge_offset_start
+            self.peers[device_id]["edgeOffsetEnd"] = edge_offset_end
+            if attached_monitor_id is not None:
+                self.peers[device_id]["attachedMonitorId"] = attached_monitor_id
             if canvas_x is not None:
                 self.peers[device_id]["canvasX"] = canvas_x
                 self.peers[device_id]["canvasY"] = canvas_y
         edge_name = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}.get(edge, "Kenar")
-        self.log(f"[Ekran Düzeni] '{device_id}' {edge_name} kenara yerleştirildi.")
+        self.log(f"[Ekran Düzeni] '{device_id}' {edge_name} kenara yerleştirildi (%{int(edge_offset_start*100)} - %{int(edge_offset_end*100)}).")
         if self.on_peer_updated and device_id in self.peers:
             try:
                 self.on_peer_updated(self.peers[device_id])
             except Exception:
                 pass
+
+    def send_edge_config_to_peer(self, peer: dict) -> None:
+        """Sends TCP EDGE_CONFIG to remote device to inform its return entrance edge."""
+        if not peer.get("isMutuallyPaired"):
+            return
+        assigned_edge = peer.get("assignedEdge", EDGE_RIGHT)
+        opposite_edge = {
+            EDGE_LEFT: EDGE_RIGHT,
+            EDGE_RIGHT: EDGE_LEFT,
+            EDGE_TOP: EDGE_BOTTOM,
+            EDGE_BOTTOM: EDGE_TOP
+        }.get(assigned_edge, EDGE_LEFT)
+        hdr = {
+            "type": "EDGE_CONFIG",
+            "senderId": self.device_id,
+            "senderName": self.device_name,
+            "senderPlatform": self.platform,
+            "returnEdge": opposite_edge
+        }
+        self.send_tcp_control_to_peer(peer, hdr)
 
     def reset_peer_arrangements(self) -> None:
         """Clears all custom canvas coordinates, deletes topology cache file, and resets peers to default edge."""
@@ -1655,24 +1876,36 @@ class ConnectMeLinuxNode:
             peer["canvasY"] = None
             peer["assignedEdge"] = EDGE_RIGHT
             peer["edgeOffset"] = 0.5
+            peer["edgeOffsetStart"] = 0.0
+            peer["edgeOffsetEnd"] = 1.0
+            peer["attachedMonitorId"] = None
         self.log("[Ekran Düzeni] 📐 Ekran yerleşim düzeni varsayılana sıfırlandı.")
 
-    def resolve_peer_for_edge_and_norm(self, edge: int, norm_pos: float = 0.5) -> Optional[dict]:
-        """Resolves the target peer for a screen edge based on normalized cursor position and 2D arrangement."""
+    def resolve_peer_for_edge_and_norm(self, edge: int, norm_pos: float = 0.5, monitor_id: Optional[str] = None) -> Optional[dict]:
+        """Resolves target peer for screen edge based on normalized cursor position and 2D arrangement."""
         candidates = [p for p in self.peers.values() if p.get("isMutuallyPaired") and p.get("assignedEdge", EDGE_RIGHT) == edge]
         if not candidates:
             return None
+
+        # Filter by attached physical monitor if specified
+        if monitor_id:
+            on_this_mon = [p for p in candidates if not p.get("attachedMonitorId") or p.get("attachedMonitorId") in (monitor_id, "ALL")]
+            if on_this_mon:
+                candidates = on_this_mon
+
+        # Check for segment match [edgeOffsetStart .. edgeOffsetEnd]
+        exact_matches = [
+            p for p in candidates
+            if (p.get("edgeOffsetStart", 0.0) - 0.02 <= norm_pos <= p.get("edgeOffsetEnd", 1.0) + 0.02)
+        ]
+        if exact_matches:
+            return exact_matches[0]
+
         if len(candidates) == 1:
             return candidates[0]
 
-        if edge in (EDGE_LEFT, EDGE_RIGHT):
-            candidates.sort(key=lambda p: (p.get("canvasY") if p.get("canvasY") is not None else 0))
-        else:
-            candidates.sort(key=lambda p: (p.get("canvasX") if p.get("canvasX") is not None else 0))
-
-        n = len(candidates)
-        idx = max(0, min(n - 1, int(norm_pos * n)))
-        return candidates[idx]
+        candidates.sort(key=lambda p: abs(norm_pos - (p.get("edgeOffsetStart", 0.0) + p.get("edgeOffsetEnd", 1.0)) / 2.0))
+        return candidates[0]
 
     def switch_control_to_peer(self, peer: dict, local_exit_edge: int = EDGE_NONE, norm_pos: float = 0.5) -> bool:
         """Switches mouse/keyboard control from Linux host to remote peer (Android or Windows)."""
@@ -1696,11 +1929,17 @@ class ConnectMeLinuxNode:
         self.controlling_remote_peer = peer
         self.controlling_exit_edge = local_exit_edge
 
+        # Map local normalized position to peer's relative offset segment
+        seg_start = float(peer.get("edgeOffsetStart", 0.0))
+        seg_end = float(peer.get("edgeOffsetEnd", 1.0))
+        span = max(0.05, seg_end - seg_start)
+        peer_rel_pos = max(0.0, min(1.0, (norm_pos - seg_start) / span))
+
         # Activate kernel-level hardware input grabber if supported
         self.hardware_grabber.activate(peer, local_exit_edge, norm_pos)
 
         # Send Fast UDP EDGE_HANDOFF packet
-        self.send_edge_handoff(peer, target_entrance_edge, norm_pos)
+        self.send_edge_handoff(peer, target_entrance_edge, peer_rel_pos)
 
         peer_name = peer.get("deviceName", remote_ip)
         self.log(f"[Host Modu] 🚀 Fare ve klavye kontrolü '{peer_name}' cihazına aktarıldı (Çıkış: {local_exit_edge}, Giriş: {target_entrance_edge}).")
@@ -1717,11 +1956,11 @@ class ConnectMeLinuxNode:
         if hasattr(self, "hardware_grabber") and self.hardware_grabber.is_active:
             self.hardware_grabber.deactivate(notify_peer=False)
 
+        peer = self.controlling_remote_peer
         if hasattr(self, "hardware_grabber"):
             eff_edge = return_edge if return_edge != EDGE_NONE else getattr(self, "controlling_exit_edge", EDGE_RIGHT)
-            self.hardware_grabber.sync_cursor_at_edge(eff_edge, norm_pos)
+            self.hardware_grabber.sync_cursor_at_edge(eff_edge, norm_pos, peer)
 
-        peer = self.controlling_remote_peer
         if not peer:
             return
         self.controlling_remote_peer = None
@@ -3199,12 +3438,13 @@ class ConnectMeLinuxNode:
 
     def _apply_audio_route(self, route: Optional[Dict[str, Any]]) -> None:
         """Applies an audio route locally: either becomes a transmitter, receiver, or idles."""
+        my_ip = self.get_local_ip()
         if not route or route.get("targetDeviceId") in ("NONE", None, ""):
             if self.audio_streaming:
                 self.stop_audio_streaming()
             self.audio_rx_target_sink = None
             self.log("[Ses Matrisi] ⚪ Ses yönlendirme devre dışı. Her cihaz kendi yerel sesini çalıyor.")
-        elif route.get("targetDeviceId") == self.device_id:
+        elif route.get("targetDeviceId") == self.device_id or (route.get("targetIp") and route.get("targetIp") == my_ip):
             # This Linux PC is the selected audio sink
             if self.audio_streaming:
                 self.stop_audio_streaming()
@@ -3214,7 +3454,17 @@ class ConnectMeLinuxNode:
         else:
             # Remote machine is the selected audio sink
             target_ip = route.get("targetIp")
-            if target_ip:
+            target_dev_id = route.get("targetDeviceId")
+            if not target_ip or target_ip in ("127.0.0.1", "0.0.0.0", my_ip):
+                peer = self.peers.get(target_dev_id)
+                if not peer:
+                    for p in self.peers.values():
+                        if p.get("deviceId") == target_dev_id:
+                            peer = p
+                            break
+                if peer:
+                    target_ip = peer.get("ipAddress")
+            if target_ip and target_ip != my_ip:
                 self.audio_rx_target_sink = None
                 self.start_audio_streaming(target_ip)
                 self.log(f"[Ses Matrisi] 📡 Ses Akışı Başlatıldı -> {route.get('targetDeviceName')} ({target_ip}:{AUDIO_STREAM_UDP_PORT})")
@@ -3248,22 +3498,26 @@ class ConnectMeLinuxNode:
             self.stop_audio_streaming()
 
         rec_cmd = None
-        # Prioritize parec with @DEFAULT_MONITOR@ (universal PipeWire/PulseAudio desktop audio monitor)
+        def_sink = ""
+        if shutil.which("pactl"):
+            try:
+                res = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True, timeout=1.0)
+                if res.returncode == 0:
+                    def_sink = res.stdout.strip()
+            except Exception:
+                pass
+
+        monitor_device = f"{def_sink}.monitor" if def_sink else "@DEFAULT_MONITOR@"
+
         if shutil.which("parec"):
-            rec_cmd = ["parec", "-d", "@DEFAULT_MONITOR@", "--format=s16le", "--rate=48000", "--channels=2"]
+            rec_cmd = ["parec", "-d", monitor_device, "--format=s16le", "--rate=48000", "--channels=2"]
         elif shutil.which("pw-record"):
-            def_sink = ""
-            if shutil.which("pactl"):
-                try:
-                    res = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True, timeout=1.0)
-                    if res.returncode == 0:
-                        def_sink = res.stdout.strip()
-                except Exception:
-                    pass
             if def_sink:
-                rec_cmd = ["pw-record", f"--target={def_sink}.monitor", "--format=s16", "--rate=48000", "--channels=2", "-"]
+                rec_cmd = ["pw-record", "--raw", f"--target={def_sink}.monitor", "--format=s16", "--rate=48000", "--channels=2", "-"]
             else:
-                rec_cmd = ["pw-record", "--format=s16", "--rate=48000", "--channels=2", "-"]
+                rec_cmd = ["pw-record", "--raw", "--format=s16", "--rate=48000", "--channels=2", "-"]
+        elif shutil.which("ffmpeg"):
+            rec_cmd = ["ffmpeg", "-loglevel", "quiet", "-f", "pulse", "-i", "default", "-f", "s16le", "-ar", "48000", "-ac", "2", "-"]
 
         if not rec_cmd:
             self.log("[Ses Hatası] ❌ pw-record veya parec bulunamadı (PipeWire/PulseAudio gereklidir).")
@@ -3287,7 +3541,7 @@ class ConnectMeLinuxNode:
                     )
                 elif shutil.which("pw-record"):
                     self.audio_proc = subprocess.Popen(
-                        ["pw-record", "--format=s16", "--rate=48000", "--channels=2", "-"],
+                        ["pw-record", "--raw", "--format=s16", "--rate=48000", "--channels=2", "-"],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
                         bufsize=3840,
@@ -3416,11 +3670,11 @@ class ConnectMeLinuxNode:
                             target_arg = ["-D", self.audio_rx_target_sink]
 
                     if shutil.which("pw-play"):
-                        play_cmd = ["pw-play"] + target_arg + ["--format=s16", f"--rate={sr}", f"--channels={ch}", "-"]
+                        play_cmd = ["pw-play", "--raw"] + target_arg + ["--format=s16", f"--rate={sr}", f"--channels={ch}", "-"]
                     elif shutil.which("paplay"):
-                        play_cmd = ["paplay"] + target_arg + ["--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}"]
+                        play_cmd = ["paplay"] + target_arg + ["--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]
                     elif shutil.which("aplay"):
-                        play_cmd = ["aplay"] + target_arg + ["-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q"]
+                        play_cmd = ["aplay"] + target_arg + ["-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q", "-"]
 
                     if play_cmd:
                         try:

@@ -209,7 +209,10 @@ class CursorAccessibilityService : AccessibilityService() {
                 WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
             }
 
-            val container = FrameLayout(this)
+            val container = FrameLayout(this).apply {
+                fitsSystemWindows = false
+                setPadding(0, 0, 0, 0)
+            }
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -224,6 +227,9 @@ class CursorAccessibilityService : AccessibilityService() {
                 gravity = Gravity.TOP or Gravity.START
                 x = 0
                 y = 0
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
             }
 
             val view = CursorPointerView(this)
@@ -246,6 +252,9 @@ class CursorAccessibilityService : AccessibilityService() {
                 if (Settings.canDrawOverlays(this)) {
                     try {
                         params.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                        }
                         wm.addView(container, params)
                         overlayContainer = container
                         cursorView = view
@@ -533,7 +542,9 @@ class CursorAccessibilityService : AccessibilityService() {
                 return@post
             }
 
-            val focusedNode = findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return@post
+            val focusedNode = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: return@post
             try {
                 if (isCtrl) {
                     when (packet.virtualKey) {
@@ -562,10 +573,48 @@ class CursorAccessibilityService : AccessibilityService() {
                 }
 
                 val currentText = focusedNode.text?.toString() ?: ""
+                val selStart = focusedNode.textSelectionStart
+                val selEnd = focusedNode.textSelectionEnd
+
                 when (packet.virtualKey) {
                     0x08 -> { // Backspace
-                        if (currentText.isNotEmpty()) {
+                        if (selStart in 0..selEnd && selEnd > selStart && selEnd <= currentText.length) {
+                            val newText = currentText.removeRange(selStart, selEnd)
+                            setNodeText(focusedNode, newText)
+                            val args = Bundle().apply {
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, selStart)
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, selStart)
+                            }
+                            focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+                        } else if (selStart in 1..currentText.length) {
+                            val newText = currentText.removeRange(selStart - 1, selStart)
+                            setNodeText(focusedNode, newText)
+                            val args = Bundle().apply {
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, selStart - 1)
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, selStart - 1)
+                            }
+                            focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+                        } else if (currentText.isNotEmpty()) {
                             setNodeText(focusedNode, currentText.dropLast(1))
+                        }
+                    }
+                    0x2E -> { // Delete
+                        if (selStart in 0..selEnd && selEnd > selStart && selEnd <= currentText.length) {
+                            val newText = currentText.removeRange(selStart, selEnd)
+                            setNodeText(focusedNode, newText)
+                            val args = Bundle().apply {
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, selStart)
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, selStart)
+                            }
+                            focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+                        } else if (selStart in 0 until currentText.length) {
+                            val newText = currentText.removeRange(selStart, selStart + 1)
+                            setNodeText(focusedNode, newText)
+                            val args = Bundle().apply {
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, selStart)
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, selStart)
+                            }
+                            focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
                         }
                     }
                     0x0D -> { // Enter
@@ -580,10 +629,61 @@ class CursorAccessibilityService : AccessibilityService() {
                             setNodeText(focusedNode, currentText + "\n")
                         }
                     }
+                    0x25 -> { // Left Arrow
+                        if (selStart > 0) {
+                            val targetPos = selStart - 1
+                            val args = Bundle().apply {
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, targetPos)
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, targetPos)
+                            }
+                            focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+                        }
+                    }
+                    0x27 -> { // Right Arrow
+                        if (selStart in 0 until currentText.length) {
+                            val targetPos = selStart + 1
+                            val args = Bundle().apply {
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, targetPos)
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, targetPos)
+                            }
+                            focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+                        }
+                    }
                     else -> {
                         val ch = packet.unicodeChar
-                        if (ch.code >= 32) {
-                            setNodeText(focusedNode, currentText + ch)
+                        val finalChar: Char? = if (ch.code >= 32) {
+                            ch
+                        } else when (packet.virtualKey) {
+                            0x20 -> ' '
+                            in 0x41..0x5A -> if (isShift) packet.virtualKey.toChar() else packet.virtualKey.toChar().lowercaseChar()
+                            in 0x30..0x39 -> if (isShift) ")!@#$%^&*("[packet.virtualKey - 0x30] else packet.virtualKey.toChar()
+                            0xBA -> if (isShift) ':' else ';'
+                            0xBB -> if (isShift) '+' else '='
+                            0xBC -> if (isShift) '<' else ','
+                            0xBD -> if (isShift) '_' else '-'
+                            0xBE -> if (isShift) '>' else '.'
+                            0xBF -> if (isShift) '?' else '/'
+                            0xC0 -> if (isShift) '~' else '`'
+                            0xDB -> if (isShift) '{' else '['
+                            0xDC -> if (isShift) '|' else '\\'
+                            0xDD -> if (isShift) '}' else ']'
+                            0xDE -> if (isShift) '"' else '\''
+                            else -> null
+                        }
+
+                        if (finalChar != null) {
+                            if (selStart in 0..selEnd && selEnd <= currentText.length) {
+                                val newText = currentText.substring(0, selStart) + finalChar + currentText.substring(selEnd)
+                                setNodeText(focusedNode, newText)
+                                val nextPos = selStart + 1
+                                val args = Bundle().apply {
+                                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, nextPos)
+                                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, nextPos)
+                                }
+                                focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+                            } else {
+                                setNodeText(focusedNode, currentText + finalChar)
+                            }
                         }
                     }
                 }
@@ -620,13 +720,13 @@ class CursorAccessibilityService : AccessibilityService() {
             color = Color.parseColor("#38BDF8")
         }
         private val arrowPath = Path().apply {
-            moveTo(2f, 2f)
-            lineTo(2f, 38f)
-            lineTo(12f, 29f)
-            lineTo(19f, 44f)
-            lineTo(25f, 41f)
-            lineTo(18f, 26f)
-            lineTo(30f, 26f)
+            moveTo(0f, 0f)
+            lineTo(0f, 36f)
+            lineTo(10f, 27f)
+            lineTo(17f, 42f)
+            lineTo(23f, 39f)
+            lineTo(16f, 24f)
+            lineTo(28f, 24f)
             close()
         }
 

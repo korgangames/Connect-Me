@@ -1229,6 +1229,67 @@ class ConnectMeLinuxGui:
         except Exception:
             pass
 
+    def _snap_peer_box_to_local_monitors_on_canvas(
+        self,
+        dragged_x: float,
+        dragged_y: float,
+        card_w: float,
+        card_h: float,
+        local_mon_rects: list
+    ):
+        """
+        Snaps a dragged peer monitor box on the 2D Display Arrangement Canvas to the nearest exposed outer edge
+        among all physical monitors of this computer, avoiding internal seams between physical screens.
+        Returns: (snapped_edge, final_x, final_y, seg_start, seg_end, attached_mon_id)
+        """
+        if not local_mon_rects:
+            return EDGE_RIGHT, dragged_x, dragged_y, 0.0, 1.0, ""
+
+        peer_cx = dragged_x + card_w / 2.0
+        peer_cy = dragged_y + card_h / 2.0
+
+        best_mon, mon_left, mon_top, mon_right, mon_bottom = min(
+            local_mon_rects,
+            key=lambda item: (
+                (peer_cx - (item[1] + (item[3] - item[1]) / 2.0)) ** 2
+                + (peer_cy - (item[2] + (item[4] - item[2]) / 2.0)) ** 2
+            )
+        )
+
+        mon_w = max(1.0, mon_right - mon_left)
+        mon_h = max(1.0, mon_bottom - mon_top)
+        norm_dx = (peer_cx - (mon_left + mon_w / 2.0)) / (mon_w / 2.0)
+        norm_dy = (peer_cy - (mon_top + mon_h / 2.0)) / (mon_h / 2.0)
+
+        gap = 6.0
+        if abs(norm_dx) >= abs(norm_dy):
+            snapped_edge = EDGE_LEFT if norm_dx < 0 else EDGE_RIGHT
+            final_x = (mon_left - card_w - gap) if snapped_edge == EDGE_LEFT else (mon_right + gap)
+
+            min_y = mon_top - card_h * 0.70
+            max_y = mon_bottom - card_h * 0.30
+            final_y = max(min_y, min(max_y, dragged_y))
+
+            overlap_top = max(mon_top, final_y)
+            overlap_bottom = min(mon_bottom, final_y + card_h)
+            seg_start = max(0.0, min(0.95, (overlap_top - mon_top) / mon_h))
+            seg_end = max(seg_start + 0.05, min(1.0, (overlap_bottom - mon_top) / mon_h))
+        else:
+            snapped_edge = EDGE_TOP if norm_dy < 0 else EDGE_BOTTOM
+            final_y = (mon_top - card_h - gap) if snapped_edge == EDGE_TOP else (mon_bottom + gap)
+
+            min_x = mon_left - card_w * 0.70
+            max_x = mon_right - card_w * 0.30
+            final_x = max(min_x, min(max_x, dragged_x))
+
+            overlap_left = max(mon_left, final_x)
+            overlap_right = min(mon_right, final_x + card_w)
+            seg_start = max(0.0, min(0.95, (overlap_left - mon_left) / mon_w))
+            seg_end = max(seg_start + 0.05, min(1.0, (overlap_right - mon_left) / mon_w))
+
+        mon_id = getattr(best_mon, "monitorId", "")
+        return snapped_edge, final_x, final_y, seg_start, seg_end, mon_id
+
     def _on_peer_drag_release(self, event):
         pid = self._drag_data.get("peer_id")
         self._drag_data["peer_id"] = None
@@ -1250,26 +1311,37 @@ class ConnectMeLinuxGui:
         offset_x = max(20, (cw - loc_w) / 2.0)
         offset_y = max(20, (ch - loc_h) / 2.0)
 
-        card_w = max(210, min(260, int(self.node.peers[pid].get("screenWidth", 1920) * scale + 24)))
-        card_h = max(130, min(150, int(self.node.peers[pid].get("screenHeight", 1080) * scale + 34)))
+        local_mon_rects = []
+        for m in self.node.topology.monitors:
+            mx1 = offset_x + (m.virtualX - min_x) * scale
+            my1 = offset_y + (m.virtualY - min_y) * scale
+            mx2 = mx1 + m.width * scale
+            my2 = my1 + m.height * scale
+            local_mon_rects.append((m, mx1, my1, mx2, my2))
 
-        card_cx = px1 + card_w / 2.0
-        card_cy = py1 + card_h / 2.0
-        loc_cx = offset_x + loc_w / 2.0
-        loc_cy = offset_y + loc_h / 2.0
+        peer = self.node.peers[pid]
+        p_w = peer.get("screenWidth", 1920)
+        p_h = peer.get("screenHeight", 1080)
+        is_mut = peer.get("isMutuallyPaired", False)
+        card_w = max(210, min(260, int(p_w * scale + 24)))
+        card_h = max(130, min(150, int(p_h * scale + 34))) if is_mut else max(92, min(125, int(p_h * scale + 34)))
 
-        dx = card_cx - loc_cx
-        dy = card_cy - loc_cy
+        snapped_edge, final_x, final_y, seg_start, seg_end, attached_mon_id = self._snap_peer_box_to_local_monitors_on_canvas(
+            px1, py1, card_w, card_h, local_mon_rects
+        )
 
-        norm_dx = dx / max(1.0, loc_w)
-        norm_dy = dy / max(1.0, loc_h)
-
-        if abs(norm_dx) >= abs(norm_dy):
-            edge = EDGE_RIGHT if norm_dx > 0 else EDGE_LEFT
-        else:
-            edge = EDGE_BOTTOM if norm_dy > 0 else EDGE_TOP
-
-        self.node.set_peer_arrangement(pid, edge, 0.5, px1, py1)
+        self.peer_canvas_coords[pid] = (final_x, final_y)
+        self.node.set_peer_arrangement(
+            pid,
+            snapped_edge,
+            edge_offset=(seg_start + seg_end) / 2.0,
+            canvas_x=final_x,
+            canvas_y=final_y,
+            edge_offset_start=seg_start,
+            edge_offset_end=seg_end,
+            attached_monitor_id=attached_mon_id
+        )
+        self.node.send_edge_config_to_peer(peer)
         if hasattr(self, "edge_sentinels"):
             self.edge_sentinels.update_sentinels()
         self._draw_2d_canvas()
@@ -1290,6 +1362,9 @@ class ConnectMeLinuxGui:
         card_w = max(210, min(260, int(p.get("screenWidth", 1920) * scale + 24)))
         card_h = max(120, min(145, int(p.get("screenHeight", 1080) * scale + 34)))
 
+        outermost = self.node.topology.get_outermost_monitor_for_edge(edge)
+        mon_id = getattr(outermost, "monitorId", "") if outermost else ""
+
         if edge == EDGE_RIGHT:
             px1 = offset_x + loc_w + 40
             py1 = offset_y + (loc_h - card_h) / 2.0
@@ -1306,7 +1381,17 @@ class ConnectMeLinuxGui:
             px1, py1 = offset_x + loc_w + 40, offset_y
 
         self.peer_canvas_coords[pid] = (px1, py1)
-        self.node.set_peer_arrangement(pid, edge, 0.5, px1, py1)
+        self.node.set_peer_arrangement(
+            pid,
+            edge,
+            edge_offset=0.5,
+            canvas_x=px1,
+            canvas_y=py1,
+            edge_offset_start=0.0,
+            edge_offset_end=1.0,
+            attached_monitor_id=mon_id
+        )
+        self.node.send_edge_config_to_peer(p)
         self.edge_sentinels.update_sentinels()
         self._draw_2d_canvas()
 
@@ -1607,6 +1692,53 @@ class ConnectMeLinuxGui:
                             best_mx, best_my = (mx1 + mx2) / 2, my1
                             best_px, best_py = px1 + card_w / 2, py2
 
+                # High-visibility Cyan Portal Line Segment on the Local Monitor Edge
+                if is_mut and local_mon_rects:
+                    attached_box = None
+                    att_id = p.get("attachedMonitorId")
+                    if att_id:
+                        for mon_item in local_mon_rects:
+                            if getattr(mon_item[0], "monitorId", "") == att_id:
+                                attached_box = mon_item
+                                break
+                    if not attached_box:
+                        outermost = self.node.topology.get_outermost_monitor_for_edge(arr_edge)
+                        for mon_item in local_mon_rects:
+                            if getattr(mon_item[0], "monitorId", "") == getattr(outermost, "monitorId", ""):
+                                attached_box = mon_item
+                                break
+                    if not attached_box:
+                        attached_box = local_mon_rects[0]
+
+                    _, amx1, amy1, amx2, amy2 = attached_box
+                    am_w = max(1.0, amx2 - amx1)
+                    am_h = max(1.0, amy2 - amy1)
+                    p_s = max(0.0, min(1.0, float(p.get("edgeOffsetStart", 0.0))))
+                    p_e = max(p_s + 0.05, min(1.0, float(p.get("edgeOffsetEnd", 1.0))))
+
+                    if arr_edge == EDGE_LEFT:
+                        plx1 = plx2 = amx1 - 2
+                        ply1 = amy1 + p_s * am_h
+                        ply2 = amy1 + p_e * am_h
+                    elif arr_edge == EDGE_RIGHT:
+                        plx1 = plx2 = amx2 + 2
+                        ply1 = amy1 + p_s * am_h
+                        ply2 = amy1 + p_e * am_h
+                    elif arr_edge == EDGE_TOP:
+                        ply1 = ply2 = amy1 - 2
+                        plx1 = amx1 + p_s * am_w
+                        plx2 = amx1 + p_e * am_w
+                    elif arr_edge == EDGE_BOTTOM:
+                        ply1 = ply2 = amy2 + 2
+                        plx1 = amx1 + p_s * am_w
+                        plx2 = amx1 + p_e * am_w
+                    else:
+                        plx1 = plx2 = amx2 + 2
+                        ply1 = amy1
+                        ply2 = amy2
+
+                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill="#38BDF8", width=4, capstyle=tk.ROUND)
+
                 # Draw clean connector line
                 self.canvas.create_line(best_mx, best_my, best_px, best_py, fill=line_col, dash=line_dash, width=2)
                 if is_mut:
@@ -1664,7 +1796,10 @@ class ConnectMeLinuxGui:
                     edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
                     edge_icons = {EDGE_LEFT: "👈", EDGE_RIGHT: "👉", EDGE_TOP: "👆", EDGE_BOTTOM: "👇"}
                     cur_edge = p.get("assignedEdge", EDGE_RIGHT)
-                    self.canvas.create_text(px1 + 10, py1 + 64, anchor=tk.W, text=f"Yerleşim: {edge_icons.get(cur_edge, '👉')} {edge_names.get(cur_edge, 'Sağ')} Kenar", fill="#38BDF8", font=("Segoe UI", 8, "bold"), tags=(card_tag,))
+                    seg_s = int(float(p.get("edgeOffsetStart", 0.0)) * 100)
+                    seg_e = int(float(p.get("edgeOffsetEnd", 1.0)) * 100)
+                    att_label = f" (%{seg_s} - %{seg_e})"
+                    self.canvas.create_text(px1 + 10, py1 + 64, anchor=tk.W, text=f"Yerleşim: {edge_icons.get(cur_edge, '👉')} {edge_names.get(cur_edge, 'Sağ')} Kenar{att_label}", fill="#38BDF8", font=("Segoe UI", 8, "bold"), tags=(card_tag,))
 
                     # 4 Edge selector buttons: [← Sol] [Sağ →] [↑ Üst] [↓ Alt]
                     pill_w = (card_w - 26) // 4

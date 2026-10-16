@@ -1,3 +1,40 @@
+# Connect Me v1.8.13 — Linux-Android Klavye Köprüsü, PipeWire/PulseAudio Çift Yönlü Ses, 2D Serbest Ekran Kanvası & Infinix Tıklama Hassasiyeti
+
+Bu sürüm; Linux'tan Android'e geçildiğinde klavyenin çalışmama sorununu, Linux ile Android arasındaki ses aktarımını (PipeWire/PulseAudio çift yönlü raw PCM akışı), Linux arayüzünde ekranların Windows'taki gibi istenen kenara serbestçe kaydırılarak yerleştirilebilmesini (2D çoklu monitör kanvası ve manyetik kenar kenetleme) ve çentikli/kamera delikli Android cihazlarda (Infinix vb.) farenin gösterdiği yer ile tıkladığı yer arasındaki kaymayı kökten çözer.
+
+---
+
+### 🌟 v1.8.13 Yenilikleri ve Düzeltmeleri:
+
+* **⌨️ Linux $\rightarrow$ Android Klavye ve Metin Köprüsü Tamamlandı:**
+  - **Sorun:** Linux'tan Android'e geçildiğinde klavye tuşları Android tarafında hiçbir şekilde yazı yazmıyor ve kısayollar çalışmıyordu. Bunun sebebi Linux donanım yakalayıcısının (`evdev`) tuş basımlarını yakalamasına rağmen `modifiers` ve `char_code` değerlerini 0 olarak göndermesiydi; Android tarafı ise boş karakter kodu nedeniyle olayları yok sayıyordu.
+  - **Çözüm:**
+    1. **Linux Donanım Seviyesi Tuş & Karakter Çözücü:** Linux çekirdek kancasına (`LinuxHardwareInputGrabber`), Shift, Ctrl, Alt, Meta (Super) ve CapsLock durumlarını gerçek zamanlı takip eden donanım durum makinesi eklendi. `_evdev_to_key_and_char` dönüştürücüsü ile harfler (büyük/küçük duyarlı), üst sıra rakamlar ve semboller (`!@#$%^&*()`), numpad tuşları, noktalama işaretleri ve navigasyon tuşları kusursuz sanal tuş (`VK`) ve Unicode kodlarına çevrilerek iletilir.
+    2. **Android Metin ve Kısayol Düzenleme Desteği:** `CursorAccessibilityService`, gelen tuşlarda odaklanılmış metin kutusu aramasını genişletti (`findFocus(FOCUS_INPUT)` + `rootInActiveWindow`). Backspace, Delete, İmleç Yön Tuşları (Sol/Sağ), Seçim Alanı Değiştirme ve harf/sembol ekleme tam destekli hale getirildi.
+
+* **🎵 Linux $\leftrightarrow$ Android Çift Yönlü Canlı Ses Akışı (PipeWire & PulseAudio):**
+  - **Sorun:** Linux ile Android arasında ses aktarımı çalışmıyordu veya başlatıldığı anda akış kopuyor ya da Linux tarafında alıcı süreç çöküyordu. `pw-record` ve `pw-play` araçları ham PCM yerine WAV konteyner başlığı beklediğinden/ürettiğinden akış bozuluyordu. Ayrıca `paplay` standart girdiden okuma parametresi (`-`) eksik olduğu için derhal sonlanıyordu.
+  - **Çözüm:**
+    1. **Ham PCM Desteği (`--raw`):** Linux ses vericisi (`start_audio_streaming`), masaüstü ses monitörünü (`<default-sink>.monitor` veya `@DEFAULT_MONITOR@`) dinamik sorgulayarak tespit eder ve `pw-record --raw` / `parec` ile 48kHz S16LE stereo ham PCM akışını konteyner başlığı olmadan Android'e aktarır.
+    2. **Kusursuz Alıcı Oynatıcı:** `_audio_receiver_loop`, gelen ham PCM paketlerini PipeWire (`pw-play --raw -`) veya PulseAudio (`paplay --raw -`) üzerinden standart girdiden (`stdin`) sıfır gecikmeyle doğrudan kulaklık/hoparlöre iletir.
+    3. **Döngü ve IP Çözümleme Koruması:** `_apply_audio_route`, yerel IP adresini tespit ederek kendi sesini kendine döngüye almayı engeller; Android tarafından cihaz ID'si ile gelen yönlendirme isteklerinde IP adresi dinamik çözümlenir.
+
+* **🖥️ Linux Arayüzünde Windows Tarzı 2D Serbest Ekran Yerleşim Kanvası:**
+  - **Sorun:** Linux GUI'sinde monitörler yalnızca 4 sabit kenara (Sol, Sağ, Üst, Alt) %50 orta noktadan eklenebiliyordu; Windows'taki gibi ekranı istenen kenara kaydırarak (örneğin Monitör 1'in sağ üstüne veya Monitör 2'nin sol altına) hassas hizalama yapılamıyordu.
+  - **Çözüm:**
+    1. **Manyetik Kenar Kenetleme (`_snap_peer_box_to_local_monitors_on_canvas`):** Windows `SpatialTopology` mimarisi Linux GUI'sine (`connectme_linux_gui.py`) ve arka plan servisine (`connectme_linux_daemon.py`) taşındı. Cihaz kartı kanvas üzerinde serbestçe sürüklenebilir; tüm fiziksel Linux monitörlerinin en yakın dış kenarına manyetik olarak yapışır ve kenar boyunca serbestçe kaydırılabilir.
+    2. **Orantısal Segment (`edgeOffsetStart` & `edgeOffsetEnd`):** Cihazın temas ettiği kenar aralığı yüzde olarak hesaplanır (örn. `%20 - %70`).
+    3. **Turkuaz Geçiş Portalı:** Kanvas üzerinde yerel monitörün kenarında geçişin gerçekleşeceği hat yüksek görünürlüklü turkuaz portal çizgisi (`#38BDF8`) olarak canlı çizilir.
+    4. **Otomatik `EDGE_CONFIG` Senkronizasyonu:** Linux'ta kenar ayarlandığında karşı Android/Windows cihaza anında TCP `EDGE_CONFIG` paketi gönderilerek dönüş kenarı senkronize edilir.
+
+* **🎯 Infinix ve Çentikli Telefonlarda İmleç Tıklama Kayması Giderildi:**
+  - **Sorun:** Kamera deliği (punch hole) veya ekran çentiği bulunan Infinix ve benzeri Android cihazlarda, işletim sistemi pencereyi durum çubuğu kadar aşağı ittiğinden imlecin gösterdiği yer ile dokunmatik hareketin (jestin) gönderildiği nokta arasında birkaç milimetrelik kayma oluşuyordu. Ayrıca imleç ok çiziminin `(2f, 2f)` noktasından başlaması görsel ucu tıklama noktasından 2 piksel uzaklaştırıyordu.
+  - **Çözüm:**
+    1. **`LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES`:** Android 9.0+ (API 28+) için pencere düzeni çentik/kamera alanının içine kadar tam ekran yayılacak şekilde ayarlandı. `fitsSystemWindows = false` ve sıfır padding ile ekran sınırları donanım piksel koordinatlarıyla %100 birebir örtüştürüldü.
+    2. **Piksel-Kusursuz Ok Ucu:** İmleç ok çizimi tam olarak `(0f, 0f)` noktasından başlatıldı; ok ucunun bittiği tepe noktası ile Android işletim sistemine gönderilen dokunma koordinatları birebir eşleştirildi.
+
+---
+
 # Connect Me v1.8.12 — Donanım Düzeyinde Raw Input Fare, Sıfır Gecikmeli Ses & Kenar Zıplama Koruması
 
 Bu sürüm; Windows'tan Android'e fare geçişinde yaşanan titremeyi (jitter) ve her saniye giriş noktasına geri ışınlanma (bounce/teleport) sorununu, ayrıca Windows'tan Android'e ses aktarımındaki 0.5 - 1 saniyelik derin arabellek gecikmesini kökten çözer.

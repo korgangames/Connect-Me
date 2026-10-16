@@ -1716,36 +1716,47 @@ class ConnectMeService : Service() {
                     AudioStreamEngine.instance.stop()
                 }
                 log("[Ses Matrisi] ⚪ Ses yerel moda döndü (Her cihaz kendi sesini çalıyor).")
-            } else if (target.targetDeviceId == localDeviceId) {
-                // 2. Bu telefon hedef seçildi: Diğer cihazlar buraya ses gönderiyor!
-                if (AudioStreamEngine.instance.isStreaming) {
-                    val intent = Intent(this, AudioStreamService::class.java).apply {
-                        action = AudioStreamService.ACTION_STOP_AUDIO
-                    }
-                    startService(intent)
-                    AudioStreamEngine.instance.stop()
-                }
-                AndroidAudioPlaybackEngine.instance.start()
-                log("[Ses Matrisi] 🟢 Aktif Alıcı: Diğer cihazların sesleri bu telefondan (${target.targetSinkName}) çalınıyor.")
             } else {
-                // 3. Karşı cihaz hedef seçildi: Telefon seslerini karşıya akıt!
-                AndroidAudioPlaybackEngine.instance.stop()
                 val myIp = getLocalIpv4Address()
-                if (target.targetIp.isNotEmpty() && target.targetIp != "127.0.0.1" && target.targetIp != myIp) {
-                    val intent = Intent(this, AudioStreamService::class.java).apply {
-                        action = AudioStreamService.ACTION_START_AUDIO
-                        putExtra("hostIp", target.targetIp)
+                val isTargetSelf = target.targetDeviceId == localDeviceId || (target.targetIp.isNotEmpty() && target.targetIp == myIp)
+
+                if (isTargetSelf) {
+                    // 2. Bu telefon hedef seçildi: Diğer cihazlar buraya ses gönderiyor!
+                    if (AudioStreamEngine.instance.isStreaming) {
+                        val intent = Intent(this, AudioStreamService::class.java).apply {
+                            action = AudioStreamService.ACTION_STOP_AUDIO
+                        }
+                        startService(intent)
+                        AudioStreamEngine.instance.stop()
                     }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        try {
-                            startForegroundService(intent)
-                        } catch (t: Throwable) {
+                    AndroidAudioPlaybackEngine.instance.start()
+                    log("[Ses Matrisi] 🟢 Aktif Alıcı: Diğer cihazların sesleri bu telefondan (${target.targetSinkName}) çalınıyor.")
+                } else {
+                    // 3. Karşı cihaz hedef seçildi: Telefon seslerini karşıya akıt!
+                    AndroidAudioPlaybackEngine.instance.stop()
+                    var resolvedIp = target.targetIp
+                    if (resolvedIp.isEmpty() || resolvedIp == "127.0.0.1") {
+                        val peer = discoveredPeers.find { it.deviceId == target.targetDeviceId }
+                        if (peer != null && peer.ipAddress.isNotEmpty()) {
+                            resolvedIp = peer.ipAddress
+                        }
+                    }
+                    if (resolvedIp.isNotEmpty() && resolvedIp != "127.0.0.1" && resolvedIp != myIp) {
+                        val intent = Intent(this, AudioStreamService::class.java).apply {
+                            action = AudioStreamService.ACTION_START_AUDIO
+                            putExtra("hostIp", resolvedIp)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            try {
+                                startForegroundService(intent)
+                            } catch (t: Throwable) {
+                                startService(intent)
+                            }
+                        } else {
                             startService(intent)
                         }
-                    } else {
-                        startService(intent)
+                        log("[Ses Matrisi] 📡 Ses Yayını -> '${target.targetDeviceName}' ($resolvedIp - ${target.targetSinkName}) hedefine akıyor.")
                     }
-                    log("[Ses Matrisi] 📡 Ses Yayını -> '${target.targetDeviceName}' (${target.targetSinkName}) hedefine akıyor.")
                 }
             }
         } catch (t: Throwable) {

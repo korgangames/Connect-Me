@@ -750,8 +750,16 @@ public static class Program
         var colonyConnectRes = await nodeC.ConnectToColonyViaPeerAsync(peerAOnC, "111222", rememberDevice: false);
         AssertTrue(colonyConnectRes.Success, "Koloni Bağlantısı: Node C tek PIN ile koloniye bağlanma isteği gönderdi");
 
-        // Accept connection from C on A
-        var peerCOnA = nodeA.DiscoveredPeers.FirstOrDefault(p => p.DeviceId == "win-pc-C");
+        // Wait for connection from C to arrive at A and accept it
+        PeerDeviceNode? peerCOnA = null;
+        for (int i = 0; i < 30; i++)
+        {
+            peerCOnA = nodeA.DiscoveredPeers.FirstOrDefault(p => p.DeviceId == "win-pc-C");
+            if (peerCOnA != null)
+                break;
+            await Task.Delay(100);
+        }
+
         if (peerCOnA != null)
         {
             await nodeA.AcceptInboundPairingAsync(peerCOnA, rememberDevice: false);
