@@ -431,6 +431,7 @@ public sealed class TcpControlHeader
     // - "SHELF_FILE": Drop Shelf file transfer
     // - "AUDIO_SINKS_ANNOUNCE": Device broadcasts its local available audio output endpoints
     // - "AUDIO_ROUTE_CHANGE": User changes active audio sink; all nodes redirect audio
+    // - "MEDIA_CONTROL": Spotify Connect-style universal media transport control (PLAY_PAUSE, NEXT, PREV, VOLUME_UP, VOLUME_DOWN, MUTE)
 
     [JsonPropertyName("senderId")]
     public string SenderId { get; set; } = string.Empty;
@@ -503,6 +504,9 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("audioRoute")]
     public AudioRouteTarget? AudioRoute { get; set; }
+
+    [JsonPropertyName("mediaCommand")]
+    public string? MediaCommand { get; set; }
 }
 
 /// <summary>

@@ -49,6 +49,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.view.KeyEvent
 import com.korgangames.connectme.audio.AndroidAudioPlaybackEngine
 import com.korgangames.connectme.audio.AudioStreamEngine
 import com.korgangames.connectme.audio.AudioStreamService
@@ -1496,6 +1497,13 @@ class ConnectMeService : Service() {
                     onStateUpdated?.invoke()
                 }
 
+                "MEDIA_CONTROL" -> {
+                    val cmd = header.optString("mediaCommand", "")
+                    if (cmd.isNotEmpty()) {
+                        handleRemoteMediaCommand(cmd)
+                    }
+                }
+
                 else -> {
                     // Diğer veya tanımlanmamış paketler
                 }
@@ -1742,25 +1750,74 @@ class ConnectMeService : Service() {
                         }
                     }
                     if (resolvedIp.isNotEmpty() && resolvedIp != "127.0.0.1" && resolvedIp != myIp) {
-                        val intent = Intent(this, AudioStreamService::class.java).apply {
-                            action = AudioStreamService.ACTION_START_AUDIO
-                            putExtra("hostIp", resolvedIp)
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            try {
-                                startForegroundService(intent)
-                            } catch (t: Throwable) {
+                        if (AudioStreamService.activeProjection != null) {
+                            val intent = Intent(this, AudioStreamService::class.java).apply {
+                                action = AudioStreamService.ACTION_START_AUDIO
+                                putExtra("hostIp", resolvedIp)
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                try {
+                                    startForegroundService(intent)
+                                } catch (t: Throwable) {
+                                    startService(intent)
+                                }
+                            } else {
                                 startService(intent)
                             }
+                            log("[Ses Matrisi] 📡 Ses Yayını -> '${target.targetDeviceName}' ($resolvedIp - ${target.targetSinkName}) hedefine akıyor.")
                         } else {
-                            startService(intent)
+                            log("[Ses Matrisi] ℹ️ Hedef: '${target.targetDeviceName}'. Telefon seslerini PC'ye aktarmak için Connect Me uygulamasında 'Ses Çıkışını Seç' menüsünden izin verin.")
                         }
-                        log("[Ses Matrisi] 📡 Ses Yayını -> '${target.targetDeviceName}' ($resolvedIp - ${target.targetSinkName}) hedefine akıyor.")
                     }
                 }
             }
         } catch (t: Throwable) {
             log("[Ses Hata] applyAudioRouteLocally: ${t.message}")
         }
+    }
+
+    fun handleRemoteMediaCommand(command: String) {
+        try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            val keyCode = when (command.uppercase()) {
+                "PLAY_PAUSE" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                "NEXT" -> KeyEvent.KEYCODE_MEDIA_NEXT
+                "PREV" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                "VOLUME_UP" -> KeyEvent.KEYCODE_VOLUME_UP
+                "VOLUME_DOWN" -> KeyEvent.KEYCODE_VOLUME_DOWN
+                "MUTE" -> KeyEvent.KEYCODE_VOLUME_MUTE
+                else -> return
+            }
+            val down = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
+            val up = KeyEvent(KeyEvent.ACTION_UP, keyCode)
+            am.dispatchMediaKeyEvent(down)
+            am.dispatchMediaKeyEvent(up)
+            log("[Medya Kontrolü] 🎵 Uzaktan medya komutu uygulandı: $command")
+        } catch (t: Throwable) {
+            log("[Medya Hata] $command: ${t.message}")
+        }
+    }
+
+    fun sendMediaCommand(command: String) {
+        Thread {
+            val peers = ArrayList(pairedPeers)
+            for (peer in peers) {
+                try {
+                    java.net.Socket().use { sock ->
+                        sock.connect(java.net.InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 2500)
+                        val hdr = JSONObject().apply {
+                            put("type", "MEDIA_CONTROL")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                            put("senderPlatform", "android")
+                            put("mediaCommand", command)
+                        }
+                        TcpFrameCodec.writeFrame(sock.getOutputStream(), hdr)
+                    }
+                } catch (t: Throwable) {
+                    log("[Medya Gönderim Hatası] ${peer.deviceName}: ${t.message}")
+                }
+            }
+        }.start()
     }
 }

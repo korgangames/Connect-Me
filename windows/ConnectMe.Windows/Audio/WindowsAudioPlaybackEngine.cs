@@ -21,9 +21,9 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     private const uint WAVE_MAPPER = unchecked((uint)-1);
     private const int WAVE_FORMAT_PCM = 1;
 
-    private const int NUM_RING_BUFFERS = 16;
+    private const int NUM_RING_BUFFERS = 24;
     private const int MAX_BUFFER_SIZE = 8192;
-    private const int TARGET_IN_FLIGHT_BUFFERS = 4; // ~20-40ms driver cushion
+    private const int TARGET_IN_FLIGHT_BUFFERS = 8; // ~40-80ms rock-solid driver cushion
 
     private readonly ConnectMeNetworkNode _network;
     private readonly ConcurrentQueue<AudioChunkPacket> _audioQueue = new();
@@ -146,8 +146,8 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         _lastAudioPacketTime = DateTimeOffset.UtcNow;
         _totalAudioBytesReceived += packet.PcmData.Length;
 
-        // Bounded jitter queue: max 12 chunks to absorb network jitter while enforcing low latency
-        while (_audioQueue.Count > 12)
+        // Bounded jitter queue: max 16 chunks to absorb network jitter while enforcing sub-60ms low latency
+        while (_audioQueue.Count > 16)
         {
             _audioQueue.TryDequeue(out _);
         }

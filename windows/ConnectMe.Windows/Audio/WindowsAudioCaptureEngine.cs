@@ -34,7 +34,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
     public bool IsCapturing => _isRunning;
     public long TotalAudioBytesSent => _totalAudioBytesSent;
     public string? TargetIp => _targetIp;
-    public bool MuteLocalWhileStreaming { get; set; } = true;
+    public bool MuteLocalWhileStreaming { get; set; } = false;
 
     public event Action<string>? CaptureStatusChanged;
 
@@ -111,10 +111,6 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
         IntPtr acVtbl = IntPtr.Zero;
         IntPtr pCaptureClient = IntPtr.Zero;
         IntPtr pFormat = IntPtr.Zero;
-        IntPtr pEndpointVol = IntPtr.Zero;
-        bool originalMuteState = false;
-        bool hasMuted = false;
-        Guid emptyGuid = Guid.Empty;
 
         try
         {
@@ -179,27 +175,6 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             {
                 CaptureStatusChanged?.Invoke("IAudioCaptureClient servisi alınamadı.");
                 return;
-            }
-
-            // Optionally mute the local physical speakers during streaming (only remote device plays audio)
-            if (MuteLocalWhileStreaming)
-            {
-                try
-                {
-                    Guid iidEndpointVol = new Guid("5BC64442-78A7-4082-8F6F-7983A4F6F48F");
-                    int volHr = activate(pDevice, ref iidEndpointVol, 1 /* CLSCTX_INPROC_SERVER */, IntPtr.Zero, out pEndpointVol);
-                    if (volHr == 0 && pEndpointVol != IntPtr.Zero)
-                    {
-                        var epVol = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(pEndpointVol);
-                        epVol.GetMute(out originalMuteState);
-                        if (!originalMuteState)
-                        {
-                            epVol.SetMute(true, ref emptyGuid);
-                            hasMuted = true;
-                        }
-                    }
-                }
-                catch { }
             }
 
             IntPtr ccVtbl = Marshal.ReadIntPtr(pCaptureClient);
@@ -286,20 +261,6 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
         }
         finally
         {
-            if (hasMuted && pEndpointVol != IntPtr.Zero)
-            {
-                try
-                {
-                    var epVol = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(pEndpointVol);
-                    epVol.SetMute(false, ref emptyGuid);
-                }
-                catch { }
-            }
-            if (pEndpointVol != IntPtr.Zero)
-            {
-                try { Marshal.Release(pEndpointVol); } catch { }
-            }
-
             if (pAudioClient != IntPtr.Zero && acVtbl != IntPtr.Zero)
             {
                 try

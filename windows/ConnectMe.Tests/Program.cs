@@ -976,6 +976,23 @@ public static class Program
         AssertTrue(receivedRouteOnB == null,
             "Ses Sıfırlama: Yönlendirme devre dışı bırakıldığında tüm cihazlar yerel moda döndü");
 
+        // Test Spotify Connect-style Media Transport Control (MEDIA_CONTROL)
+        string? receivedMediaCmdOnB = null;
+        nodeB.MediaCommandReceived += cmd => receivedMediaCmdOnB = cmd;
+
+        await nodeA.SendMediaCommandAsync("PLAY_PAUSE");
+        await Task.Delay(150);
+
+        AssertTrue(receivedMediaCmdOnB == "PLAY_PAUSE",
+            "Medya Kontrolü (MEDIA_CONTROL): Spotify/YouTube Oynat/Duraklat komutu başarıyla karşı cihaza aktarıldı");
+
+        receivedMediaCmdOnB = null;
+        await nodeA.SendMediaCommandAsync("NEXT");
+        await Task.Delay(150);
+
+        AssertTrue(receivedMediaCmdOnB == "NEXT",
+            "Medya Kontrolü (MEDIA_CONTROL): Sonraki parça komutu başarıyla karşı cihaza aktarıldı");
+
         try { Directory.Delete(tempShelf, true); } catch { }
     }
 }

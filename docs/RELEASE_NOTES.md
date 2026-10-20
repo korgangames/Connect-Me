@@ -1,3 +1,35 @@
+# Connect Me v1.8.14 — Spotify Connect Mantığında Medya Kontrol Merkezi, Statik Gürültüsüz & Kesintisiz Ses Aktarımı
+
+Bu sürüm; Windows ana makine ile Android cihaz arasındaki ses aktarımı (Audio Matrix) sorunlarını, Android'de mikrofon fallback'inden kaynaklanan statik/hışırtı gürültüsünü, Windows WASAPI Loopback mute kilitlenmesini kökten çözer ve Spotify Connect mantığında çalışan iki yönlü Medya & Müzik Taşıma / Kontrol Merkezini (`MEDIA_CONTROL`) ekosisteme kazandırır.
+
+---
+
+### 🌟 v1.8.14 Yenilikleri ve Düzeltmeleri:
+
+* **🎵 Spotify Connect Mantığında Universal Medya Kontrol Merkezi (`MEDIA_CONTROL`):**
+  - **Yeni Özellik:** Spotify, YouTube, YouTube Music, VLC ve masaüstü/mobil medya çalıcıları için platformlar arası iki yönlü uzaktan kontrol protokolü eklendi.
+  - **Windows & Android Entegrasyonu:**
+    1. **Windows Tarafı:** Android veya diğer bağlı cihazlardan gelen `MEDIA_CONTROL` paketleri (`PLAY_PAUSE`, `NEXT`, `PREV`, `VOLUME_UP`, `VOLUME_DOWN`, `MUTE`), yerel Win32 multimedya donanım olaylarına dönüştürülür. Spotify Desktop, Chrome/Edge YouTube veya herhangi bir oynatıcı anında yanıt verir.
+    2. **Android Tarafı:** Android arayüzüne eklenen hızlı medya kontrol çubuğu (⏮️ Önceki, ⏯️ Oynat/Duraklat, ⏭️ Sonraki) sayesinde telefon ekranından bilgisayardaki müzik/video tek dokunuşla kontrol edilir. Karşıdan gelen komutlar ise `AudioManager.dispatchMediaKeyEvent` ile Android'in aktif müzik oturumuna iletilir.
+    3. **Linux Tarafı:** Linux arka plan servisine `playerctl` / DBus MPRIS2 medya kancası entegre edilerek tüm ekosistemde tam medya kontrol uyumu sağlandı.
+
+* **🚫 Android Mikrofon "Statik Gürültü / Hışırtı" Fallback'i Tamamen Kaldırıldı:**
+  - **Sorun:** Windows çıkış olarak seçildiğinde Android tarafı arka planda otomatik yayın servisini başlatıyordu. `MediaProjection` izni henüz verilmemiş olduğundan `AudioStreamEngine` sessizce telefonun fiziksel MİKROFONUNU (`AudioSource.VOICE_RECOGNITION` / `MIC`) açıyor ve odadaki ortam gürültüsünü/hışırtısını 48kHz PCM olarak Windows hoparlörlerine basıyordu. Kullanıcı telefon müziği beklerken hoparlörden şiddetli beyaz gürültü/hışırtı duyuyordu.
+  - **Çözüm:** Dahili sistem sesi aktarımı için mikrofon fallback'i tamamen iptal edildi. `AudioStreamEngine` yalnızca geçerli ve izin verilmiş `MediaProjection` token'ı ile `AudioPlaybackCapture` çalıştırır; aksi halde mikrofon açılmaz, durum temiz bir şekilde kullanıcıya bildirilir.
+
+* **🔊 Windows WASAPI Loopback Mute Kilitlenmesi Giderildi (0 Bayt Aktarım Çözüldü):**
+  - **Sorun:** Windows $\rightarrow$ Android yönlendirmesi seçildiğinde `WindowsAudioCaptureEngine`, `MuteLocalWhileStreaming = true` ayarıyla varsayılan çıkışın `IAudioEndpointVolume.SetMute(true)` fonksiyonunu çağırıyordu. Windows WASAPI mimarisinde donanımsal endpoint sessize alındığında loopback yakalama arabelleği tüm paketleri `AUDCLNT_BUFFERFLAGS_SILENT` olarak işaretler. Kod bu bayrağı görünce hiçbir ses paketi göndermediği için Android telefon hoparlöründen hiçbir ses çıkmıyordu.
+  - **Çözüm:** Donanımsal `SetMute(true)` çağrısı kaldırıldı ve varsayılan `false` yapıldı. Windows masaüstü sesleri (YouTube, oyunlar, Spotify) kesintisiz olarak 48kHz stereo PCM halinde Android'e akar. Kullanıcı yerel hoparlörü kapatmak isterse fiziksel hoparlör düğmesini veya Windows ses çubuğunu kullanabilir.
+
+* **⚡ Android Ses Çalma Motoru (Glitch, Tıklama ve Lag Yok Edildi):**
+  - **Sorun:** Android `AndroidAudioPlaybackEngine` içinde yer alan `bufferedFrames > 2400` (~50ms) kontrolü, Wi-Fi üzerindeki küçük ağ gecikmelerinde bile sürekli `track.pause()`, `track.flush()`, `track.play()` çağırıyordu. Bu durum saniyede birkaç kez DAC'ı durdurup arabelleği çöpe attığından seste kesilmeler, lag ve çatlama (glitch) oluşuyordu.
+  - **Çözüm:** Donanımsal `flush()` ve `pause()` döngüden tamamen çıkarıldı. `AudioTrack` arabelleği 100ms'lik konforlu bir yastıkla (`bufferSize = 19200`, `frameTarget = 2880`) başlatıldı. Aşırı saat kayması durumlarında DAC durdurulmadan sadece fazla gelen tekil paket atlanarak ipeksi yumuşaklıkta ve sıfır parazitli bir akış sağlandı.
+
+* **🛡️ Windows WinMM Arabellek Tükenmesi (Underrun) Koruması:**
+  - `WindowsAudioPlaybackEngine` halka arabellek sayısı 24'e, sürücüde bekleyen arabellek hedefi (`TARGET_IN_FLIGHT_BUFFERS`) 8'e (~40-80ms) çıkarıldı. Windows masaüstü iş parçacığı gecikmelerinde ses kartının boş kalıp çıtırtı yapması engellendi.
+
+---
+
 # Connect Me v1.8.13 — Linux-Android Klavye Köprüsü, PipeWire/PulseAudio Çift Yönlü Ses, 2D Serbest Ekran Kanvası & Infinix Tıklama Hassasiyeti
 
 Bu sürüm; Linux'tan Android'e geçildiğinde klavyenin çalışmama sorununu, Linux ile Android arasındaki ses aktarımını (PipeWire/PulseAudio çift yönlü raw PCM akışı), Linux arayüzünde ekranların Windows'taki gibi istenen kenara serbestçe kaydırılarak yerleştirilebilmesini (2D çoklu monitör kanvası ve manyetik kenar kenetleme) ve çentikli/kamera delikli Android cihazlarda (Infinix vb.) farenin gösterdiği yer ile tıkladığı yer arasındaki kaymayı kökten çözer.

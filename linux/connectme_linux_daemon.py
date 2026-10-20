@@ -3014,6 +3014,10 @@ class ConnectMeLinuxNode:
                     except Exception:
                         pass
 
+            elif msg_type == "MEDIA_CONTROL":
+                cmd = header.get("mediaCommand", "")
+                self._handle_media_command(cmd)
+
     def _udp_input_loop(self) -> None:
         try:
             self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -3422,6 +3426,24 @@ class ConnectMeLinuxNode:
             "audioSinks": self.local_audio_sinks
         }
         self.broadcast_tcp_control(hdr)
+
+    def _handle_media_command(self, cmd: str) -> None:
+        """Handles remote Spotify / MPRIS media transport commands (playerctl / DBus)."""
+        cmd_upper = (cmd or "").upper()
+        self.log(f"[Medya Kontrolü] 🎵 Uzaktan medya komutu alındı: {cmd_upper}")
+        try:
+            if cmd_upper == "PLAY_PAUSE":
+                subprocess.run(["playerctl", "play-pause"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif cmd_upper == "NEXT":
+                subprocess.run(["playerctl", "next"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif cmd_upper == "PREV":
+                subprocess.run(["playerctl", "previous"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif cmd_upper == "VOLUME_UP":
+                subprocess.run(["playerctl", "volume", "0.05+"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif cmd_upper == "VOLUME_DOWN":
+                subprocess.run(["playerctl", "volume", "0.05-"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as ex:
+            self.log(f"[Medya Hatası] playerctl yürütülemedi: {ex}")
 
     def set_and_broadcast_audio_route(self, route: Optional[Dict[str, Any]]) -> None:
         """Sets the ecosystem-wide active audio route and broadcasts to all peers."""

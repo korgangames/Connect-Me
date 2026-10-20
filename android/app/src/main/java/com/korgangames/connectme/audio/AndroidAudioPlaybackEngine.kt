@@ -45,14 +45,14 @@ class AndroidAudioPlaybackEngine private constructor() {
             val channelConfig = AudioFormat.CHANNEL_OUT_STEREO
             val audioEncoding = AudioFormat.ENCODING_PCM_16BIT
             val minBufSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioEncoding)
-            val bufferSize = minBufSize.coerceAtLeast(1920)
+            val bufferSize = minBufSize.coerceAtLeast(19200)
 
             val track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val builder = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_GAME)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
                     .setAudioFormat(
@@ -84,8 +84,8 @@ class AndroidAudioPlaybackEngine private constructor() {
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 try {
-                    // Restrict internal buffer to 960 frames (~20ms) to eliminate Android Deep Buffer delay
-                    val frameTarget = 960.coerceAtLeast(minBufSize / 4)
+                    // Set internal buffer to ~60ms (2880 frames) to eliminate dropouts while keeping ultra-low latency
+                    val frameTarget = 2880.coerceAtLeast(minBufSize / 4)
                     track.setBufferSizeInFrames(frameTarget)
                 } catch (_: Throwable) {}
             }
@@ -159,21 +159,17 @@ class AndroidAudioPlaybackEngine private constructor() {
                             try { track.play() } catch (_: Throwable) {}
                         }
 
-                        // Real-time jitter & latency drift guard:
-                        // If buffered frames inside AudioTrack exceed 2400 (~50ms), flush buffer to lock latency to ~20ms!
+                        // Real-time jitter & drift guard:
+                        // Only drop extra incoming chunks if buffer exceeds 9600 frames (>200ms) to prevent latency runaway,
+                        // without halting or flushing the hardware DAC (prevents clicks, pops & stutters)!
                         val playedFrames = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
                         val bufferedFrames = totalFramesWritten - playedFrames
-                        if (bufferedFrames > 2400) {
-                            try {
-                                track.pause()
-                                track.flush()
-                                track.play()
-                            } catch (_: Throwable) {}
-                            totalFramesWritten = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                        if (bufferedFrames > 9600) {
+                            continue
                         }
 
                         val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            track.write(buffer, 14, pcmLen, AudioTrack.WRITE_NON_BLOCKING)
+                            track.write(buffer, 14, pcmLen, AudioTrack.WRITE_BLOCKING)
                         } else {
                             track.write(buffer, 14, pcmLen)
                         }

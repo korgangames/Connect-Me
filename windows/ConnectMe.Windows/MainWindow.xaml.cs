@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
@@ -77,6 +78,7 @@ public partial class MainWindow : Window
         _network.ShelfItemReceived += OnShelfItemReceived;
         _network.RemoteAudioSinksUpdated += (senderId, sinks) => Dispatcher.InvokeAsync(RefreshAudioSinksComboBox);
         _network.AudioRouteChanged += OnNetworkAudioRouteChanged;
+        _network.MediaCommandReceived += OnMediaCommandReceived;
         _network.PeerDisconnected += OnPeerDisconnectedAudio;
         _audioPlayback.AudioStatusChanged += OnAudioStatusChanged;
         _audioCapture.CaptureStatusChanged += OnCaptureStatusChanged;
@@ -2443,6 +2445,106 @@ public partial class MainWindow : Window
             {
                 AudioVolumeLabel.Text = $"{(int)(e.NewValue * 100)}%";
             }
+        }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    private static void SendMediaKey(byte vk)
+    {
+        keybd_event(vk, 0, 0, UIntPtr.Zero);
+        keybd_event(vk, 0, 0x0002 /* KEYEVENTF_KEYUP */, UIntPtr.Zero);
+    }
+
+    private void OnMediaCommandReceived(string command)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            switch (command.ToUpperInvariant())
+            {
+                case "PLAY_PAUSE":
+                    SendMediaKey(0xB3 /* VK_MEDIA_PLAY_PAUSE */);
+                    AppendLog("🎵 [Medya / Spotify] Uzaktan Oynat/Duraklat komutu uygulandı.");
+                    break;
+                case "NEXT":
+                    SendMediaKey(0xB0 /* VK_MEDIA_NEXT_TRACK */);
+                    AppendLog("🎵 [Medya / Spotify] Uzaktan Sonraki Parça komutu uygulandı.");
+                    break;
+                case "PREV":
+                    SendMediaKey(0xB1 /* VK_MEDIA_PREV_TRACK */);
+                    AppendLog("🎵 [Medya / Spotify] Uzaktan Önceki Parça komutu uygulandı.");
+                    break;
+                case "VOLUME_UP":
+                    SendMediaKey(0xAF /* VK_VOLUME_UP */);
+                    break;
+                case "VOLUME_DOWN":
+                    SendMediaKey(0xAE /* VK_VOLUME_DOWN */);
+                    break;
+                case "MUTE":
+                    SendMediaKey(0xAD /* VK_VOLUME_MUTE */);
+                    break;
+            }
+        });
+    }
+
+    private string _mediaTargetMode = "REMOTE"; // "REMOTE" or "LOCAL"
+
+    private void MediaTargetToggleBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_mediaTargetMode == "REMOTE")
+        {
+            _mediaTargetMode = "LOCAL";
+            MediaTargetToggleBtn.Content = "💻 Hedef: Bu Bilgisayar (Yerel Medya)";
+            AppendLog("🎵 [Medya Hedefi] Medya butonları artık bu bilgisayardaki Spotify/YouTube çalarını kontrol eder.");
+        }
+        else
+        {
+            _mediaTargetMode = "REMOTE";
+            MediaTargetToggleBtn.Content = "📱 Hedef: Bağlı Telefon / Tüm Cihazlar";
+            AppendLog("🎵 [Medya Hedefi] Medya butonları artık bağlı telefondaki/uzak cihazdaki Spotify/müzik çaları kontrol eder.");
+        }
+    }
+
+    private void MediaPrevBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_mediaTargetMode == "LOCAL")
+        {
+            SendMediaKey(0xB1);
+            AppendLog("🎵 [Medya] Bu bilgisayarda önceki parçaya geçildi.");
+        }
+        else
+        {
+            _ = _network.SendMediaCommandAsync("PREV");
+            AppendLog("🎵 [Medya] Uzak cihaza 'Önceki Parça' komutu gönderildi.");
+        }
+    }
+
+    private void MediaPlayPauseBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_mediaTargetMode == "LOCAL")
+        {
+            SendMediaKey(0xB3);
+            AppendLog("🎵 [Medya] Bu bilgisayarda Oynat/Duraklat tetiklendi.");
+        }
+        else
+        {
+            _ = _network.SendMediaCommandAsync("PLAY_PAUSE");
+            AppendLog("🎵 [Medya] Uzak cihaza 'Oynat/Duraklat' komutu gönderildi.");
+        }
+    }
+
+    private void MediaNextBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_mediaTargetMode == "LOCAL")
+        {
+            SendMediaKey(0xB0);
+            AppendLog("🎵 [Medya] Bu bilgisayarda sonraki parçaya geçildi.");
+        }
+        else
+        {
+            _ = _network.SendMediaCommandAsync("NEXT");
+            AppendLog("🎵 [Medya] Uzak cihaza 'Sonraki Parça' komutu gönderildi.");
         }
     }
 

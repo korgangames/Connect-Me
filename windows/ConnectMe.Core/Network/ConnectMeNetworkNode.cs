@@ -135,6 +135,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public event Action<AudioChunkPacket, IPEndPoint>? RemoteAudioChunkReceived;
     public event Action<string, List<AudioSinkDescriptor>>? RemoteAudioSinksUpdated;
     public event Action<AudioRouteTarget?>? AudioRouteChanged;
+    public event Action<string>? MediaCommandReceived;
     public event Action<string, string>? RemoteClipboardTextReceived;
     public event Action<byte[], string>? RemoteClipboardImageReceived;
     public event Action<ShelfItemEntry>? ShelfItemReceived;
@@ -2495,6 +2496,42 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     Log($"[Ses Yönlendirme] 🔄 Aktif ses hedefi güncellendi -> {targetName} (Cihaz: {header.AudioRoute?.TargetDeviceId})");
                     AudioRouteChanged?.Invoke(header.AudioRoute);
                     break;
+
+                case "MEDIA_CONTROL":
+                    if (!string.IsNullOrEmpty(header.MediaCommand))
+                    {
+                        Log($"[Medya Kontrolü] 🎵 '{header.SenderName}' cihazından medya komutu alındı: {header.MediaCommand}");
+                        MediaCommandReceived?.Invoke(header.MediaCommand);
+                    }
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sends Spotify Connect-style remote media playback commands (PLAY_PAUSE, NEXT, PREV, VOLUME_UP, VOLUME_DOWN, MUTE)
+    /// to paired devices across the mesh colony.
+    /// </summary>
+    public async Task SendMediaCommandAsync(string command, string? targetPeerId = null)
+    {
+        var header = new TcpControlHeader
+        {
+            Type = "MEDIA_CONTROL",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform,
+            MediaCommand = command
+        };
+
+        if (targetPeerId != null && _peers.TryGetValue(targetPeerId, out var targetPeer) && targetPeer.IsMutuallyPaired)
+        {
+            await SendTcpFrameToPeerAsync(targetPeer, header).ConfigureAwait(false);
+        }
+        else
+        {
+            foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired))
+            {
+                await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
             }
         }
     }

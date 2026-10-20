@@ -82,7 +82,7 @@ class AudioStreamEngine private constructor() {
         var record: AudioRecord? = null
         var captureMode = "Bilinmiyor"
 
-        // 1. Try AudioPlaybackCapture (internal system audio) if MediaProjection exists (Android 10+)
+        // 1. AudioPlaybackCapture (clean internal system audio) via MediaProjection (Android 10+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaProjection != null) {
             try {
                 val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
@@ -105,47 +105,15 @@ class AudioStreamEngine private constructor() {
                     try { rec.release() } catch (_: Throwable) {}
                 }
             } catch (t: Throwable) {
-                Log.w(TAG, "AudioPlaybackCapture başarısız oldu, mikrofona geçiliyor: ${t.message}")
+                Log.w(TAG, "AudioPlaybackCapture başlatılamadı: ${t.message}")
             }
         }
 
-        // 2. High-fidelity hardware audio / microphone fallback (for speech, calls, or when projection is omitted)
-        if (record == null) {
-            val sourcesToTry = intArrayOf(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                MediaRecorder.AudioSource.MIC,
-                MediaRecorder.AudioSource.CAMCORDER,
-                MediaRecorder.AudioSource.DEFAULT
-            )
-            for (source in sourcesToTry) {
-                try {
-                    val rec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        AudioRecord.Builder()
-                            .setAudioSource(source)
-                            .setAudioFormat(format)
-                            .setBufferSizeInBytes(bufferSize)
-                            .build()
-                    } else {
-                        @Suppress("DEPRECATION")
-                        AudioRecord(source, SAMPLE_RATE, channelConfig, audioEncoding, bufferSize)
-                    }
-
-                    if (rec.state == AudioRecord.STATE_INITIALIZED) {
-                        record = rec
-                        captureMode = if (source == MediaRecorder.AudioSource.VOICE_RECOGNITION) "Konuşma / Mikrofon" else "Cihaz Mikrofonu"
-                        Log.i(TAG, "Mikrofon ses yakalama ($captureMode, kaynak: $source) başarıyla hazırlandı.")
-                        break
-                    } else {
-                        try { rec.release() } catch (_: Throwable) {}
-                    }
-                } catch (_: Throwable) {}
-            }
-        }
-
+        // Never fall back to ambient microphone for system audio streaming (prevents room noise & static hiss)
         if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "Hiçbir ses yakalama kaynağı başlatılamadı!")
+            Log.w(TAG, "Sistem sesi yakalama başlatılamadı (MediaProjection gereklidir).")
             stop()
-            onStatusChanged?.invoke(false, "Ses yakalama motoru başlatılamadı.")
+            onStatusChanged?.invoke(false, "Sistem sesini aktarmak için MediaProjection ekran/ses izni gereklidir.")
             return false
         }
 
