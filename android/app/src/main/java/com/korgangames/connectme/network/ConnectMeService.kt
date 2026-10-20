@@ -1800,7 +1800,7 @@ class ConnectMeService : Service() {
 
     fun sendMediaCommand(command: String) {
         Thread {
-            val peers = ArrayList(pairedPeers)
+            val peers = discoveredPeers.filter { it.isMutuallyPaired }
             for (peer in peers) {
                 try {
                     java.net.Socket().use { sock ->
