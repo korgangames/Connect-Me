@@ -58,7 +58,7 @@ import com.korgangames.connectme.protocol.AudioSinkDescriptor
 import com.korgangames.connectme.protocol.ColonyMember
 
 data class DiscoveredPcPeer(
-    val deviceId: String,
+    var deviceId: String,
     var deviceName: String,
     var platform: String,
     var ipAddress: String,
@@ -1702,7 +1702,7 @@ class ConnectMeService : Service() {
                     }
                     TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
                 }
-            } catch (_: Throwable) {}
+            } catch (ignored: Throwable) {}
         }
     }
 
@@ -1745,7 +1745,7 @@ class ConnectMeService : Service() {
                         }
                         TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
                     }
-                } catch (_: Throwable) {}
+                } catch (ignored: Throwable) {}
             }
         }
     }

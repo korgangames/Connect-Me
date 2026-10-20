@@ -94,7 +94,7 @@ class AndroidAudioPlaybackEngine private constructor() {
                     // Set internal buffer to ~50ms (2400 frames) for instant response
                     val frameTarget = 2400.coerceAtLeast(minBufSize / 4)
                     track.setBufferSizeInFrames(frameTarget)
-                } catch (_: Throwable) {}
+                } catch (ignored: Throwable) {}
             }
 
             try {
@@ -197,7 +197,7 @@ class AndroidAudioPlaybackEngine private constructor() {
                 val chunk = pcmQueue.poll()
                 if (chunk != null) {
                     if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                        try { track.play() } catch (_: Throwable) {}
+                        try { track.play() } catch (ignored: Throwable) {}
                     }
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -229,19 +229,19 @@ class AndroidAudioPlaybackEngine private constructor() {
 
         try {
             udpSocket?.close()
-        } catch (_: Throwable) {}
+        } catch (ignored: Throwable) {}
         udpSocket = null
 
         try {
             receiveThread?.interrupt()
             receiveThread?.join(300)
-        } catch (_: Throwable) {}
+        } catch (ignored: Throwable) {}
         receiveThread = null
 
         try {
             playbackThread?.interrupt()
             playbackThread?.join(300)
-        } catch (_: Throwable) {}
+        } catch (ignored: Throwable) {}
         playbackThread = null
 
         pcmQueue.clear()
@@ -250,10 +250,10 @@ class AndroidAudioPlaybackEngine private constructor() {
             audioTrack?.pause()
             audioTrack?.flush()
             audioTrack?.stop()
-        } catch (_: Throwable) {}
+        } catch (ignored: Throwable) {}
         try {
             audioTrack?.release()
-        } catch (_: Throwable) {}
+        } catch (ignored: Throwable) {}
         audioTrack = null
     }
 }
