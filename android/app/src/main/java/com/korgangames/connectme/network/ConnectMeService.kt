@@ -1324,7 +1324,11 @@ class ConnectMeService : Service() {
                             tcpControlPort = tcpPort
                         ).also { discoveredPeers.add(0, it) }
 
-                    val savedToken = getTrustTokenForDevice(peer.deviceId)
+                    if (senderId.isNotEmpty()) {
+                        peer.deviceId = senderId
+                    }
+
+                    val savedToken = getTrustTokenForDevice(peer.deviceId) ?: (if (senderId.isNotEmpty()) getTrustTokenForDevice(senderId) else null)
                     if (savedToken != null && savedToken == token) {
                         peer.myEnteredPinVerifiedByRemote = true
                         peer.remoteEnteredMyPinVerified = true
@@ -1342,6 +1346,7 @@ class ConnectMeService : Service() {
                         TcpFrameCodec.writeFrame(output, ack)
                         log("[Otomatik Bağlantı] ⭐ Güvenilir cihaz '$senderName' ($remoteIp) PIN'siz otomatik bağlandı!")
                         announceLocalAudioSinksToPeer(peer)
+                        requestAudioSinksFromPeer(peer)
                         val initReturnEdge = header.optInt("returnEdge", ProtocolConstants.EDGE_NONE.toInt()).toByte()
                         if (initReturnEdge != ProtocolConstants.EDGE_NONE) {
                             CursorAccessibilityService.instance?.activeEntranceEdge = initReturnEdge
@@ -1454,6 +1459,7 @@ class ConnectMeService : Service() {
                 "AUDIO_SINKS_ANNOUNCE" -> {
                     val sId = header.optString("senderId", remoteIp)
                     val sName = header.optString("senderName", remoteIp)
+                    val sPlatform = header.optString("senderPlatform", "windows")
                     val arr = header.optJSONArray("audioSinks")
                     if (arr != null) {
                         val list = mutableListOf<AudioSinkDescriptor>()
@@ -1462,21 +1468,36 @@ class ConnectMeService : Service() {
                             list.add(AudioSinkDescriptor(
                                 deviceId = o.optString("deviceId", sId),
                                 deviceName = o.optString("deviceName", sName),
-                                platform = o.optString("platform", "windows"),
+                                platform = o.optString("platform", sPlatform),
                                 sinkId = o.optString("sinkId", "default"),
                                 sinkName = o.optString("sinkName", "Ses Çıkışı"),
                                 isDefault = o.optBoolean("isDefault", false)
                             ))
                         }
                         remoteAudioSinks[sId] = list
-                        val p = discoveredPeers.find { it.deviceId == sId || it.ipAddress == remoteIp }
-                        if (p != null) {
-                            p.remoteAudioSinks.clear()
-                            p.remoteAudioSinks.addAll(list)
+                        var p = discoveredPeers.find { it.deviceId == sId || it.ipAddress == remoteIp }
+                        if (p == null) {
+                            p = DiscoveredPcPeer(
+                                deviceId = sId,
+                                deviceName = sName,
+                                platform = sPlatform,
+                                ipAddress = remoteIp,
+                                udpInputPort = ProtocolConstants.FAST_INPUT_UDP_PORT,
+                                tcpControlPort = ProtocolConstants.DATA_CONTROL_TCP_PORT
+                            ).also { discoveredPeers.add(0, it) }
                         }
+                        p.remoteAudioSinks.clear()
+                        p.remoteAudioSinks.addAll(list)
                         log("[Ses Matrisi] 🔍 '$sName' (${list.size} ses çıkışı) duyurdu.")
                         onAudioSinksUpdated?.invoke()
                         onStateUpdated?.invoke()
+                    }
+                }
+
+                "AUDIO_SINKS_REQUEST" -> {
+                    val p = discoveredPeers.find { it.deviceId == senderId || it.ipAddress == remoteIp }
+                    if (p != null) {
+                        announceLocalAudioSinksToPeer(p)
                     }
                 }
 
@@ -1495,13 +1516,6 @@ class ConnectMeService : Service() {
                     applyAudioRouteLocally(activeAudioRoute)
                     onAudioRouteChanged?.invoke(activeAudioRoute)
                     onStateUpdated?.invoke()
-                }
-
-                "MEDIA_CONTROL" -> {
-                    val cmd = header.optString("mediaCommand", "")
-                    if (cmd.isNotEmpty()) {
-                        handleRemoteMediaCommand(cmd)
-                    }
                 }
 
                 else -> {
@@ -1560,6 +1574,8 @@ class ConnectMeService : Service() {
                         activePcUdpPort = peer.udpInputPort
                         activePcTcpPort = peer.tcpControlPort
                         log("[Otomatik Bağlantı] ⭐ '${peer.deviceName}' ile güvenli otomatik bağlantı sağlandı!")
+                        announceLocalAudioSinksToPeer(peer)
+                        requestAudioSinksFromPeer(peer)
                         onStateUpdated?.invoke()
                     }
                 }
@@ -1668,8 +1684,31 @@ class ConnectMeService : Service() {
     }
 
     fun announceLocalAudioSinksToAll() {
-        for (peer in discoveredPeers.filter { it.isMutuallyPaired }) {
+        for (peer in discoveredPeers.filter { it.isMutuallyPaired || it.ipAddress.isNotEmpty() }) {
             announceLocalAudioSinksToPeer(peer)
+        }
+    }
+
+    fun requestAudioSinksFromPeer(peer: DiscoveredPcPeer) {
+        scope.launch {
+            try {
+                Socket().use { sock ->
+                    sock.connect(InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 3000)
+                    val header = JSONObject().apply {
+                        put("type", "AUDIO_SINKS_REQUEST")
+                        put("senderId", localDeviceId)
+                        put("senderName", localDeviceName)
+                        put("senderPlatform", "android")
+                    }
+                    TcpFrameCodec.writeFrame(sock.getOutputStream(), header)
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    fun requestAudioSinksFromAllPeers() {
+        for (peer in discoveredPeers.filter { it.ipAddress.isNotEmpty() }) {
+            requestAudioSinksFromPeer(peer)
         }
     }
 
@@ -1680,8 +1719,8 @@ class ConnectMeService : Service() {
         onStateUpdated?.invoke()
 
         scope.launch {
-            val paired = discoveredPeers.filter { it.isMutuallyPaired }
-            for (p in paired) {
+            val targets = discoveredPeers.filter { it.isMutuallyPaired || it.myEnteredPinVerifiedByRemote || it.remoteEnteredMyPinVerified || it.ipAddress.isNotEmpty() }
+            for (p in targets) {
                 try {
                     Socket().use { sock ->
                         sock.connect(InetSocketAddress(p.ipAddress, p.tcpControlPort), 3000)
@@ -1774,50 +1813,5 @@ class ConnectMeService : Service() {
         } catch (t: Throwable) {
             log("[Ses Hata] applyAudioRouteLocally: ${t.message}")
         }
-    }
-
-    fun handleRemoteMediaCommand(command: String) {
-        try {
-            val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-            val keyCode = when (command.uppercase()) {
-                "PLAY_PAUSE" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-                "NEXT" -> KeyEvent.KEYCODE_MEDIA_NEXT
-                "PREV" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
-                "VOLUME_UP" -> KeyEvent.KEYCODE_VOLUME_UP
-                "VOLUME_DOWN" -> KeyEvent.KEYCODE_VOLUME_DOWN
-                "MUTE" -> KeyEvent.KEYCODE_VOLUME_MUTE
-                else -> return
-            }
-            val down = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
-            val up = KeyEvent(KeyEvent.ACTION_UP, keyCode)
-            am.dispatchMediaKeyEvent(down)
-            am.dispatchMediaKeyEvent(up)
-            log("[Medya Kontrolü] 🎵 Uzaktan medya komutu uygulandı: $command")
-        } catch (t: Throwable) {
-            log("[Medya Hata] $command: ${t.message}")
-        }
-    }
-
-    fun sendMediaCommand(command: String) {
-        Thread {
-            val peers = discoveredPeers.filter { it.isMutuallyPaired }
-            for (peer in peers) {
-                try {
-                    java.net.Socket().use { sock ->
-                        sock.connect(java.net.InetSocketAddress(peer.ipAddress, peer.tcpControlPort), 2500)
-                        val hdr = JSONObject().apply {
-                            put("type", "MEDIA_CONTROL")
-                            put("senderId", localDeviceId)
-                            put("senderName", localDeviceName)
-                            put("senderPlatform", "android")
-                            put("mediaCommand", command)
-                        }
-                        TcpFrameCodec.writeFrame(sock.getOutputStream(), hdr)
-                    }
-                } catch (t: Throwable) {
-                    log("[Medya Gönderim Hatası] ${peer.deviceName}: ${t.message}")
-                }
-            }
-        }.start()
     }
 }

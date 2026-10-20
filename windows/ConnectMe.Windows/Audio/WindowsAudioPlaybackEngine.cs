@@ -140,8 +140,12 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
             : sender.Address;
         string senderIp = normalizedAddr.ToString();
 
-        if (IPAddress.IsLoopback(normalizedAddr) || senderIp == _network.LocalIpv4)
+        if (IPAddress.IsLoopback(normalizedAddr) ||
+            senderIp == _network.LocalIpv4 ||
+            ConnectMeNetworkNode.GetLocalIPv4Addresses().Any(a => a.Equals(normalizedAddr)))
+        {
             return;
+        }
 
         _lastAudioPacketTime = DateTimeOffset.UtcNow;
         _totalAudioBytesReceived += packet.PcmData.Length;

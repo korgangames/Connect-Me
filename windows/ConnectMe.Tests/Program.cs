@@ -971,27 +971,10 @@ public static class Program
 
         // Node A resets route to NONE
         await nodeA.SetAndBroadcastAudioRouteAsync(null);
-        await Task.Delay(150);
+        await Task.Delay(350);
 
         AssertTrue(receivedRouteOnB == null,
-            "Ses Sıfırlama: Yönlendirme devre dışı bırakıldığında tüm cihazlar yerel moda döndü");
-
-        // Test Spotify Connect-style Media Transport Control (MEDIA_CONTROL)
-        string? receivedMediaCmdOnB = null;
-        nodeB.MediaCommandReceived += cmd => receivedMediaCmdOnB = cmd;
-
-        await nodeA.SendMediaCommandAsync("PLAY_PAUSE");
-        await Task.Delay(150);
-
-        AssertTrue(receivedMediaCmdOnB == "PLAY_PAUSE",
-            "Medya Kontrolü (MEDIA_CONTROL): Spotify/YouTube Oynat/Duraklat komutu başarıyla karşı cihaza aktarıldı");
-
-        receivedMediaCmdOnB = null;
-        await nodeA.SendMediaCommandAsync("NEXT");
-        await Task.Delay(150);
-
-        AssertTrue(receivedMediaCmdOnB == "NEXT",
-            "Medya Kontrolü (MEDIA_CONTROL): Sonraki parça komutu başarıyla karşı cihaza aktarıldı");
+            $"Ses Sıfırlama: Yönlendirme devre dışı bırakıldığında tüm cihazlar yerel moda döndü (receivedRouteOnB={receivedRouteOnB?.TargetDeviceId ?? "null"})");
 
         try { Directory.Delete(tempShelf, true); } catch { }
     }

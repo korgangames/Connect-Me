@@ -504,9 +504,6 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("audioRoute")]
     public AudioRouteTarget? AudioRoute { get; set; }
-
-    [JsonPropertyName("mediaCommand")]
-    public string? MediaCommand { get; set; }
 }
 
 /// <summary>

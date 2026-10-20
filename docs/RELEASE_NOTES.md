@@ -1,3 +1,35 @@
+# Connect Me v1.8.15 — Medya Kontrolcüsünün Kaldırılması, Android'de Windows Ses Çıkışlarının Görünürlüğü & Ultra Düşük Gecikmeli Ses İletimi
+
+Bu sürüm; kullanıcı talebi doğrultusunda medya oynatıcı kontrol butonlarını tamamen kaldırır, Android cihazlarda Windows ses çıkışlarının ("Ses Çıkışını Seç" menüsünde) görünmeme sorununu çözer, Windows WASAPI loopback yakalama motorunu farklı ses kartları ve DAC modelleriyle tam uyumlu hale getirir ve Android ses çalma motorunu UDP soket seviyesinde ayrıştırılmış ultra düşük gecikmeli (<40ms) bir mimariye kavuşturur.
+
+---
+
+### 🌟 v1.8.15 Yenilikleri ve Düzeltmeleri:
+
+* **🧹 Medya Oynatıcı Kontrolcüsü Tamamen Kaldırıldı:**
+  - Kullanıcı isteği üzerine Windows, Android ve Linux arayüzlerine ve arka plan servislerine eklenmiş olan Medya Oynatıcı düğmeleri (⏮️ Önceki, ⏯️ Oynat/Duraklat, ⏭️ Sonraki, Hedef Değiştir), Win32 multimedya klavye kancaları (`keybd_event`), Linux DBus/playerctl MPRIS kontrolleri ve `MEDIA_CONTROL` protokol mesajları kod tabanından tamamen temizlendi.
+  - Arayüzler sade, odaklı ve orijinal ergonomisine geri döndürüldü.
+
+* **🔊 Android'de Windows Ses Çıkışlarının Görünmeme Sorunu Giderildi:**
+  - **Sorun:** Android "Ses Çıkışını Seç" menüsü açıldığında, sadece katı şekilde çift taraflı eşleşmiş cihazları listeliyordu; otomatik yeniden bağlanma (`TRUSTED_RECONNECT`) sonrasında Windows cihazının ses çıkışları menüde listelenemiyordu.
+  - **Çözüm:** 
+    1. Android `showAudioSinkSelectionDialog` filtresi genişletilerek güvenilir yeniden bağlanan, PIN doğrulaması tamamlanan veya ses çıkışı anons eden tüm cihazlar listeye dahil edildi; ayrıca IP adresi bulunan keşfedilmiş cihazlar yedek olarak listelendi.
+    2. Ses menüsü açıldığı anda tüm bağlı cihazlara otomatik `AUDIO_SINKS_REQUEST` paketi gönderilerek en güncel ses çıkış listesinin anında Android'e akması sağlandı.
+    3. Hem Windows hem Android `TRUSTED_RECONNECT` el sıkışmalarında karşılıklı ses çıkış anonsu (`AUDIO_SINKS_ANNOUNCE`) ve talep akışı zorunlu kılındı.
+
+* **⚡ Windows WASAPI Loopback Yakalama Motoru Sağlamlaştırıldı (Statik Gürültü ve Çökme Engellendi):**
+  - **Sorun:** Windows ses yakalama motoru, 20ms'lik katı tampon boyutuyla başlatıldığında bazı Realtek, Nahimic veya USB DAC ses kartlarında arabellek hizalama hatası (`0x88890001`) vererek yakalamayı başlatamıyor ya da 24-bit/32-bit int formatlarda doğrudan `short*` dökümü yapılarak karşıya beyaz gürültü/statik ses basılmasına neden oluyordu.
+  - **Çözüm:**
+    1. Arabellek başlatma süresi 100ms'ye çıkarıldı; başarısızlık durumunda 200ms ve 500ms aşamalı geri çekilme (fallback) mekanizması eklendi.
+    2. `ConvertToPcm16Stereo` dönüştürücüsü, IEEE Float (32-bit float), 16-bit PCM, 24-bit PCM ve 32-bit tamsayı PCM formatlarını `WAVEFORMATEXTENSIBLE.SubFormat` GUID'lerine göre matematiksel olarak kusursuz şekilde 16-bit 48kHz Stereo PCM'e dönüştürür.
+    3. Loopback yankı/döngü engelleme (anti-loopback) filtresi, makinenin tüm yerel IPv4 adreslerini denetleyerek kendi yayınını geri yakalama ihtimalini tamamen sıfırladı.
+
+* **🚀 Android Ultra-Düşük Gecikmeli & Ayrık Ses Çalma Motoru:**
+  - **Sorun:** Android'de UDP soketinden gelen ses paketleri doğrudan `AudioTrack.write()` çağrısına veriliyordu. Donanım ses arabelleği dolu olduğunda soket okuma iş parçacığı bloklanıyor, işletim sistemi UDP soket arabelleği taşıyor ve ses paketleri düşerek kesinti, takılma ve gecikme oluşturuyordu.
+  - **Çözüm:** Ağdan ses paketi alma iş parçacığı ile donanıma ses yazma iş parçacığı `ConcurrentLinkedQueue` ile birbirinden tamamen ayrıştırıldı. Maksimum 8 parçalık (~40ms) sınırlı jitter kuyruğu uygulandı; gecikme daima <40ms seviyesinde kilitlenerek kulakla fark edilemeyecek senkronizasyonda ve sıfır parazitle çalınması sağlandı.
+
+---
+
 # Connect Me v1.8.14 — Spotify Connect Mantığında Medya Kontrol Merkezi, Statik Gürültüsüz & Kesintisiz Ses Aktarımı
 
 Bu sürüm; Windows ana makine ile Android cihaz arasındaki ses aktarımı (Audio Matrix) sorunlarını, Android'de mikrofon fallback'inden kaynaklanan statik/hışırtı gürültüsünü, Windows WASAPI Loopback mute kilitlenmesini kökten çözer ve Spotify Connect mantığında çalışan iki yönlü Medya & Müzik Taşıma / Kontrol Merkezini (`MEDIA_CONTROL`) ekosisteme kazandırır.

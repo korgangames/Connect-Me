@@ -690,7 +690,6 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
 
@@ -792,72 +791,8 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- 3. SPOTIFY & MEDYA KONTROL MERKEZİ (SPOTIFY CONNECT MANTIĞI) -->
+                        <!-- 3. SES SEVİYESİ AYARI -->
                         <Border Grid.Row="2"
-                                Background="#0D1117"
-                                BorderBrush="#1E3A8A"
-                                BorderThickness="1"
-                                CornerRadius="8"
-                                Padding="14"
-                                Margin="0,0,0,10">
-                            <StackPanel>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Text="🎵 Medya &amp; Spotify Kontrol Merkezi" FontSize="12.5" FontWeight="SemiBold" Foreground="#60A5FA"/>
-                                        <TextBlock Text="Spotify, YouTube, VLC veya müzik çaları tek tıkla cihazlar arasında kontrol edin." FontSize="11" Foreground="#94A3B8" Margin="0,2,0,6"/>
-                                    </StackPanel>
-                                    <Border Grid.Column="1" Background="#1E293B" CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
-                                        <TextBlock Text="Spotify Connect Mantığı" FontSize="10" Foreground="#38BDF8"/>
-                                    </Border>
-                                </Grid>
-                                <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                    <Button x:Name="MediaPrevBtn"
-                                            Click="MediaPrevBtn_Click"
-                                            Background="#1F2937"
-                                            Foreground="#F3F4F6"
-                                            FontWeight="SemiBold"
-                                            Padding="12,6"
-                                            Margin="0,0,8,4"
-                                            Cursor="Hand"
-                                            Content="⏮️ Önceki Parça"/>
-                                    <Button x:Name="MediaPlayPauseBtn"
-                                            Click="MediaPlayPauseBtn_Click"
-                                            Background="#059669"
-                                            Foreground="White"
-                                            FontWeight="Bold"
-                                            Padding="16,6"
-                                            Margin="0,0,8,4"
-                                            Cursor="Hand"
-                                            Content="⏯️ Oynat / Duraklat"/>
-                                    <Button x:Name="MediaNextBtn"
-                                            Click="MediaNextBtn_Click"
-                                            Background="#1F2937"
-                                            Foreground="#F3F4F6"
-                                            FontWeight="SemiBold"
-                                            Padding="12,6"
-                                            Margin="0,0,8,4"
-                                            Cursor="Hand"
-                                            Content="⏭️ Sonraki Parça"/>
-                                    <Button x:Name="MediaTargetToggleBtn"
-                                            Click="MediaTargetToggleBtn_Click"
-                                            Background="#1E293B"
-                                            Foreground="#38BDF8"
-                                            BorderBrush="#0284C7"
-                                            BorderThickness="1"
-                                            Padding="10,6"
-                                            Margin="0,0,0,4"
-                                            Cursor="Hand"
-                                            Content="📱 Hedef: Bağlı Telefon / Tüm Cihazlar"/>
-                                </WrapPanel>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- 4. SES SEVİYESİ AYARI -->
-                        <Border Grid.Row="3"
                                 Background="#0D1117"
                                 BorderBrush="#21262D"
                                 BorderThickness="1"
@@ -891,8 +826,8 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- 5. KULLANIM VE BİLGİ -->
-                        <Border Grid.Row="4"
+                        <!-- 4. KULLANIM VE BİLGİ -->
+                        <Border Grid.Row="3"
                                 Background="#0D1117"
                                 BorderBrush="#21262D"
                                 BorderThickness="1"

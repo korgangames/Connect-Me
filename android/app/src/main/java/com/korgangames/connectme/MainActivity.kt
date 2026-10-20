@@ -788,81 +788,6 @@ class MainActivity : AppCompatActivity() {
         }
         audioCard.addView(audioToggleBtn)
 
-        // 🎵 Spotify & Medya Kontrolü (Spotify Connect Mantığı)
-        val mediaControlTitle = TextView(this).apply {
-            text = "🎵 Spotify & Medya Kontrolü (Tüm Cihazlar):"
-            textSize = 12f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#60A5FA"))
-            setPadding(0, 14, 0, 6)
-        }
-        audioCard.addView(mediaControlTitle)
-
-        val mediaBtnRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.setMargins(0, 4, 0, 0)
-            layoutParams = lp
-        }
-
-        val prevBtn = Button(this).apply {
-            text = "⏮️ Önceki"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            textSize = 11.5f
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#1F2937"))
-                cornerRadius = 14f
-            }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(0, 0, 6, 0)
-            }
-            setOnClickListener {
-                ConnectMeService.instance?.sendMediaCommand("PREV")
-                Toast.makeText(this@MainActivity, "Önceki Parça", Toast.LENGTH_SHORT).show()
-            }
-        }
-        mediaBtnRow.addView(prevBtn)
-
-        val playPauseBtn = Button(this).apply {
-            text = "⏯️ Oynat / Duraklat"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            textSize = 11.5f
-            setTypeface(typeface, Typeface.BOLD)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#059669"))
-                cornerRadius = 14f
-            }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.4f).apply {
-                setMargins(0, 0, 6, 0)
-            }
-            setOnClickListener {
-                ConnectMeService.instance?.sendMediaCommand("PLAY_PAUSE")
-                Toast.makeText(this@MainActivity, "Oynat / Duraklat", Toast.LENGTH_SHORT).show()
-            }
-        }
-        mediaBtnRow.addView(playPauseBtn)
-
-        val nextBtn = Button(this).apply {
-            text = "⏭️ Sonraki"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            textSize = 11.5f
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#1F2937"))
-                cornerRadius = 14f
-            }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                ConnectMeService.instance?.sendMediaCommand("NEXT")
-                Toast.makeText(this@MainActivity, "Sonraki Parça", Toast.LENGTH_SHORT).show()
-            }
-        }
-        mediaBtnRow.addView(nextBtn)
-        audioCard.addView(mediaBtnRow)
-
         root.addView(audioCard)
 
         // Universal Clipboard & Drop Shelf Card
@@ -1226,7 +1151,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAudioSinkSelectionDialog() {
-        val pairedPeers = ConnectMeService.discoveredPeers.filter { it.isMutuallyPaired }
+        // Asynchronously request fresh sinks from all peers so latest outputs appear
+        ConnectMeService.instance?.requestAudioSinksFromAllPeers()
+
+        val pairedPeers = ConnectMeService.discoveredPeers.filter {
+            it.isMutuallyPaired || it.myEnteredPinVerifiedByRemote || it.remoteEnteredMyPinVerified || it.remoteAudioSinks.isNotEmpty()
+        }.ifEmpty {
+            ConnectMeService.discoveredPeers.filter { it.ipAddress.isNotEmpty() }
+        }
         val currentRoute = ConnectMeService.activeAudioRoute
 
         val items = mutableListOf<String>()

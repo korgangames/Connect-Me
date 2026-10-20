@@ -145,22 +145,42 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             }
 
             var wfe = Marshal.PtrToStructure<WAVEFORMATEX>(pFormat);
-            int subFormatTag = 0;
-            if (wfe.wFormatTag == WAVE_FORMAT_EXTENSIBLE && wfe.cbSize >= 22)
+            bool isFloat = false;
+
+            if (wfe.wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
             {
-                subFormatTag = Marshal.ReadInt32(pFormat, 24);
+                isFloat = true;
             }
-            bool isFloat = (wfe.wFormatTag == WAVE_FORMAT_IEEE_FLOAT) ||
-                           (subFormatTag == 3) ||
-                           (wfe.wBitsPerSample == 32);
+            else if (wfe.wFormatTag == WAVE_FORMAT_EXTENSIBLE && wfe.cbSize >= 22)
+            {
+                var wfext = Marshal.PtrToStructure<WAVEFORMATEXTENSIBLE>(pFormat);
+                isFloat = (wfext.SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+            }
+            else if (wfe.wBitsPerSample == 32)
+            {
+                isFloat = true;
+            }
 
             uint channels = wfe.nChannels;
             uint sampleRate = wfe.nSamplesPerSec;
+            ushort bitsPerSample = wfe.wBitsPerSample;
 
             IntPtr initPtr = Marshal.ReadIntPtr(acVtbl, 3 * IntPtr.Size);
             var init = Marshal.GetDelegateForFunctionPointer<InitializeDelegate>(initPtr);
-            // Ultra-low latency: 20ms driver buffer (200,000 in 100-ns units)
-            int initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 200000 /* 20ms */, 0, pFormat, IntPtr.Zero);
+
+            // WASAPI shared loopback buffer: 100ms standard with progressive fallbacks
+            long hnsBuffer = 1000000; // 100ms
+            int initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
+            if (initHr != 0)
+            {
+                hnsBuffer = 2000000; // 200ms fallback
+                initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
+            }
+            if (initHr != 0)
+            {
+                hnsBuffer = 5000000; // 500ms fallback
+                initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
+            }
             if (initHr != 0)
             {
                 CaptureStatusChanged?.Invoke($"WASAPI loopback başlatılamadı (0x{initHr:X}).");
@@ -185,9 +205,11 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             var start = Marshal.GetDelegateForFunctionPointer<StartDelegate>(startPtr);
             start(pAudioClient);
 
-            if (!IPAddress.TryParse(_targetIp, out var parsedIp) || IPAddress.IsLoopback(parsedIp))
+            if (!IPAddress.TryParse(_targetIp, out var parsedIp) ||
+                IPAddress.IsLoopback(parsedIp) ||
+                ConnectMe.Core.Network.ConnectMeNetworkNode.GetLocalIPv4Addresses().Any(a => a.Equals(parsedIp)))
             {
-                CaptureStatusChanged?.Invoke("Hata: Hedef IP geçersiz veya yerel döngü (loopback) seçildi.");
+                CaptureStatusChanged?.Invoke("Hata: Hedef IP geçersiz veya bu bilgisayarın kendi IP'si seçildi.");
                 return;
             }
 
@@ -210,7 +232,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
 
                     if (!isSilent)
                     {
-                        byte[] pcmChunk = ConvertToPcm16Stereo(pData, numFramesToRead, channels, sampleRate, isFloat, isSilent: false);
+                        byte[] pcmChunk = ConvertToPcm16Stereo(pData, numFramesToRead, channels, sampleRate, bitsPerSample, isFloat, isSilent: false);
 
                         if (pcmChunk.Length > 0 && _udpClient != null)
                         {
@@ -285,13 +307,13 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
         uint numFrames,
         uint channels,
         uint sampleRate,
+        ushort bitsPerSample,
         bool isFloat,
         bool isSilent)
     {
         if (numFrames == 0) return Array.Empty<byte>();
 
         // We produce 48000 Hz Stereo (2 channels) 16-bit PCM:
-        // numFrames at sampleRate -> targetFrames at 48000 Hz
         int targetFrames = (int)numFrames;
         if (sampleRate != 48000 && sampleRate > 0)
         {
@@ -319,12 +341,30 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
                         pOutShort[i] = (short)Math.Clamp((int)(sample * 32767f), short.MinValue, short.MaxValue);
                     }
                 }
-                else
+                else if (bitsPerSample == 16)
                 {
                     short* pIn = (short*)pData;
                     for (int i = 0; i < numFrames * 2; i++)
                     {
                         pOutShort[i] = pIn[i];
+                    }
+                }
+                else if (bitsPerSample == 32)
+                {
+                    int* pIn = (int*)pData;
+                    for (int i = 0; i < numFrames * 2; i++)
+                    {
+                        pOutShort[i] = (short)(pIn[i] >> 16);
+                    }
+                }
+                else if (bitsPerSample == 24)
+                {
+                    byte* pIn = (byte*)pData;
+                    for (int i = 0; i < numFrames * 2; i++)
+                    {
+                        int val = pIn[i * 3] | (pIn[i * 3 + 1] << 8) | (pIn[i * 3 + 2] << 16);
+                        if ((val & 0x800000) != 0) val |= unchecked((int)0xFF000000);
+                        pOutShort[i] = (short)(val >> 8);
                     }
                 }
             }
@@ -351,7 +391,7 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
                             right = pIn[srcFrame * channels + 1];
                         }
                     }
-                    else
+                    else if (bitsPerSample == 16)
                     {
                         short* pIn = (short*)pData;
                         if (channels == 1)
@@ -362,6 +402,39 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
                         {
                             left = pIn[srcFrame * channels] / 32768f;
                             right = pIn[srcFrame * channels + 1] / 32768f;
+                        }
+                    }
+                    else if (bitsPerSample == 32)
+                    {
+                        int* pIn = (int*)pData;
+                        if (channels == 1)
+                        {
+                            left = right = pIn[srcFrame] / 2147483648f;
+                        }
+                        else
+                        {
+                            left = pIn[srcFrame * channels] / 2147483648f;
+                            right = pIn[srcFrame * channels + 1] / 2147483648f;
+                        }
+                    }
+                    else if (bitsPerSample == 24)
+                    {
+                        byte* pIn = (byte*)pData;
+                        int leftIdx = (int)(srcFrame * channels);
+                        int lVal = pIn[leftIdx * 3] | (pIn[leftIdx * 3 + 1] << 8) | (pIn[leftIdx * 3 + 2] << 16);
+                        if ((lVal & 0x800000) != 0) lVal |= unchecked((int)0xFF000000);
+                        left = lVal / 8388608f;
+
+                        if (channels == 1)
+                        {
+                            right = left;
+                        }
+                        else
+                        {
+                            int rightIdx = (int)(srcFrame * channels + 1);
+                            int rVal = pIn[rightIdx * 3] | (pIn[rightIdx * 3 + 1] << 8) | (pIn[rightIdx * 3 + 2] << 16);
+                            if ((rVal & 0x800000) != 0) rVal |= unchecked((int)0xFF000000);
+                            right = rVal / 8388608f;
                         }
                     }
 

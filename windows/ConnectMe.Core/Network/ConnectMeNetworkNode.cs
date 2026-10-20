@@ -135,7 +135,6 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public event Action<AudioChunkPacket, IPEndPoint>? RemoteAudioChunkReceived;
     public event Action<string, List<AudioSinkDescriptor>>? RemoteAudioSinksUpdated;
     public event Action<AudioRouteTarget?>? AudioRouteChanged;
-    public event Action<string>? MediaCommandReceived;
     public event Action<string, string>? RemoteClipboardTextReceived;
     public event Action<byte[], string>? RemoteClipboardImageReceived;
     public event Action<ShelfItemEntry>? ShelfItemReceived;
@@ -965,6 +964,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 Log($"[Otomatik Bağlantı] ⭐ '{peer.DeviceName}' ile güvenli otomatik bağlantı sağlandı (PIN gerekmedi).");
                 PeerPairingStatusChanged?.Invoke(peer);
                 PeerDiscoveredOrUpdated?.Invoke(peer);
+                _ = SendAudioSinksAndRouteToPeerAsync(peer);
                 return true;
             }
         }
@@ -2337,6 +2337,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         Log($"[Otomatik Bağlantı] ⭐ Güvenilir cihaz '{peer.DeviceName}' ({remoteIp}) PIN'siz otomatik bağlandı!");
                         PeerPairingStatusChanged?.Invoke(peer);
                         PeerDiscoveredOrUpdated?.Invoke(peer);
+                        _ = SendAudioSinksAndRouteToPeerAsync(peer);
                     }
                     else
                     {
@@ -2490,48 +2491,25 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     }
                     break;
 
+                case "AUDIO_SINKS_REQUEST":
+                    {
+                        string senderId = !string.IsNullOrEmpty(header.SenderId) ? header.SenderId : remoteIp;
+                        var target = _peers.TryGetValue(senderId, out var reqPeer)
+                            ? reqPeer
+                            : _peers.Values.FirstOrDefault(p => p.IpAddress == remoteIp);
+                        if (target != null)
+                        {
+                            _ = SendAudioSinksAndRouteToPeerAsync(target);
+                        }
+                    }
+                    break;
+
                 case "AUDIO_ROUTE_CHANGE":
                     ActiveAudioRoute = header.AudioRoute;
                     string targetName = header.AudioRoute?.TargetSinkName ?? header.AudioRoute?.TargetDeviceName ?? "Varsayılan (Devre Dışı)";
                     Log($"[Ses Yönlendirme] 🔄 Aktif ses hedefi güncellendi -> {targetName} (Cihaz: {header.AudioRoute?.TargetDeviceId})");
                     AudioRouteChanged?.Invoke(header.AudioRoute);
                     break;
-
-                case "MEDIA_CONTROL":
-                    if (!string.IsNullOrEmpty(header.MediaCommand))
-                    {
-                        Log($"[Medya Kontrolü] 🎵 '{header.SenderName}' cihazından medya komutu alındı: {header.MediaCommand}");
-                        MediaCommandReceived?.Invoke(header.MediaCommand);
-                    }
-                    break;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Sends Spotify Connect-style remote media playback commands (PLAY_PAUSE, NEXT, PREV, VOLUME_UP, VOLUME_DOWN, MUTE)
-    /// to paired devices across the mesh colony.
-    /// </summary>
-    public async Task SendMediaCommandAsync(string command, string? targetPeerId = null)
-    {
-        var header = new TcpControlHeader
-        {
-            Type = "MEDIA_CONTROL",
-            SenderId = LocalDeviceId,
-            SenderName = LocalDeviceName,
-            SenderPlatform = LocalPlatform,
-            MediaCommand = command
-        };
-
-        if (targetPeerId != null && _peers.TryGetValue(targetPeerId, out var targetPeer) && targetPeer.IsMutuallyPaired)
-        {
-            await SendTcpFrameToPeerAsync(targetPeer, header).ConfigureAwait(false);
-        }
-        else
-        {
-            foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired))
-            {
-                await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
             }
         }
     }
@@ -2567,7 +2545,20 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public async Task BroadcastLocalAudioSinksAsync()
     {
         if (LocalAudioSinks.Count == 0)
-            return;
+        {
+            LocalAudioSinks = new List<AudioSinkDescriptor>
+            {
+                new()
+                {
+                    DeviceId = LocalDeviceId,
+                    DeviceName = LocalDeviceName,
+                    Platform = LocalPlatform,
+                    SinkId = "default",
+                    SinkName = "Varsayılan Ses Çıkışı",
+                    IsDefault = true
+                }
+            };
+        }
 
         var header = new TcpControlHeader
         {
@@ -2578,7 +2569,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             AudioSinks = LocalAudioSinks.ToList()
         };
 
-        foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired))
+        foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired || p.IsTrusted))
         {
             await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
         }
@@ -2596,7 +2587,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             AudioRoute = route
         };
 
-        foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired))
+        foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired || p.IsTrusted))
         {
             await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
         }
@@ -2606,21 +2597,34 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     public async Task SendAudioSinksAndRouteToPeerAsync(PeerDeviceNode peer)
     {
-        if (peer == null || !peer.IsMutuallyPaired)
+        if (peer == null)
             return;
 
-        if (LocalAudioSinks.Count > 0)
+        if (LocalAudioSinks.Count == 0)
         {
-            var sinksHdr = new TcpControlHeader
+            LocalAudioSinks = new List<AudioSinkDescriptor>
             {
-                Type = "AUDIO_SINKS_ANNOUNCE",
-                SenderId = LocalDeviceId,
-                SenderName = LocalDeviceName,
-                SenderPlatform = LocalPlatform,
-                AudioSinks = LocalAudioSinks.ToList()
+                new()
+                {
+                    DeviceId = LocalDeviceId,
+                    DeviceName = LocalDeviceName,
+                    Platform = LocalPlatform,
+                    SinkId = "default",
+                    SinkName = "Varsayılan Ses Çıkışı",
+                    IsDefault = true
+                }
             };
-            await SendTcpFrameToPeerAsync(peer, sinksHdr).ConfigureAwait(false);
         }
+
+        var sinksHdr = new TcpControlHeader
+        {
+            Type = "AUDIO_SINKS_ANNOUNCE",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform,
+            AudioSinks = LocalAudioSinks.ToList()
+        };
+        await SendTcpFrameToPeerAsync(peer, sinksHdr).ConfigureAwait(false);
 
         if (ActiveAudioRoute != null)
         {
