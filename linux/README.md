@@ -6,9 +6,13 @@ Connect Me, **Nobara Linux** (KDE Plasma 5 & 6 Wayland) ve tüm modern Linux mas
 
 ## 🌟 Temel Yetenekler (Linux Entegrasyonu)
 
-1. **2D Grafiksel Ekran Konfigürasyonu (GUI):**
+1. **2D Grafiksel Ekran Konfigürasyonu & Dinamik Kontakt Noktaları (Windows Parity):**
    - Konsol / terminal gerektirmeyen tam donanımlı Tkinter masaüstü kontrol merkezi (`connectme_linux_gui.py`).
    - Bağlı tüm yerel monitörleri (`DP-1`, `HDMI-A-1`) ve kenarlara kenetlenmiş Windows/Android cihazları görsel 2D kanvas üzerinde gösterir.
+   - **Tek Kenara Çoklu Cihaz (Kontakt Noktaları):** Bir monitör kenarına birden fazla cihaz eklendiğinde (ör. sağ kenara hem telefon hem laptop) kenar otomatik olarak orantılı dilimlere bölünür (`%0-%50`, `%50-%100`).
+   - Monitör kenarında aktif geçiş aralığını gösteren neon parlayan portal çizgileri ve rozetler (`📍 DISPLAY1 Sağ %0-%50`).
+   - Windows ile birebir tutarlı araç çubukları: Yakınlaştırma (Zoom) slider'ı (`0.6x-1.4x`), fare tekerleğiyle yakınlaştırma, **`[🎯 Merkeze Sığdır]`**, **`[📐 Kenarlara Dağıt]`**, **`[🚀 Seçili Ekrana Şimdi Geç]`** ve alttaki hızlı yönlendirme butonları (`[ ⬅️ Sol ] [ ⬆️ Üst ] [ ⬇️ Alt ] [ Sağ ➡️ ]`).
+   - **24px Ölü Köşe (Dead-Corner) Koruması:** Pencere kapatma ('X') butonuna basarken veya köşelerde gezinirken kazara geçiş engellenir.
 2. **KDE Plasma Wayland Otomatik Algılama (`kscreen-doctor -j`):**
    - KDE Plasma'nın yerel KScreen servisi üzerinden tüm bağlı fiziksel ekranları, sanal masaüstü koordinatlarını `(virtualX, virtualY)`, çözünürlüklerini ve ölçeklerini (`scale`) otomatik okur.
    - `wlr-randr --json` ve `xrandr --query` ile wlroots ve X11 oturumlarında da eksiksiz çalışır.

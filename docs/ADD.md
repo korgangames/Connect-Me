@@ -2,8 +2,8 @@
 
 **Proje Adı:** Connect Me  
 **Organizasyon:** Korgan Games (`korgangames/Connect-Me`)  
-**Sürüm:** 1.3 (Çoklu Monitör Sanal Masaüstü, Linux Nobara KDE Plasma & Windows Futureproof Edition)  
-**Hedef Platformlar:** Windows (10/11), Android (10+), Linux (Nobara — KDE Plasma 5/6 Wayland & X11)  
+**Sürüm:** 1.8.16 (Çoklu Monitör Sanal Masaüstü, Dinamik Kontakt Noktaları, Çift Yönlü Ses Matrisi, Linux & Windows UX Eşitliği)  
+**Hedef Platformlar:** Windows (10/11), Android (8+ / 14 / 15), Linux (Nobara — KDE Plasma 5/6 Wayland & X11)  
 **Bağlantı Teknolojileri:** Hibrit Wi-Fi (LAN / mDNS / UDP Fast-Path / TCP Framed) + Bluetooth (BLE Keşif & HID)
 
 ---
@@ -53,6 +53,20 @@ flowchart TB
    * Uzak bir cihaz (ör. Android telefon) spesifik bir yerel monitörün kenarına (ör. `DISPLAY2` sağ kenarı) kenetlenebilir.
 3. **Negatif Sanal Masaüstü Koordinat Desteği:**
    * Sol veya üst monitörler negatif koordinatlara (`VirtualX = -1080`) sahip olsa bile, uzak cihazdan yerel bilgisayara geri dönüş koordinatları (`ComputeLocalEntryPoint`) tam piksel hassasiyetiyle hedeflenen monitöre indirilir.
+
+### 2.2. Dinamik Kontakt Noktaları & Tek Kenara Çoklu Cihaz (v1.8.16)
+* **Kısmi Kenar Segmentleri (`EdgeOffsetStart`, `EdgeOffsetEnd`):**
+  * Tek bir fiziksel kenara birden fazla cihaz bağlanabilir (örneğin sağ kenara hem telefon hem dizüstü).
+  * `DistributePeersOnEdge` algoritması ilgili kenardaki cihazları orantısal kesitlere (`%0 - %50`, `%50 - %100`) böler.
+  * Monitör kenarında aktif geçiş aralığını gösteren neon parlayan portal çizgileri çizilir; sentineller imlecin temas noktası oranına göre en yakın cihazı seçer.
+
+### 2.3. Merkezi Çift Yönlü Ses Matrisi (Audio Matrix Hub)
+* **Windows WASAPI Loopback Yakalama:**
+  * 32-bit float, 16/24/32-bit PCM ve USB DAC modelleriyle tam uyumlu, yankı/döngü engelleme (anti-loopback) korumalı masaüstü ses yakalama.
+* **Android Ultra-Düşük Gecikmeli Ses Çalma:**
+  * UDP soket dinleme iş parçacığı ile donanımsal ses yazma (`AudioTrack`) `ConcurrentLinkedQueue` ile ayrıştırılmıştır (<40ms gecikme, sıfır takılma/jitter).
+* **Dinamik Ses Çıkış Keşfi (`AUDIO_SINKS_ANNOUNCE`):**
+  * Tüm bağlı cihazların hoparlör ve kulaklıkları otomatik listelenir ve arayüzden tek tıkla hedef ses çıkışı seçilebilir.
 
 ---
 
@@ -104,9 +118,13 @@ flowchart TB
 ## 5. Tamamlanan Yol Haritası (Status)
 * [x] **Çoklu Monitör Sanal Masaüstü Desteği (Windows & Linux Nobara KDE Plasma)**
 * [x] **İç Birleşim Çizgisi Koruması & Dış Kenar Yönlendirmesi**
-* [x] **Çift Taraflı 6 Haneli PIN Doğrulaması**
+* [x] **Çift Taraflı 6 Haneli PIN Doğrulaması & 1-Tık Kabul Et**
 * [x] **Bu Cihaza Güven ve Hatırla (Sıfır-PIN Otomatik Yeniden Bağlantı)**
-* [x] **2D Sekmeli Ferah Arayüz & Yakınlaştırılabilir Kanvas**
+* [x] **2D Sekmeli Ferah Arayüz & Yakınlaştırılabilir Kanvas (Windows & Linux)**
+* [x] **Dinamik Kontakt Noktaları & Tek Kenara Çoklu Cihaz Orantısal Dağıtımı**
+* [x] **Windows & Linux 2D Kanvas UX/UI Eşitliği (Araç Çubukları & Portal Çizgileri)**
+* [x] **Çift Yönlü Ses Yönlendirme Matrisi (WASAPI Loopback + Android Düşük Gecikmeli Kuyruk)**
 * [x] **Evrensel Pano & Drop Shelf Dosya Aktarımı**
-* [x] **Nobara Linux Çoklu Monitör Servisi (`linux/connectme_linux_daemon.py`)**
-* [x] **31/31 Birim ve Entegrasyon Testi**
+* [x] **Dahili Uygulama İçi Otomatik Güncelleyici (Android In-App & Windows Self-Update)**
+* [x] **Nobara Linux Çoklu Monitör & Sentinels Servisi (`linux/connectme_linux_daemon.py` / `gui.py`)**
+* [x] **60/60 Birim, Protokol ve Entegrasyon Testi (%100 Başarı)**

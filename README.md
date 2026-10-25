@@ -16,11 +16,11 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
 
 | İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.7.7.zip` | [⬇️ **ConnectMe-Windows-x64-v1.7.7.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.7/ConnectMe-Windows-x64-v1.7.7.zip) |
-| 📱 **Android** | `.apk` | `ConnectMe-v1.7.7.apk` | [⬇️ **ConnectMe-v1.7.7.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.7/ConnectMe-v1.7.7.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.7.7.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.7.7.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.7.7/ConnectMe-Linux-x64-v1.7.7.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.8.16.zip` | [⬇️ **ConnectMe-Windows-x64-v1.8.16.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.16/ConnectMe-Windows-x64-v1.8.16.zip) |
+| 📱 **Android** | `.apk` | `ConnectMe-v1.8.16.apk` | [⬇️ **ConnectMe-v1.8.16.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.16/ConnectMe-v1.8.16.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.8.16.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.8.16.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.16/ConnectMe-Linux-x64-v1.8.16.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.7.7 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.7.7)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.8.16 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.8.16)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
@@ -41,16 +41,18 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
    - Bilgisayarlar (Windows veya Nobara Linux) birden fazla fiziksel ekrana (ör. 2'li yatay, 3'lü dikey+yatay) sahip olabilir.
    - **İç Birleşim Koruması (Internal Seam Rule):** Bilgisayarın kendi fiziksel monitörleri arasında (ör. DP-1 ile HDMI-1 arasında) imleç yerel olarak serbestçe geçer. Connect Me imlece müdahale etmez. İmleç yalnızca dışa açık kenara çarptığında Android veya diğer bilgisayara geçer.
    - **Linux KDE Plasma Wayland Entegrasyonu:** `kscreen-doctor -j`, `wlr-randr` ve `xrandr` ile Linux'taki tüm çoklu ekran düzenlerini otomatik algılar.
-5. **Ekran Ayarları Tarzı İnteraktif 2D Sürükle-Bırak Ekran Konfigürasyonu:**
+5. **Ekran Ayarları Tarzı İnteraktif 2D Ekran Konfigürasyonu & Dinamik Kontakt Noktaları:**
    - Hem Windows hem de Linux arayüzünde bağlı cihazlar **2D Kanvas** üzerinde gerçek oranlarıyla kutular halinde gösterilir.
-   - Farenizle sürükleyip bıraktığınızda en yakın kenara (Sol, Sağ, Üst, Alt) manyetik olarak yapışır.
-   - Tek tıkla yön butonları (`[← Sol]`, `[Sağ →]`, `[↑ Üst]`, `[↓ Alt]`) ile anında kenar atanabilir.
+   - **Tek Kenara Çoklu Cihaz (Kontakt Noktaları):** Bir monitör kenarına birden fazla cihaz bağlandığında (ör. sağ kenara hem telefon hem dizüstü) kenar otomatik olarak orantılı dilimlere bölünür (`%0-%50`, `%50-%100`).
+   - Fiziksel monitörün ilgili kenarında aktif geçiş aralığını gösteren neon parlayan portal çizgileri ve kontakt noktası rozetleri yer alır.
+   - Windows ve Linux arayüzlerinde birebir tutarlı araç çubukları: Yakınlaştırma (Zoom) slider'ı, fare tekeri ile zoom, **`[🎯 Merkeze Sığdır]`**, **`[📐 Kenarlara Dağıt]`**, **`[🚀 Seçili Ekrana Şimdi Geç]`** ve alttaki hızlı yönlendirme butonları (`[ ⬅️ Sol ] [ ⬆️ Üst ] [ ⬇️ Alt ] [ Sağ ➡️ ]`).
 6. **Çift Taraflı 6 Haneli PIN & Sıfır-PIN Otomatik Bağlantı:**
    - İki cihaz da birbirini onaylar; `⭐ Bu Cihaza Güven ve Hatırla` seçildiğinde bir daha şifre sormadan otomatik bağlanır.
 7. **Evrensel Pano (Universal Clipboard) & Manyetik Cep (Drop Shelf):**
    - Çift taraflı onaylanmış tüm cihazlar arasında anlık metin/pano senkronizasyonu ve sürükle-bırak TCP dosya paylaşımı.
-8. **🎧 Merkezi Ses Yönlendirme (Central Audio Hub — Tüm Sesler Kulaklıkta):**
-   - Android ve Linux sesleri UDP 42852 portundan ultra-düşük gecikmeyle (<15ms) merkez Windows bilgisayara ve kulaklığınıza aktarılır.
+8. **🎧 Çift Yönlü Ses Yönlendirme Matrisi (Audio Matrix Hub):**
+   - Windows WASAPI loopback yakalama motoru (32-bit float, 16/24/32-bit PCM ve USB DAC tam uyumu) ile masaüstü sesleri, Android cihazın ayrık düşük gecikmeli (<40ms) donanım ses kuyruğuna kusursuz iletilir.
+   - Cihazlar ağdaki tüm ses çıkışlarını dinamik olarak keşfeder ve arayüzdeki "Ses Çıkışını Seç" menüsünden istenen cihaza anında yönlendirilebilir.
 9. **🔄 Dahili Uygulama İçi Otomatik Güncelleyici (In-Program Auto Updater):**
    - Android, Windows ve Linux ortamlarında tek tıkla kendini güncelleme ve yeniden başlatma.
 
@@ -74,9 +76,9 @@ python3 linux/connectme_linux_gui.py
 * Detaylı Linux talimatları için [**`linux/README.md`**](linux/README.md) dosyasına göz atabilirsiniz.
 
 ### 3. Android Uygulamasını Kurma
-* Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-v1.7.7.apk`** dosyasını derler.
+* Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-v1.8.16.apk`** dosyasını derler.
 
-### 4. Test Paketi Çalıştırma (51/51 Test — %100 Başarı)
+### 4. Test Paketi Çalıştırma (60/60 Test — %100 Başarı)
 ```powershell
 dotnet run --project "windows\ConnectMe.Tests\ConnectMe.Tests.csproj" -c Release
 ```
