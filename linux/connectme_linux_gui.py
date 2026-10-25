@@ -167,62 +167,50 @@ class ScreenEdgeSentinels:
         if hasattr(self.node, "hardware_grabber"):
             self.node.hardware_grabber.sync_cursor(cur_x, cur_y)
 
-        try:
-            scr_w = self.root.winfo_screenwidth()
-            scr_h = self.root.winfo_screenheight()
-        except Exception:
-            scr_w, scr_h = 1920, 1080
-
-        self.node.topology.ensure_bounds(cur_x, cur_y)
-        min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
-        max_x = max(min_x + vw, scr_w)
-        max_y = max(min_y + vh, scr_h)
-
         mon = self.node.topology.find_monitor_at(cur_x, cur_y)
+        if not mon:
+            mon = self.node.topology.monitors[0] if self.node.topology.monitors else None
+        if not mon:
+            return
 
-        # Right Edge
-        if cur_x >= max_x - 6:
-            if not mon or not self.node.topology.is_internal_seam(mon, EDGE_RIGHT, cur_x, cur_y):
-                norm_pos = max(0.0, min(1.0, (cur_y - mon.virtualY) / float(max(1, mon.height)))) if mon else 0.5
-                target = self.node.resolve_peer_for_edge_and_norm(EDGE_RIGHT, norm_pos)
-                if target:
-                    self.set_cooldown(1.2)
-                    if self.on_edge_triggered:
-                        self.on_edge_triggered(target, EDGE_RIGHT, norm_pos)
-                    return
+        rel_x = cur_x - mon.virtualX
+        rel_y = cur_y - mon.virtualY
 
-        # Left Edge
-        if cur_x <= min_x + 6:
-            if not mon or not self.node.topology.is_internal_seam(mon, EDGE_LEFT, cur_x, cur_y):
-                norm_pos = max(0.0, min(1.0, (cur_y - mon.virtualY) / float(max(1, mon.height)))) if mon else 0.5
-                target = self.node.resolve_peer_for_edge_and_norm(EDGE_LEFT, norm_pos)
-                if target:
-                    self.set_cooldown(1.2)
-                    if self.on_edge_triggered:
-                        self.on_edge_triggered(target, EDGE_LEFT, norm_pos)
-                    return
+        # Dead-corner koruması (24px): Pencere kapatma ('X') ve köşe butonları sırasında yanlışlıkla geçişi engeller
+        dead_zone = 24
+        in_v_corner = rel_y < dead_zone or rel_y > (mon.height - dead_zone)
+        in_h_corner = rel_x < dead_zone or rel_x > (mon.width - dead_zone)
 
-        # Top Edge
-        if cur_y <= min_y + 6:
-            if not mon or not self.node.topology.is_internal_seam(mon, EDGE_TOP, cur_x, cur_y):
-                norm_pos = max(0.0, min(1.0, (cur_x - mon.virtualX) / float(max(1, mon.width)))) if mon else 0.5
-                target = self.node.resolve_peer_for_edge_and_norm(EDGE_TOP, norm_pos)
-                if target:
-                    self.set_cooldown(1.2)
-                    if self.on_edge_triggered:
-                        self.on_edge_triggered(target, EDGE_TOP, norm_pos)
-                    return
+        hit_edge = EDGE_NONE
+        norm_pos = 0.5
 
-        # Bottom Edge
-        if cur_y >= max_y - 6:
-            if not mon or not self.node.topology.is_internal_seam(mon, EDGE_BOTTOM, cur_x, cur_y):
-                norm_pos = max(0.0, min(1.0, (cur_x - mon.virtualX) / float(max(1, mon.width)))) if mon else 0.5
-                target = self.node.resolve_peer_for_edge_and_norm(EDGE_BOTTOM, norm_pos)
-                if target:
-                    self.set_cooldown(1.2)
-                    if self.on_edge_triggered:
-                        self.on_edge_triggered(target, EDGE_BOTTOM, norm_pos)
-                    return
+        if rel_x >= mon.width - 5 and not in_v_corner:
+            hit_edge = EDGE_RIGHT
+            norm_pos = max(0.0, min(1.0, rel_y / float(max(1, mon.height))))
+        elif rel_x <= 4 and not in_v_corner:
+            hit_edge = EDGE_LEFT
+            norm_pos = max(0.0, min(1.0, rel_y / float(max(1, mon.height))))
+        elif rel_y <= 4 and not in_h_corner:
+            hit_edge = EDGE_TOP
+            norm_pos = max(0.0, min(1.0, rel_x / float(max(1, mon.width))))
+        elif rel_y >= mon.height - 5 and not in_h_corner:
+            hit_edge = EDGE_BOTTOM
+            norm_pos = max(0.0, min(1.0, rel_x / float(max(1, mon.width))))
+
+        if hit_edge == EDGE_NONE:
+            return
+
+        # Fiziksel monitörler arası iç dikiş (Internal Seam) kontrolü
+        if self.node.topology.is_internal_seam(mon, hit_edge, cur_x, cur_y):
+            return
+
+        mon_id = getattr(mon, "monitorId", None)
+        target = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon_id)
+        if target:
+            self.set_cooldown(1.2)
+            if self.on_edge_triggered:
+                self.on_edge_triggered(target, hit_edge, norm_pos)
+            return
 
 
 class HostCaptureOverlay:
@@ -611,25 +599,75 @@ class ConnectMeLinuxGui:
         tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(tab, text="🖥️ 2D Ekran Konfigürasyonu")
 
+        # ÜST ARAÇ ÇUBUĞU (Windows UX ile birebir tutarlı: Yakınlaştırma, Merkeze Sığdır, Kenarlara Dağıt, Seçili Ekrana Geç)
         ctrl_bar = ttk.Frame(tab)
-        ctrl_bar.pack(fill=tk.X, pady=4)
-        ttk.Label(ctrl_bar, text="Linux ve bağlı cihazların 2D uzamsal kenar haritası:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        ctrl_bar.pack(fill=tk.X, pady=(0, 6))
 
-        ip_canvas_btn = ttk.Button(ctrl_bar, text="🌐 IP ile Cihaz Ekle", style="Accent.TButton", command=self._show_manual_ip_dialog)
-        ip_canvas_btn.pack(side=tk.RIGHT, padx=4)
+        # Sol taraf: Zoom ve otomatik düzen butonları
+        left_ctrl = ttk.Frame(ctrl_bar)
+        left_ctrl.pack(side=tk.LEFT, fill=tk.X)
 
-        refresh_btn = ttk.Button(ctrl_bar, text="🔄 Ekranları Yeniden Tara", command=self._refresh_monitors)
-        refresh_btn.pack(side=tk.RIGHT, padx=4)
+        ttk.Label(left_ctrl, text="Yakınlaştırma:", font=("Segoe UI", 9), foreground="#94A3B8").pack(side=tk.LEFT, padx=(0, 4))
+        self.zoom_slider = ttk.Scale(left_ctrl, from_=0.6, to=1.4, value=1.0, length=100, command=self._on_zoom_slider_change)
+        self.zoom_slider.pack(side=tk.LEFT, padx=2)
+        self.zoom_percent_lbl = ttk.Label(left_ctrl, text="100%", font=("Segoe UI", 9, "bold"), foreground="#38BDF8", width=5)
+        self.zoom_percent_lbl.pack(side=tk.LEFT, padx=(2, 6))
 
-        reset_btn = ttk.Button(ctrl_bar, text="📐 Düzeni Sıfırla", command=self._reset_canvas_layout)
-        reset_btn.pack(side=tk.RIGHT, padx=4)
+        ttk.Button(left_ctrl, text="🎯 Merkeze Sığdır", command=self._fit_canvas_view).pack(side=tk.LEFT, padx=3)
+        ttk.Button(left_ctrl, text="📐 Kenarlara Dağıt", command=self._auto_arrange_screens).pack(side=tk.LEFT, padx=3)
 
-        self.canvas = tk.Canvas(tab, bg="#0F172A", highlightthickness=1, highlightbackground="#334155")
-        self.canvas.pack(fill=tk.BOTH, expand=True, pady=6)
+        # Sağ taraf: Hızlı aksiyon butonları
+        right_ctrl = ttk.Frame(ctrl_bar)
+        right_ctrl.pack(side=tk.RIGHT)
 
-        legend_bar = ttk.Frame(tab)
-        legend_bar.pack(fill=tk.X, pady=2)
-        ttk.Label(legend_bar, text="🟦 Mavi: Yerel Linux Monitörleri   |   🟩 Yeşil: Bağlı Cihazlar (Aktif)   |   🟧 Sarı: PIN Bekleyen Cihazlar   |   🟪 Mor: İç Monitör Geçişi", foreground="#94A3B8", font=("Segoe UI", 9)).pack(side=tk.LEFT)
+        self.switch_peer_btn = ttk.Button(right_ctrl, text="🚀 Seçili Ekrana Şimdi Geç", style="Accent.TButton", command=self._switch_to_selected_peer)
+        self.switch_peer_btn.pack(side=tk.RIGHT, padx=4)
+
+        ttk.Button(right_ctrl, text="🌐 IP ile Cihaz Ekle", command=self._show_manual_ip_dialog).pack(side=tk.RIGHT, padx=3)
+        ttk.Button(right_ctrl, text="🔄 Ekranları Tara", command=self._refresh_monitors).pack(side=tk.RIGHT, padx=3)
+        ttk.Button(right_ctrl, text="📐 Sıfırla", command=self._reset_canvas_layout).pack(side=tk.RIGHT, padx=3)
+
+        # GENİŞ 2D EKRAN DİZİLİM KANVASI
+        self.canvas = tk.Canvas(tab, bg="#090D13", highlightthickness=1.5, highlightbackground="#21262D")
+        self.canvas.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.canvas.bind("<MouseWheel>", self._on_canvas_mousewheel)
+        self.canvas.bind("<Button-4>", lambda e: self._zoom_canvas(0.08))
+        self.canvas.bind("<Button-5>", lambda e: self._zoom_canvas(-0.08))
+        self.canvas.bind("<Configure>", lambda e: self._draw_2d_canvas())
+
+        # ALT ÇUBUK: BİLGİ ETİKETİ VE HIZLI KENAR TAŞIMA BUTONLARI (Windows UX ile birebir tutarlı)
+        bottom_frame = ttk.Frame(tab)
+        bottom_frame.pack(fill=tk.X, pady=(4, 0))
+
+        # Satır 1: Dinamik Kontakt Noktası & Seçim Bilgisi
+        self.canvas_info_lbl = ttk.Label(
+            bottom_frame,
+            text="Ekran kutularını sürükleyip merkez ekranın istediğiniz kenarına yapıştırın veya aşağıdaki butonlarla kenarlara dağıtın.",
+            font=("Segoe UI", 9.5),
+            foreground="#38BDF8"
+        )
+        self.canvas_info_lbl.pack(fill=tk.X, pady=(0, 4))
+
+        # Satır 2: Sol = Lejant, Sağ = Hızlı Kenar Butonları
+        row2 = ttk.Frame(bottom_frame)
+        row2.pack(fill=tk.X)
+
+        legend_box = ttk.Frame(row2)
+        legend_box.pack(side=tk.LEFT)
+        ttk.Label(
+            legend_box,
+            text="🟦 Yerel Monitör  |  🟩 Aktif Cihaz  |  🟧 PIN Bekleyen  |  🟦 Parlak Mavi: Kontakt Noktası",
+            foreground="#64748B",
+            font=("Segoe UI", 8.5)
+        ).pack(side=tk.LEFT)
+
+        move_box = ttk.Frame(row2)
+        move_box.pack(side=tk.RIGHT)
+        ttk.Label(move_box, text="Seçili Cihazı Taşı:", font=("Segoe UI", 9), foreground="#94A3B8").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(move_box, text="⬅️ Sol", command=lambda: self._quick_assign_selected_peer(EDGE_LEFT)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(move_box, text="⬆️ Üst", command=lambda: self._quick_assign_selected_peer(EDGE_TOP)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(move_box, text="⬇️ Alt", command=lambda: self._quick_assign_selected_peer(EDGE_BOTTOM)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(move_box, text="Sağ ➡️", command=lambda: self._quick_assign_selected_peer(EDGE_RIGHT)).pack(side=tk.LEFT, padx=2)
 
     def _build_tab_devices(self):
         tab = ttk.Frame(self.notebook, padding=14)
@@ -1198,6 +1236,200 @@ class ConnectMeLinuxGui:
         if hasattr(self, "edge_sentinels"):
             self.edge_sentinels.update_sentinels()
         self._log("[Ekran Düzeni] 📐 2D ekran yerleşimi sıfırlandı ve cihazlar yerel monitörlerin sağına hizalandı.")
+        if hasattr(self, "canvas_info_lbl"):
+            self.canvas_info_lbl.config(text="📐 2D ekran yerleşimi sıfırlandı.")
+
+    def _get_current_canvas_scale(self) -> float:
+        cw = max(400, self.canvas.winfo_width())
+        ch = max(300, self.canvas.winfo_height())
+        min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
+        base = min((cw - 180) / max(1, total_w * 1.35), (ch - 130) / max(1, total_h * 1.35), 0.13)
+        base = max(0.045, min(base, 0.12))
+        return base * getattr(self, "canvas_scale", 1.0)
+
+    def _get_canvas_local_mon_rects(self) -> list:
+        cw = max(400, self.canvas.winfo_width())
+        ch = max(300, self.canvas.winfo_height())
+        min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
+        scale = self._get_current_canvas_scale()
+        loc_w = total_w * scale
+        loc_h = total_h * scale
+        offset_x = max(20, (cw - loc_w) / 2.0)
+        offset_y = max(20, (ch - loc_h) / 2.0)
+
+        rects = []
+        for m in self.node.topology.monitors:
+            mx1 = offset_x + (m.virtualX - min_x) * scale
+            my1 = offset_y + (m.virtualY - min_y) * scale
+            mx2 = mx1 + m.width * scale
+            my2 = my1 + m.height * scale
+            rects.append((m, mx1, my1, mx2, my2))
+        return rects
+
+    def _on_zoom_slider_change(self, val):
+        try:
+            self.canvas_scale = float(val)
+            if hasattr(self, "zoom_percent_lbl"):
+                self.zoom_percent_lbl.config(text=f"{int(self.canvas_scale * 100)}%")
+            self._draw_2d_canvas()
+        except Exception:
+            pass
+
+    def _on_canvas_mousewheel(self, event):
+        delta = 0.08 if event.delta > 0 else -0.08
+        self._zoom_canvas(delta)
+
+    def _zoom_canvas(self, delta: float):
+        new_scale = max(0.60, min(1.40, getattr(self, "canvas_scale", 1.0) + delta))
+        self.canvas_scale = new_scale
+        if hasattr(self, "zoom_slider"):
+            self.zoom_slider.set(new_scale)
+        if hasattr(self, "zoom_percent_lbl"):
+            self.zoom_percent_lbl.config(text=f"{int(new_scale * 100)}%")
+        self._draw_2d_canvas()
+
+    def _fit_canvas_view(self):
+        self.canvas_scale = 1.0
+        if hasattr(self, "zoom_slider"):
+            self.zoom_slider.set(1.0)
+        if hasattr(self, "zoom_percent_lbl"):
+            self.zoom_percent_lbl.config(text="100%")
+        self._draw_2d_canvas()
+
+    def _auto_arrange_screens(self):
+        """Automatically distributes all paired peers cleanly across screen edges."""
+        self.peer_canvas_coords.clear()
+        self.node.auto_arrange_peers()
+        self._refresh_state()
+        if hasattr(self, "edge_sentinels"):
+            self.edge_sentinels.update_sentinels()
+        self._draw_2d_canvas()
+        self._log("[Ekran Konfigürasyonu] 📐 Tüm ekranlar kenarlara dengeli olarak dağıtıldı.")
+        if hasattr(self, "canvas_info_lbl"):
+            self.canvas_info_lbl.config(text="📐 Tüm bağlı cihazlar kenarlara otomatik ve dengeli olarak dağıtıldı.")
+
+    def _switch_to_selected_peer(self):
+        """Switches mouse/keyboard control immediately to the selected peer."""
+        target = None
+        if self.selected_peer_id and self.selected_peer_id in self.node.peers:
+            target = self.node.peers[self.selected_peer_id]
+        if not target or not target.get("isMutuallyPaired"):
+            for p in self.node.peers.values():
+                if p.get("isMutuallyPaired"):
+                    target = p
+                    break
+        if target and target.get("isMutuallyPaired"):
+            edge = target.get("assignedEdge", EDGE_RIGHT)
+            seg_s = float(target.get("edgeOffsetStart", 0.0))
+            seg_e = float(target.get("edgeOffsetEnd", 1.0))
+            mid = (seg_s + seg_e) / 2.0
+            self._activate_host_capture(target, edge, mid)
+        else:
+            if hasattr(self, "canvas_info_lbl"):
+                self.canvas_info_lbl.config(text="⚠️ Fare aktarımı için önce aktif bağlı bir cihaz seçin.")
+
+    def _quick_assign_selected_peer(self, edge: int):
+        """Moves selected peer to the requested edge and evenly distributes peers on that edge."""
+        if not self.selected_peer_id:
+            paired = [p for p in self.node.peers.values() if p.get("isMutuallyPaired")]
+            if len(paired) == 1:
+                self.selected_peer_id = paired[0]["deviceId"]
+            elif self.node.peers:
+                self.selected_peer_id = next(iter(self.node.peers.keys()))
+
+        if not self.selected_peer_id or self.selected_peer_id not in self.node.peers:
+            if hasattr(self, "canvas_info_lbl"):
+                self.canvas_info_lbl.config(text="⚠️ Kenar atamak için önce kanvastan bir cihaz kutusuna tıklayın.")
+            return
+
+        self._set_peer_edge(self.selected_peer_id, edge)
+        p = self.node.peers[self.selected_peer_id]
+        edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
+        seg_s = int(float(p.get("edgeOffsetStart", 0.0)) * 100)
+        seg_e = int(float(p.get("edgeOffsetEnd", 1.0)) * 100)
+        dev_name = p.get("deviceName", p["deviceId"])
+        mon_id = p.get("attachedMonitorId") or "DISPLAY1"
+        msg = f"🎯 '{dev_name}' -> {mon_id} {edge_names.get(edge, 'Sağ')} Kenar (%{seg_s} - %{seg_e} kesiti) hizalandı."
+        self._log(f"[Ekran Konfigürasyonu] {msg}")
+        if hasattr(self, "canvas_info_lbl"):
+            self.canvas_info_lbl.config(text=msg)
+
+    def _set_peer_edge(self, pid: str, edge: int):
+        if pid not in self.node.peers:
+            return
+        p = self.node.peers[pid]
+        old_edge = p.get("assignedEdge", EDGE_RIGHT)
+        outermost = self.node.topology.get_outermost_monitor_for_edge(edge)
+        mon_id = getattr(outermost, "monitorId", "") if outermost else ""
+
+        p["assignedEdge"] = edge
+        p["attachedMonitorId"] = mon_id
+        p["canvasX"] = None
+        p["canvasY"] = None
+        self.peer_canvas_coords.pop(pid, None)
+
+        if old_edge != edge:
+            self.node.distribute_peers_on_edge(old_edge)
+        self.node.distribute_peers_on_edge(edge)
+
+        self._refresh_state()
+        if hasattr(self, "edge_sentinels"):
+            self.edge_sentinels.update_sentinels()
+        self._draw_2d_canvas()
+
+    def _compute_canvas_pos_from_edge_and_segment(
+        self,
+        peer: dict,
+        local_mon_rects: list,
+        card_w: float,
+        card_h: float
+    ) -> Tuple[float, float]:
+        gap = 12.0
+        arr_edge = peer.get("assignedEdge", EDGE_RIGHT)
+        att_id = peer.get("attachedMonitorId")
+        attached_box = None
+        if att_id:
+            for mon_item in local_mon_rects:
+                if getattr(mon_item[0], "monitorId", "") == att_id:
+                    attached_box = mon_item
+                    break
+        if not attached_box:
+            outermost = self.node.topology.get_outermost_monitor_for_edge(arr_edge)
+            for mon_item in local_mon_rects:
+                if getattr(mon_item[0], "monitorId", "") == getattr(outermost, "monitorId", ""):
+                    attached_box = mon_item
+                    break
+        if not attached_box and local_mon_rects:
+            attached_box = local_mon_rects[0]
+
+        if not attached_box:
+            return 100.0, 100.0
+
+        _, amx1, amy1, amx2, amy2 = attached_box
+        mon_w = max(1.0, amx2 - amx1)
+        mon_h = max(1.0, amy2 - amy1)
+
+        s_start = float(peer.get("edgeOffsetStart", 0.0))
+        s_end = float(peer.get("edgeOffsetEnd", 1.0))
+        mid = (s_start + s_end) / 2.0
+
+        if arr_edge == EDGE_LEFT:
+            px = amx1 - card_w - gap
+            py = amy1 + mid * mon_h - card_h / 2.0
+        elif arr_edge == EDGE_RIGHT:
+            px = amx2 + gap
+            py = amy1 + mid * mon_h - card_h / 2.0
+        elif arr_edge == EDGE_TOP:
+            px = amx1 + mid * mon_w - card_w / 2.0
+            py = amy1 - card_h - gap
+        elif arr_edge == EDGE_BOTTOM:
+            px = amx1 + mid * mon_w - card_w / 2.0
+            py = amy2 + gap
+        else:
+            px = amx2 + gap
+            py = amy1 + mid * mon_h - card_h / 2.0
+
+        return px, py
 
     def _on_peer_drag_start(self, event, peer_id: str):
         self.selected_peer_id = peer_id
@@ -1212,9 +1444,23 @@ class ConnectMeLinuxGui:
         except Exception:
             pass
 
+        if peer_id in self.node.peers:
+            p = self.node.peers[peer_id]
+            dev_name = p.get("deviceName", peer_id)
+            edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
+            cur_edge = p.get("assignedEdge", EDGE_RIGHT)
+            seg_s = int(float(p.get("edgeOffsetStart", 0.0)) * 100)
+            seg_e = int(float(p.get("edgeOffsetEnd", 1.0)) * 100)
+            mon_id = p.get("attachedMonitorId") or "DISPLAY1"
+            msg = f"🎯 {dev_name} -> {mon_id} {edge_names.get(cur_edge, 'Sağ')} Kenar (%{seg_s} - %{seg_e} kesiti)"
+            if hasattr(self, "canvas_info_lbl"):
+                self.canvas_info_lbl.config(text=msg)
+
+        self._draw_2d_canvas()
+
     def _on_peer_drag_motion(self, event):
         pid = self._drag_data.get("peer_id")
-        if not pid:
+        if not pid or pid not in self.node.peers:
             return
         dx = event.x - self._drag_data.get("last_x", event.x)
         dy = event.y - self._drag_data.get("last_y", event.y)
@@ -1228,6 +1474,24 @@ class ConnectMeLinuxGui:
             self.canvas.move(f"peer_{pid}", dx, dy)
         except Exception:
             pass
+
+        peer = self.node.peers[pid]
+        p_w = peer.get("screenWidth", 1920)
+        p_h = peer.get("screenHeight", 1080)
+        scale = self._get_current_canvas_scale()
+        card_w = max(200, min(260, int(p_w * scale + 24)))
+        card_h = max(115, min(140, int(p_h * scale + 30)))
+        local_mon_rects = self._get_canvas_local_mon_rects()
+
+        snapped_edge, final_x, final_y, seg_start, seg_end, attached_mon_id = self._snap_peer_box_to_local_monitors_on_canvas(
+            self._drag_data["card_x"], self._drag_data["card_y"], card_w, card_h, local_mon_rects
+        )
+
+        edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
+        dev_name = peer.get("deviceName", pid)
+        msg = f"🎯 {dev_name} -> {attached_mon_id} {edge_names.get(snapped_edge, 'Sağ')} Kenar (%{int(seg_start*100)} - %{int(seg_end*100)} kesiti)"
+        if hasattr(self, "canvas_info_lbl"):
+            self.canvas_info_lbl.config(text=msg)
 
     def _snap_peer_box_to_local_monitors_on_canvas(
         self,
@@ -1261,7 +1525,7 @@ class ConnectMeLinuxGui:
         norm_dx = (peer_cx - (mon_left + mon_w / 2.0)) / (mon_w / 2.0)
         norm_dy = (peer_cy - (mon_top + mon_h / 2.0)) / (mon_h / 2.0)
 
-        gap = 6.0
+        gap = 8.0
         if abs(norm_dx) >= abs(norm_dy):
             snapped_edge = EDGE_LEFT if norm_dx < 0 else EDGE_RIGHT
             final_x = (mon_left - card_w - gap) if snapped_edge == EDGE_LEFT else (mon_right + gap)
@@ -1301,30 +1565,13 @@ class ConnectMeLinuxGui:
             return
 
         px1, py1 = coords
-        cw = max(400, self.canvas.winfo_width())
-        ch = max(300, self.canvas.winfo_height())
-        min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
-        scale = min((cw - 180) / max(1, total_w * 1.35), (ch - 130) / max(1, total_h * 1.35), 0.13)
-        scale = max(0.045, min(scale, 0.12))
-        loc_w = total_w * scale
-        loc_h = total_h * scale
-        offset_x = max(20, (cw - loc_w) / 2.0)
-        offset_y = max(20, (ch - loc_h) / 2.0)
-
-        local_mon_rects = []
-        for m in self.node.topology.monitors:
-            mx1 = offset_x + (m.virtualX - min_x) * scale
-            my1 = offset_y + (m.virtualY - min_y) * scale
-            mx2 = mx1 + m.width * scale
-            my2 = my1 + m.height * scale
-            local_mon_rects.append((m, mx1, my1, mx2, my2))
-
         peer = self.node.peers[pid]
         p_w = peer.get("screenWidth", 1920)
         p_h = peer.get("screenHeight", 1080)
-        is_mut = peer.get("isMutuallyPaired", False)
-        card_w = max(210, min(260, int(p_w * scale + 24)))
-        card_h = max(130, min(150, int(p_h * scale + 34))) if is_mut else max(92, min(125, int(p_h * scale + 34)))
+        scale = self._get_current_canvas_scale()
+        card_w = max(200, min(260, int(p_w * scale + 24)))
+        card_h = max(115, min(140, int(p_h * scale + 30)))
+        local_mon_rects = self._get_canvas_local_mon_rects()
 
         snapped_edge, final_x, final_y, seg_start, seg_end, attached_mon_id = self._snap_peer_box_to_local_monitors_on_canvas(
             px1, py1, card_w, card_h, local_mon_rects
@@ -1346,54 +1593,12 @@ class ConnectMeLinuxGui:
             self.edge_sentinels.update_sentinels()
         self._draw_2d_canvas()
 
-    def _set_peer_edge(self, pid: str, edge: int):
-        if pid not in self.node.peers:
-            return
-        p = self.node.peers[pid]
-        cw = max(400, self.canvas.winfo_width())
-        ch = max(300, self.canvas.winfo_height())
-        min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
-        scale = min((cw - 180) / max(1, total_w * 1.35), (ch - 130) / max(1, total_h * 1.35), 0.13)
-        scale = max(0.045, min(scale, 0.12))
-        loc_w = total_w * scale
-        loc_h = total_h * scale
-        offset_x = max(20, (cw - loc_w) / 2.0)
-        offset_y = max(20, (ch - loc_h) / 2.0)
-        card_w = max(210, min(260, int(p.get("screenWidth", 1920) * scale + 24)))
-        card_h = max(120, min(145, int(p.get("screenHeight", 1080) * scale + 34)))
-
-        outermost = self.node.topology.get_outermost_monitor_for_edge(edge)
-        mon_id = getattr(outermost, "monitorId", "") if outermost else ""
-
-        if edge == EDGE_RIGHT:
-            px1 = offset_x + loc_w + 40
-            py1 = offset_y + (loc_h - card_h) / 2.0
-        elif edge == EDGE_LEFT:
-            px1 = max(15, offset_x - card_w - 40)
-            py1 = offset_y + (loc_h - card_h) / 2.0
-        elif edge == EDGE_TOP:
-            px1 = offset_x + (loc_w - card_w) / 2.0
-            py1 = max(15, offset_y - card_h - 40)
-        elif edge == EDGE_BOTTOM:
-            px1 = offset_x + (loc_w - card_w) / 2.0
-            py1 = offset_y + loc_h + 40
-        else:
-            px1, py1 = offset_x + loc_w + 40, offset_y
-
-        self.peer_canvas_coords[pid] = (px1, py1)
-        self.node.set_peer_arrangement(
-            pid,
-            edge,
-            edge_offset=0.5,
-            canvas_x=px1,
-            canvas_y=py1,
-            edge_offset_start=0.0,
-            edge_offset_end=1.0,
-            attached_monitor_id=mon_id
-        )
-        self.node.send_edge_config_to_peer(p)
-        self.edge_sentinels.update_sentinels()
-        self._draw_2d_canvas()
+        edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
+        dev_name = peer.get("deviceName", pid)
+        msg = f"🎯 '{dev_name}' -> {attached_mon_id} {edge_names.get(snapped_edge, 'Sağ')} Kenar (%{int(seg_start*100)} - %{int(seg_end*100)} kesiti) hizalandı."
+        self._log(f"[Ekran Konfigürasyonu] {msg}")
+        if hasattr(self, "canvas_info_lbl"):
+            self.canvas_info_lbl.config(text=msg)
 
     def _toggle_host_capture(self):
         if self.host_capture_overlay.is_active:
@@ -1549,10 +1754,8 @@ class ConnectMeLinuxGui:
         min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
         all_peers = list(self.node.peers.values())
 
-        # Determine canvas scaling and centering
-        scale = min((cw - 180) / max(1, total_w * 1.35), (ch - 130) / max(1, total_h * 1.35), 0.13)
-        scale = max(0.045, min(scale, 0.12))
-
+        scale = self._get_current_canvas_scale()
+        local_mon_rects = self._get_canvas_local_mon_rects()
         loc_w = total_w * scale
         loc_h = total_h * scale
         offset_x = max(20, (cw - loc_w) / 2.0)
@@ -1565,14 +1768,7 @@ class ConnectMeLinuxGui:
             self.canvas.create_line(0, gy, cw, gy, fill="#111C33", width=1)
 
         # 2. Local Linux Monitors (True to scale)
-        local_mon_rects = []
-        for m in self.node.topology.monitors:
-            x1 = offset_x + (m.virtualX - min_x) * scale
-            y1 = offset_y + (m.virtualY - min_y) * scale
-            x2 = x1 + m.width * scale
-            y2 = y1 + m.height * scale
-            local_mon_rects.append((m, x1, y1, x2, y2))
-
+        for m, x1, y1, x2, y2 in local_mon_rects:
             bg_color = "#172554" if m.isPrimary else "#0F172A"
             outline_color = "#38BDF8" if m.isPrimary else "#334155"
             self.canvas.create_rectangle(x1, y1, x2, y2, fill=bg_color, outline=outline_color, width=2)
@@ -1605,10 +1801,12 @@ class ConnectMeLinuxGui:
                 p_monitors = p.get("monitors", [])
                 is_mut = p.get("isMutuallyPaired", False)
                 is_pending = p.get("in_ok", False) or p.get("out_ok", False)
+                is_selected = (getattr(self, "selected_peer_id", None) == pid)
+                is_controlling = bool(self.node.controlling_remote_peer and (self.node.controlling_remote_peer.get("deviceId") == pid or self.node.controlling_remote_peer.get("ipAddress") == p.get("ipAddress")))
 
                 arr_edge = p.get("assignedEdge", EDGE_RIGHT)
-                card_w = max(210, min(260, int(p_w * scale + 24)))
-                card_h = max(130, min(150, int(p_h * scale + 34))) if is_mut else max(92, min(125, int(p_h * scale + 34)))
+                card_w = max(200, min(260, int(p_w * scale + 24)))
+                card_h = max(110, min(135, int(p_h * scale + 28))) if is_mut else max(90, min(115, int(p_h * scale + 24)))
 
                 # Determine card position
                 if pid in self.peer_canvas_coords:
@@ -1618,21 +1816,7 @@ class ConnectMeLinuxGui:
                     py1 = p["canvasY"]
                     self.peer_canvas_coords[pid] = (px1, py1)
                 else:
-                    if arr_edge == EDGE_RIGHT:
-                        px1 = offset_x + loc_w + 40
-                        py1 = offset_y + (loc_h - card_h) / 2.0 + idx * 25
-                    elif arr_edge == EDGE_LEFT:
-                        px1 = max(15, offset_x - card_w - 40)
-                        py1 = offset_y + (loc_h - card_h) / 2.0 + idx * 25
-                    elif arr_edge == EDGE_TOP:
-                        px1 = offset_x + (loc_w - card_w) / 2.0 + idx * 25
-                        py1 = max(15, offset_y - card_h - 40)
-                    elif arr_edge == EDGE_BOTTOM:
-                        px1 = offset_x + (loc_w - card_w) / 2.0 + idx * 25
-                        py1 = offset_y + loc_h + 40
-                    else:
-                        px1 = offset_x + loc_w + 40
-                        py1 = offset_y + (loc_h - card_h) / 2.0
+                    px1, py1 = self._compute_canvas_pos_from_edge_and_segment(p, local_mon_rects, card_w, card_h)
                     self.peer_canvas_coords[pid] = (px1, py1)
 
                 p["canvasX"] = px1
@@ -1641,58 +1825,42 @@ class ConnectMeLinuxGui:
                 px2 = px1 + card_w
                 py2 = py1 + card_h
 
-                if is_mut:
+                if is_controlling:
                     card_fill = "#064E3B"
-                    card_outline = "#10B981"
-                    status_txt = "🟢 Çift Taraflı Bağlı (Aktif)"
+                    card_outline = "#4ADE80"
+                    outline_w = 3
+                    status_txt = "🎯 İmleç Bu Ekranda (Aktif)"
                     status_col = "#4ADE80"
-                    line_col = "#10B981"
-                    line_dash = ()
-                elif is_pending:
-                    card_fill = "#451A03"
-                    card_outline = "#F59E0B"
-                    status_txt = "🟠 Sizin Kodunuzu Bekliyor" if p.get("in_ok") else "🟡 Karşı Onay Bekliyor"
-                    status_col = "#FCD34D"
-                    line_col = "#F59E0B"
-                    line_dash = (4, 3)
+                    line_col = "#4ADE80"
+                elif not is_mut:
+                    if is_pending:
+                        card_fill = "#451A03"
+                        card_outline = "#F59E0B"
+                        outline_w = 2
+                        status_txt = "🟠 Sizin Kodunuzu Bekliyor" if p.get("in_ok") else "🟡 Karşı Onay Bekliyor"
+                        status_col = "#FCD34D"
+                        line_col = "#F59E0B"
+                    else:
+                        card_fill = "#1E293B" if is_selected else "#0F172A"
+                        card_outline = "#38BDF8" if is_selected else "#475569"
+                        outline_w = 3 if is_selected else 2
+                        status_txt = "⚪ Keşfedildi (Eşleşin)"
+                        status_col = "#94A3B8"
+                        line_col = "#38BDF8"
                 else:
-                    card_fill = "#0F172A"
-                    card_outline = "#38BDF8"
-                    status_txt = "⚪ Keşfedildi (Eşleşin)"
-                    status_col = "#93C5FD"
-                    line_col = "#38BDF8"
-                    line_dash = (2, 2)
+                    if is_selected:
+                        card_fill = "#0C243B"
+                        card_outline = "#38BDF8"
+                        outline_w = 3
+                    else:
+                        card_fill = "#0B192C"
+                        card_outline = "#10B981"
+                        outline_w = 2
+                    status_txt = "🟢 Çift Taraflı Aktif"
+                    status_col = "#34D399"
+                    line_col = "#38BDF8" if is_selected else "#10B981"
 
-                # Find closest local monitor point to connect cleanly
-                best_mx, best_my, best_px, best_py = offset_x + loc_w, offset_y + loc_h / 2, px1, py1 + card_h / 2
-                min_dist = 999999.0
-                for _, mx1, my1, mx2, my2 in local_mon_rects:
-                    if px1 >= mx2:
-                        d = px1 - mx2
-                        if d < min_dist:
-                            min_dist = d
-                            best_mx, best_my = mx2, (my1 + my2) / 2
-                            best_px, best_py = px1, py1 + card_h / 2
-                    elif px2 <= mx1:
-                        d = mx1 - px2
-                        if d < min_dist:
-                            min_dist = d
-                            best_mx, best_my = mx1, (my1 + my2) / 2
-                            best_px, best_py = px2, py1 + card_h / 2
-                    elif py1 >= my2:
-                        d = py1 - my2
-                        if d < min_dist:
-                            min_dist = d
-                            best_mx, best_my = (mx1 + mx2) / 2, my2
-                            best_px, best_py = px1 + card_w / 2, py1
-                    elif py2 <= my1:
-                        d = my1 - py2
-                        if d < min_dist:
-                            min_dist = d
-                            best_mx, best_my = (mx1 + mx2) / 2, my1
-                            best_px, best_py = px1 + card_w / 2, py2
-
-                # High-visibility Cyan Portal Line Segment on the Local Monitor Edge
+                # Attached monitor and portal bar on local monitor edge
                 if is_mut and local_mon_rects:
                     attached_box = None
                     att_id = p.get("attachedMonitorId")
@@ -1720,36 +1888,75 @@ class ConnectMeLinuxGui:
                         plx1 = plx2 = amx1 - 2
                         ply1 = amy1 + p_s * am_h
                         ply2 = amy1 + p_e * am_h
+                        c_anchor_x, c_anchor_y = px2, py1 + card_h / 2.0
                     elif arr_edge == EDGE_RIGHT:
                         plx1 = plx2 = amx2 + 2
                         ply1 = amy1 + p_s * am_h
                         ply2 = amy1 + p_e * am_h
+                        c_anchor_x, c_anchor_y = px1, py1 + card_h / 2.0
                     elif arr_edge == EDGE_TOP:
                         ply1 = ply2 = amy1 - 2
                         plx1 = amx1 + p_s * am_w
                         plx2 = amx1 + p_e * am_w
+                        c_anchor_x, c_anchor_y = px1 + card_w / 2.0, py2
                     elif arr_edge == EDGE_BOTTOM:
                         ply1 = ply2 = amy2 + 2
                         plx1 = amx1 + p_s * am_w
                         plx2 = amx1 + p_e * am_w
+                        c_anchor_x, c_anchor_y = px1 + card_w / 2.0, py1
                     else:
                         plx1 = plx2 = amx2 + 2
                         ply1 = amy1
                         ply2 = amy2
+                        c_anchor_x, c_anchor_y = px1, py1 + card_h / 2.0
 
-                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill="#38BDF8", width=4, capstyle=tk.ROUND)
+                    portal_glow = "#0284C7" if is_selected else "#065F46"
+                    portal_core = "#38BDF8" if is_selected else "#10B981"
+                    # Glowing portal segment line on local monitor edge
+                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_glow, width=8, capstyle=tk.ROUND)
+                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_core, width=4.5, capstyle=tk.ROUND)
 
-                # Draw clean connector line
-                self.canvas.create_line(best_mx, best_my, best_px, best_py, fill=line_col, dash=line_dash, width=2)
-                if is_mut:
-                    # Portal node circle
-                    mid_x = (best_mx + best_px) / 2
-                    mid_y = (best_my + best_py) / 2
-                    self.canvas.create_oval(mid_x - 4, mid_y - 4, mid_x + 4, mid_y + 4, fill="#10B981", outline="#FFFFFF")
+                    # Portal midpoint & node circle
+                    pmx = (plx1 + plx2) / 2.0
+                    pmy = (ply1 + ply2) / 2.0
+                    self.canvas.create_oval(pmx - 4, pmy - 4, pmx + 4, pmy + 4, fill=portal_core, outline="#FFFFFF", width=1.5)
+
+                    # Clean connector line between portal and peer card
+                    self.canvas.create_line(pmx, pmy, c_anchor_x, c_anchor_y, fill=line_col, width=2)
+                else:
+                    # Find closest local monitor point to connect for unpaired/pending
+                    best_mx, best_my, best_px, best_py = offset_x + loc_w, offset_y + loc_h / 2, px1, py1 + card_h / 2
+                    min_dist = 999999.0
+                    for _, mx1, my1, mx2, my2 in local_mon_rects:
+                        if px1 >= mx2:
+                            d = px1 - mx2
+                            if d < min_dist:
+                                min_dist = d
+                                best_mx, best_my = mx2, (my1 + my2) / 2
+                                best_px, best_py = px1, py1 + card_h / 2
+                        elif px2 <= mx1:
+                            d = mx1 - px2
+                            if d < min_dist:
+                                min_dist = d
+                                best_mx, best_my = mx1, (my1 + my2) / 2
+                                best_px, best_py = px2, py1 + card_h / 2
+                        elif py1 >= my2:
+                            d = py1 - my2
+                            if d < min_dist:
+                                min_dist = d
+                                best_mx, best_my = (mx1 + mx2) / 2, my2
+                                best_px, best_py = px1 + card_w / 2, py1
+                        elif py2 <= my1:
+                            d = my1 - py2
+                            if d < min_dist:
+                                min_dist = d
+                                best_mx, best_my = (mx1 + mx2) / 2, my1
+                                best_px, best_py = px1 + card_w / 2, py2
+                    self.canvas.create_line(best_mx, best_my, best_px, best_py, fill=line_col, dash=(3, 3), width=2)
 
                 # Peer Card Box
                 card_tag = f"peer_{pid}"
-                self.canvas.create_rectangle(px1, py1, px2, py2, fill=card_fill, outline=card_outline, width=2, tags=(card_tag, "peer_card"))
+                self.canvas.create_rectangle(px1, py1, px2, py2, fill=card_fill, outline=card_outline, width=outline_w, tags=(card_tag, "peer_card"))
 
                 dev_icon = "🪟" if "win" in p.get("platform", "").lower() else ("📱" if "android" in p.get("platform", "").lower() else "💻")
                 dev_name = p.get("deviceName", pid)[:18]
@@ -1762,11 +1969,25 @@ class ConnectMeLinuxGui:
                 else:
                     self.canvas.create_text(px1 + 10, py1 + 48, anchor=tk.W, text=f"🖥️ Çözünürlük: {p_w}x{p_h}", fill="#94A3B8", font=("Segoe UI", 8), tags=(card_tag,))
 
-                # Action buttons inside the card
+                # Contact point / Edge info badge for paired peers
+                if is_mut:
+                    edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
+                    edge_icons = {EDGE_LEFT: "👈", EDGE_RIGHT: "👉", EDGE_TOP: "👆", EDGE_BOTTOM: "👇"}
+                    cur_edge = p.get("assignedEdge", EDGE_RIGHT)
+                    seg_s = int(float(p.get("edgeOffsetStart", 0.0)) * 100)
+                    seg_e = int(float(p.get("edgeOffsetEnd", 1.0)) * 100)
+                    mon_id = p.get("attachedMonitorId") or "DISPLAY1"
+                    contact_txt = f"📍 {edge_icons.get(cur_edge, '👉')} {edge_names.get(cur_edge, 'Sağ')} (%{seg_s} - %{seg_e}) [{mon_id}]"
+
+                    # Subtle badge pill
+                    self.canvas.create_rectangle(px1 + 8, py1 + 60, px2 - 8, py1 + 78, fill="#0F172A", outline="#1E293B", width=1, tags=(card_tag,))
+                    self.canvas.create_text(px1 + 12, py1 + 69, anchor=tk.W, text=contact_txt, fill="#38BDF8", font=("Segoe UI", 8, "bold"), tags=(card_tag,))
+
+                # Action button inside the card
                 if not is_mut:
                     if p.get("in_ok"):
                         acc_x1 = px1 + 8
-                        acc_y1 = py2 - 26
+                        acc_y1 = py2 - 28
                         acc_x2 = px1 + card_w // 2 - 4
                         acc_y2 = py2 - 6
                         acc_tag = f"accept_btn_{pid}"
@@ -1775,7 +1996,7 @@ class ConnectMeLinuxGui:
                         self.canvas.tag_bind(acc_tag, "<Button-1>", lambda e, p_id=pid: (self.node.accept_inbound_pairing(p_id, remember=True), "break")[1])
 
                         btn_x1 = px1 + card_w // 2 + 4
-                        btn_y1 = py2 - 26
+                        btn_y1 = py2 - 28
                         btn_x2 = px2 - 8
                         btn_y2 = py2 - 6
                         btn_tag = f"pin_btn_{pid}"
@@ -1784,7 +2005,7 @@ class ConnectMeLinuxGui:
                         self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: (self._show_enter_pin_dialog(peer_obj), "break")[1])
                     else:
                         btn_x1 = px1 + 8
-                        btn_y1 = py2 - 26
+                        btn_y1 = py2 - 28
                         btn_x2 = px2 - 8
                         btn_y2 = py2 - 6
                         btn_tag = f"pin_btn_{pid}"
@@ -1792,36 +2013,8 @@ class ConnectMeLinuxGui:
                         self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 6 Haneli Kodu Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(btn_tag,))
                         self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: (self._show_enter_pin_dialog(peer_obj), "break")[1])
                 else:
-                    # 1. Edge placement pills
-                    edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
-                    edge_icons = {EDGE_LEFT: "👈", EDGE_RIGHT: "👉", EDGE_TOP: "👆", EDGE_BOTTOM: "👇"}
-                    cur_edge = p.get("assignedEdge", EDGE_RIGHT)
-                    seg_s = int(float(p.get("edgeOffsetStart", 0.0)) * 100)
-                    seg_e = int(float(p.get("edgeOffsetEnd", 1.0)) * 100)
-                    att_label = f" (%{seg_s} - %{seg_e})"
-                    self.canvas.create_text(px1 + 10, py1 + 64, anchor=tk.W, text=f"Yerleşim: {edge_icons.get(cur_edge, '👉')} {edge_names.get(cur_edge, 'Sağ')} Kenar{att_label}", fill="#38BDF8", font=("Segoe UI", 8, "bold"), tags=(card_tag,))
-
-                    # 4 Edge selector buttons: [← Sol] [Sağ →] [↑ Üst] [↓ Alt]
-                    pill_w = (card_w - 26) // 4
-                    edge_choices = [(EDGE_LEFT, "Sol"), (EDGE_RIGHT, "Sağ"), (EDGE_TOP, "Üst"), (EDGE_BOTTOM, "Alt")]
-                    for b_idx, (ed_val, ed_label) in enumerate(edge_choices):
-                        bx1 = px1 + 10 + b_idx * (pill_w + 2)
-                        by1 = py1 + 76
-                        bx2 = bx1 + pill_w
-                        by2 = by1 + 18
-                        is_sel = (cur_edge == ed_val)
-                        b_fill = "#0284C7" if is_sel else "#1E293B"
-                        b_out = "#38BDF8" if is_sel else "#334155"
-                        b_txt_col = "#FFFFFF" if is_sel else "#94A3B8"
-                        b_tag = f"edge_btn_{pid}_{ed_val}"
-                        self.canvas.create_rectangle(bx1, by1, bx2, by2, fill=b_fill, outline=b_out, width=1, tags=(b_tag,))
-                        self.canvas.create_text((bx1 + bx2) / 2, (by1 + by2) / 2, text=ed_label, fill=b_txt_col, font=("Segoe UI", 7, "bold"), tags=(b_tag,))
-                        self.canvas.tag_bind(b_tag, "<Button-1>", lambda e, p_id=pid, ed_v=ed_val: (self._set_peer_edge(p_id, ed_v), "break")[1])
-
-                    # 2. Big Action Button: [🎯 Fareyi Aktar]
-                    is_controlling = bool(self.node.controlling_remote_peer and (self.node.controlling_remote_peer.get("deviceId") == pid or self.node.controlling_remote_peer.get("ipAddress") == p.get("ipAddress")))
                     act_btn_x1 = px1 + 8
-                    act_btn_y1 = py2 - 26
+                    act_btn_y1 = py2 - 28
                     act_btn_x2 = px2 - 8
                     act_btn_y2 = py2 - 6
                     act_tag = f"host_switch_{pid}"
@@ -1835,7 +2028,7 @@ class ConnectMeLinuxGui:
                     else:
                         self.canvas.tag_bind(act_tag, "<Button-1>", lambda e, peer_obj=p: (self._activate_host_capture(peer_obj, peer_obj.get("assignedEdge", EDGE_RIGHT)), "break")[1])
 
-                # Bind dragging and clicking
+                # Bind dragging, selecting, and pin dialog
                 self.canvas.tag_bind(card_tag, "<ButtonPress-1>", lambda e, p_id=pid: self._on_peer_drag_start(e, p_id))
                 self.canvas.tag_bind(card_tag, "<B1-Motion>", self._on_peer_drag_motion)
                 self.canvas.tag_bind(card_tag, "<ButtonRelease-1>", self._on_peer_drag_release)

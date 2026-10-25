@@ -1,3 +1,38 @@
+# Connect Me v1.8.16 — Linux 2D Ekran Kanvası Kontakt Noktaları, Çoklu Cihaz Kenar Dağıtımı & Windows UX/UI Eşitliği
+
+Bu sürüm; Linux sürümünü Windows sürümü ile 2D çoklu cihaz ekran düzeni ve etkileşimli kontakt noktaları (contact points) açısından %100 eşitliğe (parity) kavuşturur. Tek bir ekran kenarına birden fazla cihazın (örneğin telefon ve laptop) çakışmadan bağlanabilmesini sağlar, Linux GUI'sine Windows ile birebir tutarlı araç çubuklarını ve görsel portal çizgilerini kazandırır ve kenar geçiş denetçilerini çoklu monitör/kontakt noktası duyarlı hale getirir.
+
+---
+
+### 🌟 v1.8.16 Yenilikleri ve Düzeltmeleri:
+
+* **🖥️ Linux 2D Kanvasında Dinamik Kontakt Noktaları & Tek Kenara Çoklu Cihaz:**
+  - **Sorun:** Linux arayüzünde cihazlar yalnızca katı 4 yönde (Sol, Sağ, Üst, Alt) %0-%100 aralığında eklenebiliyordu. Kartın içindeki yön butonlarına basıldığında tüm kenar tek cihaza tahsis ediliyor, aynı kenara ikinci bir cihaz bağlandığında çakışma ve geçiş kilitlenmesi yaşanıyordu.
+  - **Çözüm:**
+    1. Kartların içine sıkıştırılmış ve oranları bozan 4 yön butonu kaldırıldı. Yerine cihazın hangi fiziksel monitörün hangi kenarına ve yüzde kaçlık kesitine bağlı olduğunu gösteren şık kontakt noktası rozeti (`📍 👉 Sağ (%0 - %50) [DISPLAY1]`) eklendi.
+    2. Tek bir kenara birden fazla cihaz bağlandığında (örneğin sağ kenara hem telefon hem laptop yerleştirildiğinde), `distribute_peers_on_edge` mantığı otomatik olarak devreye girerek kenarı orantılı dilimlere böler (`%0 - %50`, `%50 - %100`).
+    3. Fiziksel monitörün ilgili kenarında aktif geçiş aralığını gösteren neon mavi/zümrüt yeşili parlayan portal çizgisi ve cihaz kartına uzanan temiz bağlantı çizgisi çizilir.
+
+* **🎨 Windows UX/UI ile Birebir Tutarlı Araç Çubukları (Toolbars):**
+  - **Üst Araç Çubuğu:**
+    - Hassas **Yakınlaştırma Slider'ı** (0.6x - 1.4x) ve dinamik yüzde göstergesi (`%100`).
+    - Fare tekerleği (`MouseWheel`) ile kanvas üzerinde yakınlaştırma/uzaklaştırma desteği.
+    - **[🎯 Merkeze Sığdır]:** Kanvas ölçeğini ve görünümünü tek tıkla varsayılana getirir.
+    - **[📐 Kenarlara Dağıt]:** Tüm bağlı ekranları fiziksel monitörlerin boş dış kenarlarına dengeli şekilde otomatik dağıtır.
+    - **[🚀 Seçili Ekrana Şimdi Geç]:** Kanvasta tıklanıp seçilen cihaza anında fare/klavye kontrolü aktarır.
+  - **Alt Araç Çubuğu:**
+    - Seçili cihazın adını, bağlı olduğu monitörü ve kenar kesitini gösteren dinamik durum etiketi.
+    - Renk lejantı (Yerel Monitör, Aktif Cihaz, PIN Bekleyen, Kontakt Noktası).
+    - Hızlı kenar taşıma butonları: **`[ ⬅️ Sol ] [ ⬆️ Üst ] [ ⬇️ Alt ] [ Sağ ➡️ ]`**. Seçili kart bu butonlarla yönlendirildiğinde o kenardaki tüm cihazlar otomatik olarak eşit dilimlere dağıtılır.
+
+* **⚡ Linux Arka Plan Kenar Denetçisi (Sentinels) ve Kontakt Noktası Yönlendirmesi:**
+  - Linux `ScreenEdgeSentinels` modülü artık global masaüstü koordinatları yerine fiziksel monitör sınırlarını denetler.
+  - 24px ölü köşe (dead-corner) koruması ile pencere kapatma ('X') butonlarına basarken kazara geçiş engellenir.
+  - Fiziksel monitörler arasındaki iç dikişler (`is_internal_seam`) korunur; monitörler arası serbestçe gezilir.
+  - İmleç fiziksel monitörün dış kenarına ulaştığında o monitörün ID'si (`mon.monitorId`) ve bağıl kenar konumu (`norm_pos`) hesaplanarak `resolve_peer_for_edge_and_norm` fonksiyonuna iletilir. İlgili kenar kesitine en yakın cihaz belirlenerek kusursuz geçiş sağlanır.
+
+---
+
 # Connect Me v1.8.15 — Medya Kontrolcüsünün Kaldırılması, Android'de Windows Ses Çıkışlarının Görünürlüğü & Ultra Düşük Gecikmeli Ses İletimi
 
 Bu sürüm; kullanıcı talebi doğrultusunda medya oynatıcı kontrol butonlarını tamamen kaldırır, Android cihazlarda Windows ses çıkışlarının ("Ses Çıkışını Seç" menüsünde) görünmeme sorununu çözer, Windows WASAPI loopback yakalama motorunu farklı ses kartları ve DAC modelleriyle tam uyumlu hale getirir ve Android ses çalma motorunu UDP soket seviyesinde ayrıştırılmış ultra düşük gecikmeli (<40ms) bir mimariye kavuşturur.

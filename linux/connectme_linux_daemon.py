@@ -51,7 +51,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.8"
+    return "1.8.16"
 
 VERSION = _resolve_app_version()
 
@@ -1881,6 +1881,60 @@ class ConnectMeLinuxNode:
             peer["attachedMonitorId"] = None
         self.log("[Ekran Düzeni] 📐 Ekran yerleşim düzeni varsayılana sıfırlandı.")
 
+    def distribute_peers_on_edge(self, edge: int) -> None:
+        """Evenly distributes multiple mutually paired peers on a single edge across non-overlapping fractional segments."""
+        same_edge_peers = [
+            p for p in self.peers.values()
+            if p.get("isMutuallyPaired") and p.get("assignedEdge", EDGE_RIGHT) == edge
+        ]
+        if not same_edge_peers:
+            return
+
+        outermost = self.topology.get_outermost_monitor_for_edge(edge)
+        mon_id = getattr(outermost, "monitorId", "") if outermost else ""
+
+        step = 1.0 / len(same_edge_peers)
+        for i, p in enumerate(same_edge_peers):
+            seg_start = round(i * step, 4)
+            seg_end = round((i + 1) * step, 4)
+            p["edgeOffset"] = (seg_start + seg_end) / 2.0
+            p["edgeOffsetStart"] = seg_start
+            p["edgeOffsetEnd"] = seg_end
+            if not p.get("attachedMonitorId"):
+                p["attachedMonitorId"] = mon_id
+            p["canvasX"] = None
+            p["canvasY"] = None
+            self.set_peer_arrangement(
+                p["deviceId"],
+                edge,
+                edge_offset=p["edgeOffset"],
+                edge_offset_start=seg_start,
+                edge_offset_end=seg_end,
+                attached_monitor_id=p.get("attachedMonitorId", mon_id)
+            )
+            self.send_edge_config_to_peer(p)
+
+    def auto_arrange_peers(self) -> None:
+        """Distributes all mutually paired peers across edges (Right, Left, Bottom, Top) and distributes segments evenly."""
+        paired = [p for p in self.peers.values() if p.get("isMutuallyPaired")]
+        if not paired:
+            return
+
+        edges_order = [EDGE_RIGHT, EDGE_LEFT, EDGE_BOTTOM, EDGE_TOP]
+        for i, p in enumerate(paired):
+            edge = edges_order[i % len(edges_order)]
+            outermost = self.topology.get_outermost_monitor_for_edge(edge)
+            mon_id = getattr(outermost, "monitorId", "") if outermost else ""
+            p["assignedEdge"] = edge
+            p["attachedMonitorId"] = mon_id
+            p["canvasX"] = None
+            p["canvasY"] = None
+
+        for edge in edges_order:
+            self.distribute_peers_on_edge(edge)
+
+        self.log(f"[Ekran Düzeni] 📐 {len(paired)} cihaz kenarlara otomatik ve dengeli olarak dağıtıldı.")
+
     def resolve_peer_for_edge_and_norm(self, edge: int, norm_pos: float = 0.5, monitor_id: Optional[str] = None) -> Optional[dict]:
         """Resolves target peer for screen edge based on normalized cursor position and 2D arrangement."""
         candidates = [p for p in self.peers.values() if p.get("isMutuallyPaired") and p.get("assignedEdge", EDGE_RIGHT) == edge]
@@ -1899,6 +1953,7 @@ class ConnectMeLinuxNode:
             if (p.get("edgeOffsetStart", 0.0) - 0.02 <= norm_pos <= p.get("edgeOffsetEnd", 1.0) + 0.02)
         ]
         if exact_matches:
+            exact_matches.sort(key=lambda p: abs(norm_pos - (p.get("edgeOffsetStart", 0.0) + p.get("edgeOffsetEnd", 1.0)) / 2.0))
             return exact_matches[0]
 
         if len(candidates) == 1:
@@ -2575,6 +2630,9 @@ class ConnectMeLinuxNode:
                 arr = self.get_peer_arrangement(dev_id)
                 peer["assignedEdge"] = arr.get("assignedEdge", EDGE_RIGHT)
                 peer["edgeOffset"] = arr.get("edgeOffset", 0.5)
+                peer["edgeOffsetStart"] = arr.get("edgeOffsetStart", 0.0)
+                peer["edgeOffsetEnd"] = arr.get("edgeOffsetEnd", 1.0)
+                peer["attachedMonitorId"] = arr.get("attachedMonitorId", None)
                 if arr.get("canvasX") is not None:
                     peer["canvasX"] = arr.get("canvasX")
                 if arr.get("canvasY") is not None:
@@ -2711,6 +2769,16 @@ class ConnectMeLinuxNode:
         })
         peer["ipAddress"] = ip
         peer["lastSeen"] = time.time()
+        arr = self.get_peer_arrangement(dev_id)
+        peer["assignedEdge"] = arr.get("assignedEdge", EDGE_RIGHT)
+        peer["edgeOffset"] = arr.get("edgeOffset", 0.5)
+        peer["edgeOffsetStart"] = arr.get("edgeOffsetStart", 0.0)
+        peer["edgeOffsetEnd"] = arr.get("edgeOffsetEnd", 1.0)
+        peer["attachedMonitorId"] = arr.get("attachedMonitorId", None)
+        if arr.get("canvasX") is not None:
+            peer["canvasX"] = arr.get("canvasX")
+        if arr.get("canvasY") is not None:
+            peer["canvasY"] = arr.get("canvasY")
 
         # Hedefe anında doğrudan UDP keşif paketi gönder
         try:
