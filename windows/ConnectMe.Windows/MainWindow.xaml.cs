@@ -1350,7 +1350,7 @@ public partial class MainWindow : Window
             peer.HasCustomCanvasPosition = false;
             var outermost = _topology.GetOutermostMonitorForEdge(newEdge);
             string monitorId = !string.IsNullOrEmpty(peer.AttachedLocalMonitorId) 
-                && _topology.CurrentTopology.Monitors.Any(m => m.MonitorId == peer.AttachedLocalMonitorId)
+                && _topology.LocalMonitors.Any(m => m.MonitorId == peer.AttachedLocalMonitorId)
                     ? peer.AttachedLocalMonitorId
                     : outermost.MonitorId;
             peer.AttachedLocalMonitorId = monitorId;
