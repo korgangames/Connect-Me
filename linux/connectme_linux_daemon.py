@@ -51,7 +51,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.17"
+    return "1.8.18"
 
 VERSION = _resolve_app_version()
 
@@ -1289,12 +1289,19 @@ class LinuxHardwareInputGrabber:
         except ImportError:
             return None, 0
 
-        # Letters A-Z
-        if ecodes.KEY_A <= code <= ecodes.KEY_Z:
-            offset = code - ecodes.KEY_A
-            vk = 0x41 + offset
+        # Letters A-Z (Explicit lookup: in Linux evdev, keycodes are NOT alphabetical!)
+        if not hasattr(self, "_evdev_letter_map"):
+            self._evdev_letter_map = {}
+            for c in range(ord('A'), ord('Z') + 1):
+                letter = chr(c)
+                k_code = getattr(ecodes, f"KEY_{letter}", None)
+                if k_code is not None:
+                    self._evdev_letter_map[k_code] = (c, letter.lower(), letter)
+
+        if code in self._evdev_letter_map:
+            vk, lower_char, upper_char = self._evdev_letter_map[code]
             is_upper = self._shift_down ^ self._caps_lock
-            ch = ord(chr(ord('A') + offset) if is_upper else chr(ord('a') + offset))
+            ch = ord(upper_char if is_upper else lower_char)
             return vk, ch
 
         # Top row numbers 0-9
@@ -1332,6 +1339,15 @@ class LinuxHardwareInputGrabber:
             return kp_map[code]
 
         # Punctuation & Symbols (with Shift awareness)
+        # Note: Turkish Q layout keys:
+        # KEY_LEFTBRACE -> Ğ (VK_OEM_4 0xDB)
+        # KEY_RIGHTBRACE -> Ü (VK_OEM_6 0xDD)
+        # KEY_SEMICOLON -> Ş (VK_OEM_1 0xBA)
+        # KEY_APOSTROPHE -> İ (VK_OEM_7 0xDE)
+        # KEY_COMMA -> Ö (VK_OEM_COMMA 0xBC)
+        # KEY_DOT -> Ç (VK_OEM_PERIOD 0xBE)
+        # KEY_SLASH -> . (VK_OEM_2 0xBF)
+        # KEY_102ND -> < (VK_OEM_102 0xE2)
         punct_map = {
             ecodes.KEY_SPACE: (0x20, 32, 32),
             ecodes.KEY_MINUS: (0xBD, ord('-'), ord('_')),
@@ -1345,6 +1361,7 @@ class LinuxHardwareInputGrabber:
             ecodes.KEY_COMMA: (0xBC, ord(','), ord('<')),
             ecodes.KEY_DOT: (0xBE, ord('.'), ord('>')),
             ecodes.KEY_SLASH: (0xBF, ord('/'), ord('?')),
+            getattr(ecodes, "KEY_102ND", 86): (0xE2, ord('<'), ord('>')),
         }
         if code in punct_map:
             vk, unshift_c, shift_c = punct_map[code]
@@ -1679,6 +1696,8 @@ class ConnectMeLinuxNode:
         # Host Control State (When Linux is host controlling Android or Windows)
         self.controlling_remote_peer: Optional[dict] = None
         self.controlling_exit_edge: int = EDGE_NONE
+        self._host_control_lock = threading.Lock()
+        self.last_host_control_return_time: float = 0.0
         self.on_host_control_switched: Optional[Callable[[dict, int, float], None]] = None
         self.on_host_control_returned: Optional[Callable[[], None]] = None
         self._host_seq: int = 0
@@ -1970,98 +1989,111 @@ class ConnectMeLinuxNode:
         if not remote_ip:
             return False
 
-        assigned_edge = peer.get("assignedEdge", EDGE_RIGHT)
-        if local_exit_edge == EDGE_NONE:
-            local_exit_edge = assigned_edge
+        with self._host_control_lock:
+            if self.controlling_remote_peer is not None:
+                if self.controlling_remote_peer.get("deviceId") == peer.get("deviceId") or self.controlling_remote_peer.get("ipAddress") == remote_ip:
+                    return True  # Already controlling this peer
 
-        target_entrance_edge = {
-            EDGE_LEFT: EDGE_RIGHT,
-            EDGE_RIGHT: EDGE_LEFT,
-            EDGE_TOP: EDGE_BOTTOM,
-            EDGE_BOTTOM: EDGE_TOP
-        }.get(local_exit_edge, EDGE_LEFT)
+            assigned_edge = peer.get("assignedEdge", EDGE_RIGHT)
+            if local_exit_edge == EDGE_NONE:
+                local_exit_edge = assigned_edge
 
-        self.controlling_remote_peer = peer
-        self.controlling_exit_edge = local_exit_edge
-
-        # Map local normalized position to peer's relative offset segment
-        seg_start = float(peer.get("edgeOffsetStart", 0.0))
-        seg_end = float(peer.get("edgeOffsetEnd", 1.0))
-        span = max(0.05, seg_end - seg_start)
-        peer_rel_pos = max(0.0, min(1.0, (norm_pos - seg_start) / span))
-
-        # Activate kernel-level hardware input grabber if supported
-        self.hardware_grabber.activate(peer, local_exit_edge, norm_pos)
-
-        # Send Fast UDP EDGE_HANDOFF packet
-        self.send_edge_handoff(peer, target_entrance_edge, peer_rel_pos)
-
-        peer_name = peer.get("deviceName", remote_ip)
-        self.log(f"[Host Modu] 🚀 Fare ve klavye kontrolü '{peer_name}' cihazına aktarıldı (Çıkış: {local_exit_edge}, Giriş: {target_entrance_edge}).")
-
-        if self.on_host_control_switched:
-            try:
-                self.on_host_control_switched(peer, local_exit_edge, norm_pos)
-            except Exception:
-                pass
-        return True
-
-    def return_host_control_to_local(self, notify_peer: bool = True, return_edge: int = EDGE_NONE, norm_pos: float = 0.5) -> None:
-        """Returns mouse/keyboard control back from remote peer to Linux host."""
-        if hasattr(self, "hardware_grabber") and self.hardware_grabber.is_active:
-            self.hardware_grabber.deactivate(notify_peer=False)
-
-        peer = self.controlling_remote_peer
-        if hasattr(self, "hardware_grabber"):
-            eff_edge = return_edge if return_edge != EDGE_NONE else getattr(self, "controlling_exit_edge", EDGE_RIGHT)
-            self.hardware_grabber.sync_cursor_at_edge(eff_edge, norm_pos, peer)
-
-        if not peer:
-            return
-        self.controlling_remote_peer = None
-        peer_name = peer.get("deviceName", "Cihaz")
-        remote_ip = peer.get("ipAddress")
-
-        if notify_peer and remote_ip:
-            return_edge = {
+            target_entrance_edge = {
                 EDGE_LEFT: EDGE_RIGHT,
                 EDGE_RIGHT: EDGE_LEFT,
                 EDGE_TOP: EDGE_BOTTOM,
                 EDGE_BOTTOM: EDGE_TOP
-            }.get(self.controlling_exit_edge, EDGE_LEFT)
+            }.get(local_exit_edge, EDGE_LEFT)
 
-            # 1. Fast UDP packet
-            try:
-                u_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                pkt = struct.pack("<BBBBBBf", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_EDGE_HANDOFF, return_edge, 0, 0.5)
-                u_sock.sendto(pkt, (remote_ip, peer.get("udpInputPort", FAST_INPUT_UDP_PORT)))
-                u_sock.close()
-            except Exception:
-                pass
+            self.controlling_remote_peer = peer
+            self.controlling_exit_edge = local_exit_edge
+            self.active_remote_peer = None
 
-            # 2. Reliable TCP packet
-            try:
-                t_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                t_sock.settimeout(1.5)
-                t_sock.connect((remote_ip, peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
-                self._send_tcp_frame(t_sock, {
-                    "type": "EDGE_RETURN",
-                    "senderId": self.device_id,
-                    "senderName": self.device_name,
-                    "senderUdpPort": FAST_INPUT_UDP_PORT,
-                    "returnEdge": return_edge,
-                    "normalizedPosition": 0.5
-                })
-                t_sock.close()
-            except Exception:
-                pass
+            # Map local normalized position to peer's relative offset segment
+            seg_start = float(peer.get("edgeOffsetStart", 0.0))
+            seg_end = float(peer.get("edgeOffsetEnd", 1.0))
+            span = max(0.05, seg_end - seg_start)
+            peer_rel_pos = max(0.0, min(1.0, (norm_pos - seg_start) / span))
 
-        self.log(f"[Host Modu] ⬅️ '{peer_name}' cihazından yerel Linux masaüstüne dönüş yapıldı.")
-        if self.on_host_control_returned:
-            try:
-                self.on_host_control_returned()
-            except Exception:
-                pass
+            # Activate kernel-level hardware input grabber if supported
+            self.hardware_grabber.activate(peer, local_exit_edge, norm_pos)
+
+            # Send Fast UDP EDGE_HANDOFF packet
+            self.send_edge_handoff(peer, target_entrance_edge, peer_rel_pos)
+
+            peer_name = peer.get("deviceName", remote_ip)
+            self.log(f"[Host Modu] 🚀 Fare ve klavye kontrolü '{peer_name}' cihazına aktarıldı (Çıkış: {local_exit_edge}, Giriş: {target_entrance_edge}).")
+
+            if self.on_host_control_switched:
+                try:
+                    self.on_host_control_switched(peer, local_exit_edge, norm_pos)
+                except Exception:
+                    pass
+            return True
+
+    def return_host_control_to_local(self, notify_peer: bool = True, return_edge: int = EDGE_NONE, norm_pos: float = 0.5) -> None:
+        """Returns mouse/keyboard control back from remote peer to Linux host."""
+        with self._host_control_lock:
+            peer = self.controlling_remote_peer
+            self.controlling_remote_peer = None
+            self.active_remote_peer = None
+            self.last_host_control_return_time = time.time()
+
+            if hasattr(self, "hardware_grabber") and self.hardware_grabber.is_active:
+                self.hardware_grabber.deactivate(notify_peer=False)
+
+            if hasattr(self, "hardware_grabber"):
+                eff_edge = return_edge if return_edge != EDGE_NONE else getattr(self, "controlling_exit_edge", EDGE_RIGHT)
+                self.hardware_grabber.sync_cursor_at_edge(eff_edge, norm_pos, peer)
+
+            if peer and notify_peer:
+                remote_ip = peer.get("ipAddress")
+                if remote_ip:
+                    calc_edge = {
+                        EDGE_LEFT: EDGE_RIGHT,
+                        EDGE_RIGHT: EDGE_LEFT,
+                        EDGE_TOP: EDGE_BOTTOM,
+                        EDGE_BOTTOM: EDGE_TOP
+                    }.get(getattr(self, "controlling_exit_edge", EDGE_RIGHT), EDGE_LEFT)
+
+                    # 1. Fast UDP packet
+                    try:
+                        u_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        pkt = struct.pack("<BBBBBBf", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_EDGE_HANDOFF, calc_edge, 0, 0.5)
+                        u_sock.sendto(pkt, (remote_ip, peer.get("udpInputPort", FAST_INPUT_UDP_PORT)))
+                        u_sock.close()
+                    except Exception:
+                        pass
+
+                    # 2. Reliable TCP packet in background thread to avoid blocking GUI
+                    def _async_send_tcp_return(r_ip=remote_ip, p_dict=peer, e_code=calc_edge):
+                        try:
+                            t_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            t_sock.settimeout(1.5)
+                            t_sock.connect((r_ip, p_dict.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+                            self._send_tcp_frame(t_sock, {
+                                "type": "EDGE_RETURN",
+                                "senderId": self.device_id,
+                                "senderName": self.device_name,
+                                "senderUdpPort": FAST_INPUT_UDP_PORT,
+                                "returnEdge": e_code,
+                                "normalizedPosition": 0.5
+                            })
+                            t_sock.close()
+                        except Exception:
+                            pass
+                    threading.Thread(target=_async_send_tcp_return, daemon=True).start()
+
+            if peer:
+                peer_name = peer.get("deviceName", "Cihaz")
+                self.log(f"[Host Modu] ⬅️ '{peer_name}' cihazından yerel Linux masaüstüne dönüş yapıldı.")
+
+            # ALWAYS notify listeners (such as GUI) so that sentinels and overlays are cleanly restored
+            if self.on_host_control_returned:
+                try:
+                    self.on_host_control_returned()
+                except Exception:
+                    pass
 
     def send_edge_handoff(self, peer: dict, target_entrance_edge: int, normalized_pos: float = 0.5, is_dragging: bool = False) -> None:
         try:
@@ -2997,7 +3029,7 @@ class ConnectMeLinuxNode:
                 edge = header.get("returnEdge", 0)
                 norm_pos = float(header.get("normalizedPosition", 0.5))
                 self.log(f"[Kenar Dönüşü] '{header.get('senderName')}' ({remote_ip}) TCP sinyaliyle yerel masaüstüne dönüş yaptı.")
-                if self.controlling_remote_peer is not None:
+                if self.controlling_remote_peer is not None or (time.time() - getattr(self, "last_host_control_return_time", 0.0) < 2.0):
                     self.return_host_control_to_local(notify_peer=False, return_edge=edge, norm_pos=norm_pos)
                 else:
                     self.return_control_to_local(edge, norm_pos)
@@ -3111,8 +3143,9 @@ class ConnectMeLinuxNode:
 
                 elif pkt_type == PACKET_EDGE_HANDOFF and len(data) >= 10:
                     edge, dragging, norm_pos = struct.unpack("<BBf", data[4:10])
-                    if self.controlling_remote_peer is not None and (self.controlling_remote_peer.get("ipAddress") == addr[0] or self.controlling_remote_peer.get("deviceId") == addr[0]):
-                        self.log(f"[Kenar Dönüşü] '{self.controlling_remote_peer.get('deviceName')}' imleci Linux'a geri bıraktı.")
+                    if self.controlling_remote_peer is not None or (time.time() - getattr(self, "last_host_control_return_time", 0.0) < 2.0):
+                        if self.controlling_remote_peer is not None:
+                            self.log(f"[Kenar Dönüşü] '{self.controlling_remote_peer.get('deviceName')}' imleci Linux'a geri bıraktı.")
                         self.return_host_control_to_local(notify_peer=False, return_edge=edge, norm_pos=norm_pos)
                         continue
 

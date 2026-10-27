@@ -105,9 +105,10 @@ class ScreenEdgeSentinels:
     Completely immune to fast mouse gestures (physical pointer stops at the desktop edge).
     """
 
-    def __init__(self, root: tk.Tk, node: ConnectMeLinuxNode, on_edge_triggered: Callable[[dict, int, float], None]):
+    def __init__(self, root: tk.Tk, node: ConnectMeLinuxNode, on_edge_triggered: Callable[[dict, int, float], None], gui: Optional[Any] = None):
         self.root = root
         self.node = node
+        self.gui = gui
         self.on_edge_triggered = on_edge_triggered
         self.cooldown_until = 0.0
         self.enabled = True
@@ -151,9 +152,11 @@ class ScreenEdgeSentinels:
     def _do_check(self):
         if not self.enabled or time.time() < self.cooldown_until:
             return
-        if hasattr(self, "host_capture_overlay") and getattr(self.host_capture_overlay, "is_active", False):
+        if self.node.controlling_remote_peer is not None:
             return
         if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.is_active:
+            return
+        if self.gui and hasattr(self.gui, "host_capture_overlay") and self.gui.host_capture_overlay.is_active:
             return
 
         if not any(p.get("isMutuallyPaired") for p in self.node.peers.values()):
@@ -422,6 +425,9 @@ class HostCaptureOverlay:
         if notify_peer:
             self.node.return_host_control_to_local(notify_peer=True)
 
+        if self.gui and hasattr(self.gui, "edge_sentinels"):
+            self.gui.edge_sentinels.show_with_cooldown(0.8)
+
 
 class ConnectMeLinuxGui:
     def __init__(self, root: tk.Tk):
@@ -449,7 +455,7 @@ class ConnectMeLinuxGui:
 
         # Host Modu (Linux ana makine: fare/klavye aktarımı & kenar bariyerleri)
         self.host_capture_overlay = HostCaptureOverlay(self.root, self.node, self)
-        self.edge_sentinels = ScreenEdgeSentinels(self.root, self.node, self._on_sentinel_triggered)
+        self.edge_sentinels = ScreenEdgeSentinels(self.root, self.node, self._on_sentinel_triggered, self)
         self.node.on_host_control_switched = lambda peer, edge, norm: self.root.after(0, lambda: self._on_host_control_switched(peer, edge, norm))
         self.node.on_host_control_returned = lambda: self.root.after(0, self._on_host_control_returned)
 
@@ -1441,6 +1447,7 @@ class ConnectMeLinuxGui:
         self._drag_data["card_y"] = coords[1]
         try:
             self.canvas.lift(f"peer_{peer_id}")
+            self.canvas.itemconfig(f"peer_box_{peer_id}", outline="#38BDF8", width=3)
         except Exception:
             pass
 
@@ -1455,8 +1462,6 @@ class ConnectMeLinuxGui:
             msg = f"🎯 {dev_name} -> {mon_id} {edge_names.get(cur_edge, 'Sağ')} Kenar (%{seg_s} - %{seg_e} kesiti)"
             if hasattr(self, "canvas_info_lbl"):
                 self.canvas_info_lbl.config(text=msg)
-
-        self._draw_2d_canvas()
 
     def _on_peer_drag_motion(self, event):
         pid = self._drag_data.get("peer_id")
@@ -1486,6 +1491,15 @@ class ConnectMeLinuxGui:
         snapped_edge, final_x, final_y, seg_start, seg_end, attached_mon_id = self._snap_peer_box_to_local_monitors_on_canvas(
             self._drag_data["card_x"], self._drag_data["card_y"], card_w, card_h, local_mon_rects
         )
+
+        try:
+            c_anchor_x = self._drag_data["card_x"] + card_w / 2.0
+            c_anchor_y = self._drag_data["card_y"] + card_h / 2.0
+            line_coords = self.canvas.coords(f"peer_line_{pid}")
+            if line_coords and len(line_coords) == 4:
+                self.canvas.coords(f"peer_line_{pid}", line_coords[0], line_coords[1], c_anchor_x, c_anchor_y)
+        except Exception:
+            pass
 
         edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
         dev_name = peer.get("deviceName", pid)
@@ -1530,8 +1544,8 @@ class ConnectMeLinuxGui:
             snapped_edge = EDGE_LEFT if norm_dx < 0 else EDGE_RIGHT
             final_x = (mon_left - card_w - gap) if snapped_edge == EDGE_LEFT else (mon_right + gap)
 
-            min_y = mon_top - card_h * 0.70
-            max_y = mon_bottom - card_h * 0.30
+            min_y = mon_top - card_h * 0.80
+            max_y = mon_bottom - card_h * 0.20
             final_y = max(min_y, min(max_y, dragged_y))
 
             overlap_top = max(mon_top, final_y)
@@ -1542,8 +1556,8 @@ class ConnectMeLinuxGui:
             snapped_edge = EDGE_TOP if norm_dy < 0 else EDGE_BOTTOM
             final_y = (mon_top - card_h - gap) if snapped_edge == EDGE_TOP else (mon_bottom + gap)
 
-            min_x = mon_left - card_w * 0.70
-            max_x = mon_right - card_w * 0.30
+            min_x = mon_left - card_w * 0.80
+            max_x = mon_right - card_w * 0.20
             final_x = max(min_x, min(max_x, dragged_x))
 
             overlap_left = max(mon_left, final_x)
@@ -1557,6 +1571,10 @@ class ConnectMeLinuxGui:
     def _on_peer_drag_release(self, event):
         pid = self._drag_data.get("peer_id")
         self._drag_data["peer_id"] = None
+        try:
+            self.canvas.config(cursor="")
+        except Exception:
+            pass
         if not pid or pid not in self.node.peers:
             return
 
@@ -1597,6 +1615,8 @@ class ConnectMeLinuxGui:
         dev_name = peer.get("deviceName", pid)
         msg = f"🎯 '{dev_name}' -> {attached_mon_id} {edge_names.get(snapped_edge, 'Sağ')} Kenar (%{int(seg_start*100)} - %{int(seg_end*100)} kesiti) hizalandı."
         self._log(f"[Ekran Konfigürasyonu] {msg}")
+        if hasattr(self, "canvas_info_lbl"):
+            self.canvas_info_lbl.config(text=msg)
         if hasattr(self, "canvas_info_lbl"):
             self.canvas_info_lbl.config(text=msg)
 
@@ -1912,19 +1932,22 @@ class ConnectMeLinuxGui:
 
                     portal_glow = "#0284C7" if is_selected else "#065F46"
                     portal_core = "#38BDF8" if is_selected else "#10B981"
+                    portal_line_tag = f"peer_portal_{pid}"
+                    connector_line_tag = f"peer_line_{pid}"
                     # Glowing portal segment line on local monitor edge
-                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_glow, width=8, capstyle=tk.ROUND)
-                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_core, width=4, capstyle=tk.ROUND)
+                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_glow, width=8, capstyle=tk.ROUND, tags=(portal_line_tag,))
+                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_core, width=4, capstyle=tk.ROUND, tags=(portal_line_tag,))
 
                     # Portal midpoint & node circle
                     pmx = (plx1 + plx2) / 2.0
                     pmy = (ply1 + ply2) / 2.0
-                    self.canvas.create_oval(pmx - 4, pmy - 4, pmx + 4, pmy + 4, fill=portal_core, outline="#FFFFFF", width=2)
+                    self.canvas.create_oval(pmx - 4, pmy - 4, pmx + 4, pmy + 4, fill=portal_core, outline="#FFFFFF", width=2, tags=(portal_line_tag,))
 
                     # Clean connector line between portal and peer card
-                    self.canvas.create_line(pmx, pmy, c_anchor_x, c_anchor_y, fill=line_col, width=2)
+                    self.canvas.create_line(pmx, pmy, c_anchor_x, c_anchor_y, fill=line_col, width=2, tags=(connector_line_tag,))
                 else:
                     # Find closest local monitor point to connect for unpaired/pending
+                    connector_line_tag = f"peer_line_{pid}"
                     best_mx, best_my, best_px, best_py = offset_x + loc_w, offset_y + loc_h / 2, px1, py1 + card_h / 2
                     min_dist = 999999.0
                     for _, mx1, my1, mx2, my2 in local_mon_rects:
@@ -1952,11 +1975,11 @@ class ConnectMeLinuxGui:
                                 min_dist = d
                                 best_mx, best_my = (mx1 + mx2) / 2, my1
                                 best_px, best_py = px1 + card_w / 2, py2
-                    self.canvas.create_line(best_mx, best_my, best_px, best_py, fill=line_col, dash=(3, 3), width=2)
+                    self.canvas.create_line(best_mx, best_my, best_px, best_py, fill=line_col, dash=(3, 3), width=2, tags=(connector_line_tag,))
 
                 # Peer Card Box
                 card_tag = f"peer_{pid}"
-                self.canvas.create_rectangle(px1, py1, px2, py2, fill=card_fill, outline=card_outline, width=outline_w, tags=(card_tag, "peer_card"))
+                self.canvas.create_rectangle(px1, py1, px2, py2, fill=card_fill, outline=card_outline, width=outline_w, tags=(card_tag, f"peer_box_{pid}", "peer_card"))
 
                 dev_icon = "🪟" if "win" in p.get("platform", "").lower() else ("📱" if "android" in p.get("platform", "").lower() else "💻")
                 dev_name = p.get("deviceName", pid)[:18]
@@ -1991,27 +2014,33 @@ class ConnectMeLinuxGui:
                         acc_x2 = px1 + card_w // 2 - 4
                         acc_y2 = py2 - 6
                         acc_tag = f"accept_btn_{pid}"
-                        self.canvas.create_rectangle(acc_x1, acc_y1, acc_x2, acc_y2, fill="#16A34A", outline="#4ADE80", width=1, tags=(acc_tag,))
-                        self.canvas.create_text((acc_x1 + acc_x2) / 2, (acc_y1 + acc_y2) / 2, text="✨ Kabul Et", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(acc_tag,))
+                        self.canvas.create_rectangle(acc_x1, acc_y1, acc_x2, acc_y2, fill="#16A34A", outline="#4ADE80", width=1, tags=(acc_tag, card_tag))
+                        self.canvas.create_text((acc_x1 + acc_x2) / 2, (acc_y1 + acc_y2) / 2, text="✨ Kabul Et", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(acc_tag, card_tag))
                         self.canvas.tag_bind(acc_tag, "<Button-1>", lambda e, p_id=pid: (self.node.accept_inbound_pairing(p_id, remember=True), "break")[1])
+                        self.canvas.tag_bind(acc_tag, "<Enter>", lambda e: self.canvas.config(cursor="hand2"))
+                        self.canvas.tag_bind(acc_tag, "<Leave>", lambda e: self.canvas.config(cursor="fleur"))
 
                         btn_x1 = px1 + card_w // 2 + 4
                         btn_y1 = py2 - 28
                         btn_x2 = px2 - 8
                         btn_y2 = py2 - 6
                         btn_tag = f"pin_btn_{pid}"
-                        self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(btn_tag,))
-                        self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 Kod Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(btn_tag,))
+                        self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(btn_tag, card_tag))
+                        self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 Kod Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(btn_tag, card_tag))
                         self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: (self._show_enter_pin_dialog(peer_obj), "break")[1])
+                        self.canvas.tag_bind(btn_tag, "<Enter>", lambda e: self.canvas.config(cursor="hand2"))
+                        self.canvas.tag_bind(btn_tag, "<Leave>", lambda e: self.canvas.config(cursor="fleur"))
                     else:
                         btn_x1 = px1 + 8
                         btn_y1 = py2 - 28
                         btn_x2 = px2 - 8
                         btn_y2 = py2 - 6
                         btn_tag = f"pin_btn_{pid}"
-                        self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(btn_tag,))
-                        self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 6 Haneli Kodu Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(btn_tag,))
+                        self.canvas.create_rectangle(btn_x1, btn_y1, btn_x2, btn_y2, fill="#0284C7", outline="#38BDF8", width=1, tags=(btn_tag, card_tag))
+                        self.canvas.create_text((btn_x1 + btn_x2) / 2, (btn_y1 + btn_y2) / 2, text="🔐 6 Haneli Kodu Gir", fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(btn_tag, card_tag))
                         self.canvas.tag_bind(btn_tag, "<Button-1>", lambda e, peer_obj=p: (self._show_enter_pin_dialog(peer_obj), "break")[1])
+                        self.canvas.tag_bind(btn_tag, "<Enter>", lambda e: self.canvas.config(cursor="hand2"))
+                        self.canvas.tag_bind(btn_tag, "<Leave>", lambda e: self.canvas.config(cursor="fleur"))
                 else:
                     act_btn_x1 = px1 + 8
                     act_btn_y1 = py2 - 28
@@ -2021,8 +2050,10 @@ class ConnectMeLinuxGui:
                     act_fill = "#DC2626" if is_controlling else "#16A34A"
                     act_out = "#F87171" if is_controlling else "#4ADE80"
                     act_txt = "🔴 Kontrol Bu Ekranda (Bırak)" if is_controlling else "🎯 Fareyi Bu Cihaza Aktar"
-                    self.canvas.create_rectangle(act_btn_x1, act_btn_y1, act_btn_x2, act_btn_y2, fill=act_fill, outline=act_out, width=1, tags=(act_tag,))
-                    self.canvas.create_text((act_btn_x1 + act_btn_x2) / 2, (act_btn_y1 + act_btn_y2) / 2, text=act_txt, fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(act_tag,))
+                    self.canvas.create_rectangle(act_btn_x1, act_btn_y1, act_btn_x2, act_btn_y2, fill=act_fill, outline=act_out, width=1, tags=(act_tag, card_tag))
+                    self.canvas.create_text((act_btn_x1 + act_btn_x2) / 2, (act_btn_y1 + act_btn_y2) / 2, text=act_txt, fill="#FFFFFF", font=("Segoe UI", 8, "bold"), tags=(act_tag, card_tag))
+                    self.canvas.tag_bind(act_tag, "<Enter>", lambda e: self.canvas.config(cursor="hand2"))
+                    self.canvas.tag_bind(act_tag, "<Leave>", lambda e: self.canvas.config(cursor="fleur"))
                     if is_controlling:
                         self.canvas.tag_bind(act_tag, "<Button-1>", lambda e: (self._deactivate_host_capture(notify_peer=True), "break")[1])
                     else:
@@ -2033,6 +2064,8 @@ class ConnectMeLinuxGui:
                 self.canvas.tag_bind(card_tag, "<B1-Motion>", self._on_peer_drag_motion)
                 self.canvas.tag_bind(card_tag, "<ButtonRelease-1>", self._on_peer_drag_release)
                 self.canvas.tag_bind(card_tag, "<Double-Button-1>", lambda e, peer_obj=p: self._show_enter_pin_dialog(peer_obj))
+                self.canvas.tag_bind(card_tag, "<Enter>", lambda e: self.canvas.config(cursor="fleur"))
+                self.canvas.tag_bind(card_tag, "<Leave>", lambda e: self.canvas.config(cursor=""))
         else:
             empty_x = offset_x + loc_w + 30
             self.canvas.create_text(empty_x, ch / 2, anchor=tk.W,

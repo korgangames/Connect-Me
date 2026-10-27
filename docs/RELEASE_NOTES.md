@@ -1,3 +1,51 @@
+# Connect Me v1.8.18 — Linux 2D Kanvas Sürükle-Bırak, KVM İmleç Geçişi & Türkçe Klavye Kodlama Onarımı
+
+Bu sürüm; Linux (Nobara / Fedora / Ubuntu / Arch) kullanıcılarının bildirdiği üç kritik kullanılabilirlik ve KVM sorununu kökten çözer:
+1. 2D Ekran Düzenleme Kanvası'nda cihaz kartlarının fare ile sürüklenip istenen monitör kenarına manyetik olarak yapıştırılması (drag-and-drop parity).
+2. Linux ana makine (Host) modundayken diğer cihazlara geçildikten sonra imlecin tekrar serbestçe diğer ekranlara geçememesi ve arayüzden manuel aktarma gerektirmesi sorunu.
+3. Linux ana makineyken Windows ekranına geçildiğinde Türkçe Q klavye tuşlarının (`asdfghjklşiz`) Windows'a bozuk (`abcdefghıjko`) olarak iletilmesi sorunu.
+
+---
+
+### 🌟 v1.8.18 Düzeltmeleri ve Yenilikleri:
+
+* **🖱️ 1. Linux 2D Kanvasında Akıcı Sürükle-Bırak (Drag-and-Drop) & Manyetik Kenar Yapışması:**
+  - **Kök Neden:** `_on_peer_drag_start` metodu çağrıldığında kanvası baştan çizmek için `delete("all")` fonksiyonunu çalıştırıyordu. Tkinter'da farenin sol tuşuna basılıyken o nesnenin silinmesi fare yakalama (mouse grab) mekanizmasını anında iptal ediyor, bu yüzden `<B1-Motion>` ve `<ButtonRelease-1>` olayları yeni oluşturulan nesnelere asla ulaşmıyordu. Kullanıcı kartı fareyle tutup sürükleyemiyordu.
+  - **Çözüm:**
+    1. `_on_peer_drag_start` içerisindeki yıkıcı `_draw_2d_canvas()` çağrısı kaldırıldı. Sadece tıklanan kart öne çıkarılarak (`canvas.lift`) ve sınır çizgisi mavi renkle aydınlatılarak aktif sürükleme moduna geçildi.
+    2. Kartın içindeki tüm öğeler (ikon, başlık metni, durum etiketi, rozet ve aksiyon butonları) `peer_{pid}` etiketi altında gruplandı; böylece kart hareket ettirildiğinde tüm buton ve etiketler kartla birlikte akıcı bir şekilde yer değiştirir.
+    3. Fare kartın üzerine geldiğinde imleç `fleur` (4 yönlü taşıma simgesi), butonların üzerine geldiğinde ise `hand2` (tıklama simgesi) olarak otomatik değişir.
+    4. Kart sürüklendikçe kanvas altındaki bilgi çubuğu en yakın fiziksel monitörü, yapışılacak dış kenarı ve temas kesitini anlık olarak (`🎯 Laptop -> DISPLAY1 Sağ Kenar (%0 - %50 kesiti)`) canlı günceller.
+    5. Kart bırakıldığında (`_on_peer_drag_release`), kart hedef monitör kenarına manyetik olarak kenetlenir, yeni topoloji diske kaydedilir ve karşı cihaza (`EDGE_CONFIG`) iletilir.
+
+* **🔄 2. Linux Host KVM İmleç Geçişi ve Kesintisiz Çift Yönlü Geri Dönüş:**
+  - **Kök Neden:**
+    - İkincil cihazdan (Windows veya Android) Linux'a dönüş yapıldığında hem UDP `PACKET_EDGE_HANDOFF` hem de TCP `EDGE_RETURN` paketleri gönderilmektedir. TCP paketi önce ulaşıp `controlling_remote_peer` değişkenini sıfırladığında, hemen ardından gelen UDP paketi Linux'u sanki istemci (Client) moduna alınmış gibi yanlış algılıyor ve `active_remote_peer` ataması yapıyordu.
+    - Ayrıca `return_host_control_to_local` fonksiyonu daha önce sıfırlanmış çağrılarda erken `return` yaparak GUI bildirimlerini (`on_host_control_returned`) tetiklemiyor, `host_capture_overlay` veya `edge_sentinels` bariyerleri kapalı kalıyordu. Bu durum imlecin bir süre sonra diğer cihazlara geçmesini engelliyor ve arayüzden "Fareyi bu cihaza aktar" butonuna basmayı zorunlu kılıyordu.
+  - **Çözüm:**
+    - `ConnectMeLinuxNode` içerisine iş parçacığı kilidi (`_host_control_lock`) ve son dönüş zamanı damgası (`last_host_control_return_time`) eklendi.
+    - Geri dönüş sinyali geldiğinde son 2 saniye içindeki tüm dönüş paketleri tek bir başarılı yerel dönüş olarak ele alınır; Linux'un tersine istemci moduna düşmesi engellendi.
+    - `return_host_control_to_local` çağrıldığında GUI arayüzündeki `ScreenEdgeSentinels` 60Hz kenar sensörleri ve HUD bildirimleri her durumda unconditionally sıfırlanır ve 0.8s güvenli soğuma süresiyle yeniden aktifleşir.
+    - TCP dönüş bildirimleri arka plan iş parçacığına taşınarak grafik arayüzün kilitlenmesi engellendi.
+
+* **⌨️ 3. Linux'tan Windows'a Türkçe Klavye Düzeni ve Tuş Haritalama Onarımı:**
+  - **Kök Neden:** `HardwareInputGrabber._evdev_to_key_and_char` fonksiyonu `ecodes.KEY_A <= code <= ecodes.KEY_Z` kontrolüyle tuş kodlarının alfabetik sırada olduğunu varsayıyordu (`vk = 0x41 + (code - KEY_A)`). Ancak Linux çekirdeğinde (`linux/input-event-codes.h`) tuş kodları alfabetik DEĞİLDİR (`KEY_A=30`, `KEY_S=31`, `KEY_D=32`, `KEY_Z=44` vb.). Bu yüzden 'S' tuşu 'B'ye, 'D' tuşu 'C'ye, 'Ş' tuşu 'J'ye, 'İ' tuşu 'K'ye dönüşüyor ve kullanıcının bildirdiği `qwertyuıopğüabcdefghıjkoxcvbnm,.ö` bozulması yaşanıyordu.
+  - **Çözüm:**
+    - Hatalı ofset hesabı tamamen kaldırıldı. `HardwareInputGrabber` sınıfına Linux evdev tuş kodlarını Windows Virtual Key (`VK`) kodlarına ve karakter değerlerine dönüştüren statik eşleme sözlüğü entegre edildi.
+    - A'dan Z'ye tüm harfler (`KEY_A` -> 0x41, `KEY_S` -> 0x53, `KEY_D` -> 0x44, `KEY_Z` -> 0x5A) doğrudan doğruya ilgili harfin orijinal ASCII/VK koduna bağlandı.
+    - Türkçe Q klavyenin özel OEM tuşları eksiksiz eşleştirildi:
+      - `KEY_SEMICOLON` (39) -> `0xBA` (`VK_OEM_1`, Windows Türkçe klavyede **Ş**)
+      - `KEY_APOSTROPHE` (40) -> `0xDE` (`VK_OEM_7`, Windows Türkçe klavyede **İ**)
+      - `KEY_LEFTBRACE` (26) -> `0xDB` (`VK_OEM_4`, Windows Türkçe klavyede **Ğ**)
+      - `KEY_RIGHTBRACE` (27) -> `0xDD` (`VK_OEM_6`, Windows Türkçe klavyede **Ü**)
+      - `KEY_COMMA` (51) -> `0xBC` (`VK_OEM_COMMA`, Windows Türkçe klavyede **Ö**)
+      - `KEY_DOT` (52) -> `0xBE` (`VK_OEM_PERIOD`, Windows Türkçe klavyede **Ç**)
+      - `KEY_SLASH` (53) -> `0xBF` (`VK_OEM_2`, Windows Türkçe klavyede **.**)
+      - `KEY_102ND` (86) -> `0xE2` (`VK_OEM_102`, Windows Türkçe klavyede **<**)
+    - Artık Linux'tan Windows'a veya Android'e yazarken klavyedeki her tuş birebir beklenen karakteri üretir.
+
+---
+
 # Connect Me v1.8.17 — Linux Tkinter Font Boyutu TclError Düzeltmesi
 
 Bu sürüm; Linux (Nobara / Fedora / Ubuntu / Arch) ortamlarında Python 3.14+ ve Tcl/Tk ile Connect Me grafik arayüzü başlatılırken ortaya çıkan `expected integer but got "9.5"` çökme hatasını kökten çözer.
