@@ -105,6 +105,7 @@ public sealed class Win32InputEngine : IDisposable
         _network.RemoteMouseButtonReceived += OnRemoteMouseButtonReceived;
         _network.RemoteMouseScrollReceived += OnRemoteMouseScrollReceived;
         _network.RemoteKeyEventReceived += OnRemoteKeyEventReceived;
+        _network.RemoteEdgeRelayRequested += OnRemoteEdgeRelayRequested;
         _network.PeerDisconnected += OnPeerDisconnected;
     }
 
@@ -397,6 +398,17 @@ public sealed class Win32InputEngine : IDisposable
         }
     }
 
+    private void OnRemoteEdgeRelayRequested(string relayTargetDeviceId, ScreenEdge returnEdge, float normPos)
+    {
+        var targetPeer = _network.DiscoveredPeers.FirstOrDefault(p =>
+            string.Equals(p.DeviceId, relayTargetDeviceId, StringComparison.OrdinalIgnoreCase) && p.IsMutuallyPaired);
+
+        if (targetPeer != null)
+        {
+            SwitchControlToPeer(targetPeer, ScreenEdge.None, returnEdge, normPos);
+        }
+    }
+
     private void OnRemoteMouseMoveReceived(MouseMovePacket packet)
     {
         if (ActiveRemotePeer != null)
@@ -408,80 +420,83 @@ public sealed class Win32InputEngine : IDisposable
         int newX = pt.X + packet.DeltaX;
         int newY = pt.Y + packet.DeltaY;
 
-        // Check if pushing against the entrance edge to return control to the remote host
-        if (_controllingRemotePeer != null && _incomingEntryEdge != ScreenEdge.None)
+        // Check if pushing against edges when being controlled remotely
+        if (_controllingRemotePeer != null)
         {
             var mon = _topology.FindMonitorContainingPoint(pt.X, pt.Y) ?? _topology.FindMonitorNearestPoint(pt.X, pt.Y);
-            bool pushHit = false;
 
-            switch (_incomingEntryEdge)
+            ScreenEdge pushingEdge = ScreenEdge.None;
+            double pushAmount = 0;
+
+            if (pt.X <= mon.VirtualX + 2 && packet.DeltaX < 0)
             {
-                case ScreenEdge.Left:
-                    if (pt.X <= mon.VirtualX + 2 && packet.DeltaX < 0)
-                    {
-                        _incomingPushAccum += -packet.DeltaX;
-                        pushHit = true;
-                    }
-                    else if (packet.DeltaX > 2)
-                    {
-                        _incomingPushAccum = 0;
-                    }
-                    break;
-
-                case ScreenEdge.Right:
-                    if (pt.X >= mon.Right - 3 && packet.DeltaX > 0)
-                    {
-                        _incomingPushAccum += packet.DeltaX;
-                        pushHit = true;
-                    }
-                    else if (packet.DeltaX < -2)
-                    {
-                        _incomingPushAccum = 0;
-                    }
-                    break;
-
-                case ScreenEdge.Top:
-                    if (pt.Y <= mon.VirtualY + 2 && packet.DeltaY < 0)
-                    {
-                        _incomingPushAccum += -packet.DeltaY;
-                        pushHit = true;
-                    }
-                    else if (packet.DeltaY > 2)
-                    {
-                        _incomingPushAccum = 0;
-                    }
-                    break;
-
-                case ScreenEdge.Bottom:
-                    if (pt.Y >= mon.Bottom - 3 && packet.DeltaY > 0)
-                    {
-                        _incomingPushAccum += packet.DeltaY;
-                        pushHit = true;
-                    }
-                    else if (packet.DeltaY < -2)
-                    {
-                        _incomingPushAccum = 0;
-                    }
-                    break;
+                pushingEdge = ScreenEdge.Left;
+                pushAmount = -packet.DeltaX;
+            }
+            else if (pt.X >= mon.Right - 3 && packet.DeltaX > 0)
+            {
+                pushingEdge = ScreenEdge.Right;
+                pushAmount = packet.DeltaX;
+            }
+            else if (pt.Y <= mon.VirtualY + 2 && packet.DeltaY < 0)
+            {
+                pushingEdge = ScreenEdge.Top;
+                pushAmount = -packet.DeltaY;
+            }
+            else if (pt.Y >= mon.Bottom - 3 && packet.DeltaY > 0)
+            {
+                pushingEdge = ScreenEdge.Bottom;
+                pushAmount = packet.DeltaY;
             }
 
-            if (pushHit && _incomingPushAccum >= 28)
+            if (pushingEdge != ScreenEdge.None)
             {
-                var targetPeer = _controllingRemotePeer;
-                var entranceOnHost = SpatialTopologyEngine.GetOppositeEdge(_incomingEntryEdge);
-                float norm = _incomingEntryEdge switch
+                _incomingPushAccum += pushAmount;
+
+                float norm = pushingEdge switch
                 {
                     ScreenEdge.Left or ScreenEdge.Right => Math.Clamp((float)(pt.Y - mon.VirtualY) / Math.Max(1, mon.Height), 0f, 1f),
                     ScreenEdge.Top or ScreenEdge.Bottom => Math.Clamp((float)(pt.X - mon.VirtualX) / Math.Max(1, mon.Width), 0f, 1f),
                     _ => 0.5f
                 };
 
-                _controllingRemotePeer = null;
-                _incomingEntryEdge = ScreenEdge.None;
-                _incomingPushAccum = 0;
+                if (_incomingPushAccum >= 24)
+                {
+                    // Case A: Pushing against the entrance edge from the Host -> return to Host!
+                    if (pushingEdge == _incomingEntryEdge)
+                    {
+                        var targetPeer = _controllingRemotePeer;
+                        var entranceOnHost = SpatialTopologyEngine.GetOppositeEdge(_incomingEntryEdge);
 
-                _network.SendEdgeReturnToPeer(targetPeer, entranceOnHost, norm);
-                return;
+                        _controllingRemotePeer = null;
+                        _incomingEntryEdge = ScreenEdge.None;
+                        _incomingPushAccum = 0;
+
+                        _network.SendEdgeReturnToPeer(targetPeer, entranceOnHost, norm);
+                        return;
+                    }
+                    else
+                    {
+                        // Case B: Pushing against another edge that has an adjacent peer in the colony mesh!
+                        var adjPeer = _topology.FindAdjacentPeerOnEdge(_network.LocalDeviceId, pushingEdge, norm);
+                        if (adjPeer != null)
+                        {
+                            var host = _controllingRemotePeer;
+                            var entranceOnAdj = SpatialTopologyEngine.GetOppositeEdge(pushingEdge);
+
+                            _controllingRemotePeer = null;
+                            _incomingEntryEdge = ScreenEdge.None;
+                            _incomingPushAccum = 0;
+
+                            _network.SendEdgeRelayToHost(host, adjPeer.DeviceId, entranceOnAdj, norm);
+                            return;
+                        }
+                    }
+                }
+            }
+            else if (Math.Abs(packet.DeltaX) > 2 || Math.Abs(packet.DeltaY) > 2)
+            {
+                _incomingPushAccum = 0;
             }
         }
 

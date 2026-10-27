@@ -16,11 +16,11 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
 
 | İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.8.19.zip` | [⬇️ **ConnectMe-Windows-x64-v1.8.19.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.19/ConnectMe-Windows-x64-v1.8.19.zip) |
-| 📱 **Android** | `.apk` | `ConnectMe-v1.8.19.apk` | [⬇️ **ConnectMe-v1.8.19.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.19/ConnectMe-v1.8.19.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.8.19.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.8.19.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.19/ConnectMe-Linux-x64-v1.8.19.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.8.20.zip` | [⬇️ **ConnectMe-Windows-x64-v1.8.20.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.20/ConnectMe-Windows-x64-v1.8.20.zip) |
+| 📱 **Android** | `.apk` | `ConnectMe-v1.8.20.apk` | [⬇️ **ConnectMe-v1.8.20.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.20/ConnectMe-v1.8.20.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.8.20.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.8.20.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.20/ConnectMe-Linux-x64-v1.8.20.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.8.19 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.8.19)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.8.20 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.8.20)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
@@ -76,7 +76,7 @@ python3 linux/connectme_linux_gui.py
 * Detaylı Linux talimatları için [**`linux/README.md`**](linux/README.md) dosyasına göz atabilirsiniz.
 
 ### 3. Android Uygulamasını Kurma
-* Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-v1.8.19.apk`** dosyasını derler.
+* Her `git push` işleminde **GitHub Actions** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) otomatik olarak hem Windows sürümünü hem de **`ConnectMe-v1.8.20.apk`** dosyasını derler.
 
 ### 4. Test Paketi Çalıştırma (60/60 Test — %100 Başarı)
 ```powershell

@@ -59,10 +59,19 @@ public sealed class PeerDeviceNode
     // If empty or "ALL", attaches to the outermost monitor in that direction.
     public string AttachedLocalMonitorId { get; set; } = string.Empty;
 
+    // Colony Relative Docking:
+    // When docked relative to another peer device (e.g. Device C attached to Device B's Right edge),
+    // stores that peer's DeviceId. If empty or "LOCAL", attaches to the local machine.
+    public string AttachedToDeviceId { get; set; } = string.Empty;
+
     // 2D Display Arrangement & Partial Edge Segment Mapping
     public ScreenEdge AssignedEdgeOnLocal { get; set; } = ScreenEdge.Right;
     public float EdgeOffsetStart { get; set; } = 0.0f;
     public float EdgeOffsetEnd { get; set; } = 1.0f;
+
+    // Global Colony Mesh Coordinates
+    public double ColonyX { get; set; }
+    public double ColonyY { get; set; }
 
     // 2D GUI Canvas Coordinates
     public double CanvasX { get; set; }
@@ -87,6 +96,19 @@ public readonly record struct EdgeTransitionResult(
     ScreenEdge TargetEntranceEdge,
     float NormalizedPosition,
     string SourceMonitorId = "");
+
+/// <summary>
+/// Represents a magnetic snap target on the 2D Display Arrangement Canvas.
+/// Can be either a local computer's physical monitor or another peer card in the colony mesh.
+/// </summary>
+public readonly record struct CanvasAnchorBox(
+    string Id,
+    string Name,
+    bool IsLocal,
+    double Left,
+    double Top,
+    double Width,
+    double Height);
 
 /// <summary>
 /// Manages the multi-monitor virtual desktop topology of the local computer (Windows or Linux),
@@ -391,6 +413,16 @@ public sealed class SpatialTopologyEngine
         }
     }
 
+    public void RegisterPeer(PeerDeviceNode peer)
+    {
+        if (peer == null || string.IsNullOrEmpty(peer.DeviceId))
+            return;
+        lock (_sync)
+        {
+            _peersById[peer.DeviceId] = peer;
+        }
+    }
+
     /// <summary>
     /// Assigns a device to a specific edge, local monitor, and fractional segment [offsetStart..offsetEnd] (0.0 to 1.0).
     /// Allows multiple devices to sit on different edges OR share different parts of the same monitor edge!
@@ -402,8 +434,18 @@ public sealed class SpatialTopologyEngine
         float offsetEnd = 1.0f,
         string? targetLocalMonitorId = null)
     {
-        if (localEdge == ScreenEdge.None || string.IsNullOrEmpty(peer.DeviceId))
+        if (peer == null || string.IsNullOrEmpty(peer.DeviceId))
             return;
+
+        if (localEdge == ScreenEdge.None)
+        {
+            lock (_sync)
+            {
+                peer.AssignedEdgeOnLocal = ScreenEdge.None;
+                _peersById[peer.DeviceId] = peer;
+            }
+            return;
+        }
 
         float start = Math.Clamp(Math.Min(offsetStart, offsetEnd), 0.0f, 0.95f);
         float end = Math.Clamp(Math.Max(offsetStart, offsetEnd), start + 0.05f, 1.0f);
@@ -463,6 +505,115 @@ public sealed class SpatialTopologyEngine
     };
 
     /// <summary>
+    /// Snaps a dragged peer box on the 2D Display Arrangement Canvas to the nearest anchor box
+    /// (either a local physical monitor OR any other peer card in the colony mesh).
+    /// Enables arbitrary relative docking (e.g. Device C docked to Device B's Right edge, while Device B is docked to Device A).
+    /// </summary>
+    public (CanvasAnchorBox Anchor, ScreenEdge SnappedEdge, double FinalX, double FinalY, float SegStart, float SegEnd) SnapPeerBoxToAnchorBoxesOnCanvas(
+        PeerDeviceNode peer,
+        double draggedLeft,
+        double draggedTop,
+        double peerBoxW,
+        double peerBoxH,
+        IReadOnlyList<CanvasAnchorBox> anchorBoxes)
+    {
+        if (anchorBoxes == null || anchorBoxes.Count == 0)
+            return default;
+
+        double peerCenterX = draggedLeft + peerBoxW / 2.0;
+        double peerCenterY = draggedTop + peerBoxH / 2.0;
+
+        // Filter out peer's own box if present
+        var validAnchors = anchorBoxes.Where(a => a.Id != peer.DeviceId).ToList();
+        if (validAnchors.Count == 0)
+            return default;
+
+        // Find closest anchor box by center distance
+        var bestAnchor = validAnchors
+            .OrderBy(ab =>
+            {
+                double acx = ab.Left + ab.Width / 2.0;
+                double acy = ab.Top + ab.Height / 2.0;
+                double ddx = peerCenterX - acx;
+                double ddy = peerCenterY - acy;
+                return ddx * ddx + ddy * ddy;
+            })
+            .First();
+
+        double normDx = (peerCenterX - (bestAnchor.Left + bestAnchor.Width / 2.0)) / (bestAnchor.Width / 2.0);
+        double normDy = (peerCenterY - (bestAnchor.Top + bestAnchor.Height / 2.0)) / (bestAnchor.Height / 2.0);
+
+        const double gap = 4.0;
+        ScreenEdge snappedEdge;
+        double finalX;
+        double finalY;
+        float segStart;
+        float segEnd;
+
+        if (Math.Abs(normDx) >= Math.Abs(normDy))
+        {
+            snappedEdge = normDx < 0 ? ScreenEdge.Left : ScreenEdge.Right;
+            finalX = snappedEdge == ScreenEdge.Left
+                ? bestAnchor.Left - peerBoxW - gap
+                : bestAnchor.Left + bestAnchor.Width + gap;
+
+            double minY = bestAnchor.Top - peerBoxH * 0.70;
+            double maxY = bestAnchor.Top + bestAnchor.Height - peerBoxH * 0.30;
+            finalY = Math.Clamp(draggedTop, minY, maxY);
+
+            double overlapTop = Math.Max(bestAnchor.Top, finalY);
+            double overlapBottom = Math.Min(bestAnchor.Top + bestAnchor.Height, finalY + peerBoxH);
+            segStart = (float)Math.Clamp((overlapTop - bestAnchor.Top) / Math.Max(1.0, bestAnchor.Height), 0.0, 0.95);
+            segEnd = (float)Math.Clamp((overlapBottom - bestAnchor.Top) / Math.Max(1.0, bestAnchor.Height), segStart + 0.05, 1.0);
+        }
+        else
+        {
+            snappedEdge = normDy < 0 ? ScreenEdge.Top : ScreenEdge.Bottom;
+            finalY = snappedEdge == ScreenEdge.Top
+                ? bestAnchor.Top - peerBoxH - gap
+                : bestAnchor.Top + bestAnchor.Height + gap;
+
+            double minX = bestAnchor.Left - peerBoxW * 0.70;
+            double maxX = bestAnchor.Left + bestAnchor.Width - peerBoxW * 0.30;
+            finalX = Math.Clamp(draggedLeft, minX, maxX);
+
+            double overlapLeft = Math.Max(bestAnchor.Left, finalX);
+            double overlapRight = Math.Min(bestAnchor.Left + bestAnchor.Width, finalX + peerBoxW);
+            segStart = (float)Math.Clamp((overlapLeft - bestAnchor.Left) / Math.Max(1.0, bestAnchor.Width), 0.0, 0.95);
+            segEnd = (float)Math.Clamp((overlapRight - bestAnchor.Left) / Math.Max(1.0, bestAnchor.Width), segStart + 0.05, 1.0);
+        }
+
+        peer.CanvasX = finalX;
+        peer.CanvasY = finalY;
+        peer.CanvasWidth = peerBoxW;
+        peer.CanvasHeight = peerBoxH;
+        peer.ColonyX = finalX;
+        peer.ColonyY = finalY;
+        peer.HasCustomCanvasPosition = true;
+
+        if (bestAnchor.IsLocal)
+        {
+            peer.AttachedLocalMonitorId = bestAnchor.Id;
+            peer.AttachedToDeviceId = string.Empty;
+            AssignPeerToEdgeSegment(peer, snappedEdge, segStart, segEnd, bestAnchor.Id);
+        }
+        else
+        {
+            peer.AttachedToDeviceId = bestAnchor.Id;
+            peer.AttachedLocalMonitorId = string.Empty;
+            lock (_sync)
+            {
+                peer.AssignedEdgeOnLocal = snappedEdge;
+                peer.EdgeOffsetStart = segStart;
+                peer.EdgeOffsetEnd = segEnd;
+                _peersById[peer.DeviceId] = peer;
+            }
+        }
+
+        return (bestAnchor, snappedEdge, finalX, finalY, segStart, segEnd);
+    }
+
+    /// <summary>
     /// Snaps a dragged peer monitor box on the 2D Display Arrangement Canvas to the nearest exposed outer edge
     /// among all physical monitors of this computer, avoiding internal seams between physical screens.
     /// </summary>
@@ -477,73 +628,164 @@ public sealed class SpatialTopologyEngine
         if (monitorCanvasBoxes == null || monitorCanvasBoxes.Count == 0)
             return;
 
-        double peerCenterX = draggedLeft + peerBoxW / 2.0;
-        double peerCenterY = draggedTop + peerBoxH / 2.0;
+        var anchors = monitorCanvasBoxes.Select(m => new CanvasAnchorBox(
+            m.Monitor.MonitorId,
+            m.Monitor.Name,
+            true,
+            m.Left,
+            m.Top,
+            m.Width,
+            m.Height)).ToList();
 
-        // Find which local monitor is closest to the dragged peer box
-        var bestMonitorBox = monitorCanvasBoxes
-            .OrderBy(mb =>
+        SnapPeerBoxToAnchorBoxesOnCanvas(peer, draggedLeft, draggedTop, peerBoxW, peerBoxH, anchors);
+    }
+
+    /// <summary>
+    /// Finds any peer in the colony that is spatially adjacent to the given node on the specified edge.
+    /// Used for multi-hop cursor relay transitions (e.g. from Node B to Node C when cursor pushes Right).
+    /// </summary>
+    public PeerDeviceNode? FindAdjacentPeerOnEdge(string fromDeviceId, ScreenEdge edge, float normPos = 0.5f)
+    {
+        lock (_sync)
+        {
+            // Case 1: Peer C has AttachedToDeviceId == fromDeviceId and AssignedEdgeOnLocal == edge
+            var attachedChildren = _peersById.Values
+                .Where(p => p.IsMutuallyPaired &&
+                            string.Equals(p.AttachedToDeviceId, fromDeviceId, StringComparison.OrdinalIgnoreCase) &&
+                            p.AssignedEdgeOnLocal == edge)
+                .ToList();
+
+            if (attachedChildren.Count > 0)
             {
-                double mcx = mb.Left + mb.Width / 2.0;
-                double mcy = mb.Top + mb.Height / 2.0;
-                double ddx = peerCenterX - mcx;
-                double ddy = peerCenterY - mcy;
-                return ddx * ddx + ddy * ddy;
-            })
-            .First();
+                var exact = attachedChildren.FirstOrDefault(p =>
+                    normPos >= p.EdgeOffsetStart - 0.02f && normPos <= p.EdgeOffsetEnd + 0.02f);
+                return exact ?? attachedChildren[0];
+            }
 
-        var (targetMon, monLeft, monTop, monW, monH) = bestMonitorBox;
-        double normDx = (peerCenterX - (monLeft + monW / 2.0)) / (monW / 2.0);
-        double normDy = (peerCenterY - (monTop + monH / 2.0)) / (monH / 2.0);
+            // Case 2: fromDeviceId itself is attached to another peer, and 'edge' is the edge leading to its parent (opposite edge)
+            if (_peersById.TryGetValue(fromDeviceId, out var fromPeer) &&
+                !string.IsNullOrEmpty(fromPeer.AttachedToDeviceId) &&
+                GetOppositeEdge(fromPeer.AssignedEdgeOnLocal) == edge)
+            {
+                if (_peersById.TryGetValue(fromPeer.AttachedToDeviceId, out var parentPeer) && parentPeer.IsMutuallyPaired)
+                {
+                    return parentPeer;
+                }
+            }
 
-        const double gap = 4.0;
-        ScreenEdge snappedEdge;
-        double finalX;
-        double finalY;
-        float segStart;
-        float segEnd;
-
-        if (Math.Abs(normDx) >= Math.Abs(normDy))
-        {
-            snappedEdge = normDx < 0 ? ScreenEdge.Left : ScreenEdge.Right;
-            finalX = snappedEdge == ScreenEdge.Left
-                ? monLeft - peerBoxW - gap
-                : monLeft + monW + gap;
-
-            double minY = monTop - peerBoxH * 0.70;
-            double maxY = monTop + monH - peerBoxH * 0.30;
-            finalY = Math.Clamp(draggedTop, minY, maxY);
-
-            double overlapTop = Math.Max(monTop, finalY);
-            double overlapBottom = Math.Min(monTop + monH, finalY + peerBoxH);
-            segStart = (float)Math.Clamp((overlapTop - monTop) / monH, 0.0, 0.95);
-            segEnd = (float)Math.Clamp((overlapBottom - monTop) / monH, segStart + 0.05, 1.0);
+            return null;
         }
-        else
+    }
+
+    /// <summary>
+    /// Builds a synchronized list of ColonyNodeLayoutDescriptor for all nodes in the mesh.
+    /// </summary>
+    public List<ColonyNodeLayoutDescriptor> BuildColonyLayoutDescriptors(
+        string localDeviceId,
+        string localDeviceName,
+        string localPlatform)
+    {
+        var list = new List<ColonyNodeLayoutDescriptor>();
+
+        // 1. Local machine node
+        list.Add(new ColonyNodeLayoutDescriptor
         {
-            snappedEdge = normDy < 0 ? ScreenEdge.Top : ScreenEdge.Bottom;
-            finalY = snappedEdge == ScreenEdge.Top
-                ? monTop - peerBoxH - gap
-                : monTop + monH + gap;
+            DeviceId = localDeviceId,
+            DeviceName = localDeviceName,
+            Platform = localPlatform,
+            ScreenWidth = LocalWidth,
+            ScreenHeight = LocalHeight,
+            AttachedToDeviceId = string.Empty,
+            AttachedEdge = (int)ScreenEdge.None,
+            EdgeOffsetStart = 0.0,
+            EdgeOffsetEnd = 1.0,
+            ColonyX = 0,
+            ColonyY = 0,
+            CanvasWidth = 140,
+            CanvasHeight = 90
+        });
 
-            double minX = monLeft - peerBoxW * 0.70;
-            double maxX = monLeft + monW - peerBoxW * 0.30;
-            finalX = Math.Clamp(draggedLeft, minX, maxX);
-
-            double overlapLeft = Math.Max(monLeft, finalX);
-            double overlapRight = Math.Min(monLeft + monW, finalX + peerBoxW);
-            segStart = (float)Math.Clamp((overlapLeft - monLeft) / monW, 0.0, 0.95);
-            segEnd = (float)Math.Clamp((overlapRight - monLeft) / monW, segStart + 0.05, 1.0);
+        // 2. All configured peers
+        lock (_sync)
+        {
+            foreach (var peer in _peersById.Values)
+            {
+                list.Add(new ColonyNodeLayoutDescriptor
+                {
+                    DeviceId = peer.DeviceId,
+                    DeviceName = peer.DeviceName,
+                    Platform = peer.Platform,
+                    ScreenWidth = peer.ScreenWidth,
+                    ScreenHeight = peer.ScreenHeight,
+                    AttachedToDeviceId = peer.AttachedToDeviceId,
+                    AttachedEdge = (int)peer.AssignedEdgeOnLocal,
+                    EdgeOffsetStart = peer.EdgeOffsetStart,
+                    EdgeOffsetEnd = peer.EdgeOffsetEnd,
+                    ColonyX = peer.ColonyX != 0 ? peer.ColonyX : peer.CanvasX,
+                    ColonyY = peer.ColonyY != 0 ? peer.ColonyY : peer.CanvasY,
+                    CanvasWidth = peer.CanvasWidth,
+                    CanvasHeight = peer.CanvasHeight
+                });
+            }
         }
 
-        peer.CanvasX = finalX;
-        peer.CanvasY = finalY;
-        peer.CanvasWidth = peerBoxW;
-        peer.CanvasHeight = peerBoxH;
-        peer.HasCustomCanvasPosition = true;
-        peer.AttachedLocalMonitorId = targetMon.MonitorId;
+        return list;
+    }
 
-        AssignPeerToEdgeSegment(peer, snappedEdge, segStart, segEnd, targetMon.MonitorId);
+    /// <summary>
+    /// Applies a received ColonyTopology layout from another node in the mesh.
+    /// Updates relative attachments and canvas coordinates for all known peers.
+    /// </summary>
+    public void ApplyColonyTopology(
+        IReadOnlyList<ColonyNodeLayoutDescriptor> descriptors,
+        string senderDeviceId,
+        string localDeviceId)
+    {
+        if (descriptors == null || descriptors.Count == 0)
+            return;
+
+        lock (_sync)
+        {
+            var myDesc = descriptors.FirstOrDefault(d => string.Equals(d.DeviceId, localDeviceId, StringComparison.OrdinalIgnoreCase));
+
+            foreach (var desc in descriptors)
+            {
+                if (string.Equals(desc.DeviceId, localDeviceId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (_peersById.TryGetValue(desc.DeviceId, out var peer))
+                {
+                    peer.DeviceName = desc.DeviceName;
+                    peer.Platform = desc.Platform;
+                    peer.ScreenWidth = desc.ScreenWidth;
+                    peer.ScreenHeight = desc.ScreenHeight;
+                    peer.CanvasWidth = desc.CanvasWidth;
+                    peer.CanvasHeight = desc.CanvasHeight;
+                    peer.ColonyX = desc.ColonyX;
+                    peer.ColonyY = desc.ColonyY;
+                    peer.CanvasX = desc.ColonyX;
+                    peer.CanvasY = desc.ColonyY;
+                    peer.HasCustomCanvasPosition = true;
+                    peer.AttachedToDeviceId = desc.AttachedToDeviceId;
+                    peer.AssignedEdgeOnLocal = (ScreenEdge)desc.AttachedEdge;
+                    peer.EdgeOffsetStart = (float)desc.EdgeOffsetStart;
+                    peer.EdgeOffsetEnd = (float)desc.EdgeOffsetEnd;
+
+                    // If desc is attached to ME (local machine)
+                    if (string.Equals(desc.AttachedToDeviceId, localDeviceId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        peer.AssignedEdgeOnLocal = (ScreenEdge)desc.AttachedEdge;
+                    }
+                    // Or if ME is attached to desc
+                    else if (myDesc != null && string.Equals(myDesc.AttachedToDeviceId, desc.DeviceId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        peer.AssignedEdgeOnLocal = GetOppositeEdge((ScreenEdge)myDesc.AttachedEdge);
+                        peer.EdgeOffsetStart = (float)myDesc.EdgeOffsetStart;
+                        peer.EdgeOffsetEnd = (float)myDesc.EdgeOffsetEnd;
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>

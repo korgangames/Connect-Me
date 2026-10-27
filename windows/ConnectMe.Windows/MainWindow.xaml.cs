@@ -75,6 +75,7 @@ public partial class MainWindow : Window
         _network.PeerPairingStatusChanged += OnPeerPairingStatusChanged;
         _network.RemotePinVerifiedWaitingLocalPin += OnRemotePinVerifiedWaitingLocalPin;
         _network.RemoteEdgeConfigReceived += OnRemoteEdgeConfigReceived;
+        _network.ColonyTopologyChanged += OnColonyTopologyChanged;
         _network.ShelfItemReceived += OnShelfItemReceived;
         _network.RemoteAudioSinksUpdated += (senderId, sinks) => Dispatcher.InvokeAsync(RefreshAudioSinksComboBox);
         _network.AudioRouteChanged += OnNetworkAudioRouteChanged;
@@ -518,6 +519,31 @@ public partial class MainWindow : Window
         return list;
     }
 
+    /// <summary>
+    /// Collects all valid magnetic snap anchor targets currently on the 2D Display Arrangement Canvas.
+    /// Includes both local physical monitors AND any other peer cards in the colony.
+    /// </summary>
+    private List<CanvasAnchorBox> GetAllCanvasAnchorBoxes(PeerDeviceNode? excludePeer = null)
+    {
+        var list = new List<CanvasAnchorBox>();
+        var localBoxes = GetLocalMonitorBoxesOnCanvas();
+        foreach (var (mon, ml, mt, mw, mh) in localBoxes)
+        {
+            list.Add(new CanvasAnchorBox(mon.MonitorId, mon.Name, true, ml, mt, mw, mh));
+        }
+
+        var peers = _topology.GetConfiguredPeers();
+        foreach (var p in peers)
+        {
+            if (excludePeer != null && p.DeviceId == excludePeer.DeviceId)
+                continue;
+
+            list.Add(new CanvasAnchorBox(p.DeviceId, p.DeviceName, false, p.CanvasX, p.CanvasY, p.CanvasWidth, p.CanvasHeight));
+        }
+
+        return list;
+    }
+
     private (double Width, double Height) GetScaledPeerBoxSize(PeerDeviceNode peer)
     {
         double scale = GetCanvasMonitorScale();
@@ -650,34 +676,54 @@ public partial class MainWindow : Window
             peer.CanvasWidth = boxW;
             peer.CanvasHeight = boxH;
 
-            var attachedMonBox = localBoxes.FirstOrDefault(b => b.Monitor.MonitorId == peer.AttachedLocalMonitorId);
-            if (attachedMonBox.Monitor == null)
+            double anchorLeft, anchorTop, anchorW, anchorH;
+            string anchorName;
+
+            if (!string.IsNullOrEmpty(peer.AttachedToDeviceId) &&
+                allPeers.FirstOrDefault(p => p.DeviceId == peer.AttachedToDeviceId) is { } parentPeer)
             {
-                var outermost = _topology.GetOutermostMonitorForEdge(peer.AssignedEdgeOnLocal);
-                attachedMonBox = localBoxes.FirstOrDefault(b => b.Monitor.MonitorId == outermost.MonitorId);
+                anchorLeft = parentPeer.CanvasX;
+                anchorTop = parentPeer.CanvasY;
+                anchorW = parentPeer.CanvasWidth;
+                anchorH = parentPeer.CanvasHeight;
+                anchorName = parentPeer.DeviceName;
+            }
+            else
+            {
+                var attachedMonBox = localBoxes.FirstOrDefault(b => b.Monitor.MonitorId == peer.AttachedLocalMonitorId);
                 if (attachedMonBox.Monitor == null)
-                    attachedMonBox = localBoxes[0];
-                peer.AttachedLocalMonitorId = attachedMonBox.Monitor.MonitorId;
+                {
+                    var outermost = _topology.GetOutermostMonitorForEdge(peer.AssignedEdgeOnLocal);
+                    attachedMonBox = localBoxes.FirstOrDefault(b => b.Monitor.MonitorId == outermost.MonitorId);
+                    if (attachedMonBox.Monitor == null)
+                        attachedMonBox = localBoxes[0];
+                    peer.AttachedLocalMonitorId = attachedMonBox.Monitor.MonitorId;
+                }
+                anchorLeft = attachedMonBox.Left;
+                anchorTop = attachedMonBox.Top;
+                anchorW = attachedMonBox.Width;
+                anchorH = attachedMonBox.Height;
+                anchorName = attachedMonBox.Monitor.Name;
             }
 
             if (!peer.HasCustomCanvasPosition)
             {
                 ComputeCanvasPosFromEdgeAndSegment(
                     peer,
-                    attachedMonBox.Left,
-                    attachedMonBox.Top,
-                    attachedMonBox.Width,
-                    attachedMonBox.Height,
+                    anchorLeft,
+                    anchorTop,
+                    anchorW,
+                    anchorH,
                     boxW,
                     boxH);
             }
 
             DrawSharedEdgePortalLine(
                 peer,
-                attachedMonBox.Left,
-                attachedMonBox.Top,
-                attachedMonBox.Width,
-                attachedMonBox.Height);
+                anchorLeft,
+                anchorTop,
+                anchorW,
+                anchorH);
 
             bool isSelected = _selectedPeer?.DeviceId == peer.DeviceId;
             bool isCursorHere = _inputEngine.ActiveRemotePeer?.DeviceId == peer.DeviceId;
@@ -709,7 +755,7 @@ public partial class MainWindow : Window
                 CornerRadius = new CornerRadius(8),
                 Cursor = Cursors.SizeAll,
                 Tag = peer,
-                ToolTip = $"{peer.DeviceName}{multiMonInfo}\nDurum: {(isPaired ? "Çift Taraflı Aktif" : "PIN Onayı Bekleniyor")}\nBağlı Yerel Monitör: {peer.AttachedLocalMonitorId} — {FormatEdgeTr(peer.AssignedEdgeOnLocal)} Kenar (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek herhangi bir yerel monitörün dış kenarına yapıştırabilirsiniz."
+                ToolTip = $"{peer.DeviceName}{multiMonInfo}\nDurum: {(isPaired ? "Çift Taraflı Aktif" : "PIN Onayı Bekleniyor")}\nBağlı Ekran/Cihaz: {anchorName} — {FormatEdgeTr(peer.AssignedEdgeOnLocal)} Kenar (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek herhangi bir monitörün veya cihazın kenarına yapıştırabilirsiniz."
             };
 
             var stack = new StackPanel
@@ -734,9 +780,7 @@ public partial class MainWindow : Window
             // Status Sub-label
             string statusSubText = !isPaired
                 ? "⏳ PIN Onayı Bekleniyor"
-                : (localBoxes.Count > 1
-                    ? $"{peer.AttachedLocalMonitorId} {FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}"
-                    : $"{FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}");
+                : $"{anchorName} {FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}";
 
             stack.Children.Add(new TextBlock
             {
@@ -1057,20 +1101,22 @@ public partial class MainWindow : Window
             double newLeft = canvasPt.X - _dragMouseOffset.X;
             double newTop = canvasPt.Y - _dragMouseOffset.Y;
 
-            var localBoxes = GetLocalMonitorBoxesOnCanvas();
-            _topology.SnapPeerBoxToLocalMonitorsOnCanvas(
-                _draggingPeer,
-                newLeft,
-                newTop,
-                _draggingBorder.Width,
-                _draggingBorder.Height,
-                localBoxes);
+            var anchors = GetAllCanvasAnchorBoxes(excludePeer: _draggingPeer);
+            var (bestAnchor, snappedEdge, finalX, finalY, segStart, segEnd) =
+                _topology.SnapPeerBoxToAnchorBoxesOnCanvas(
+                    _draggingPeer,
+                    newLeft,
+                    newTop,
+                    _draggingBorder.Width,
+                    _draggingBorder.Height,
+                    anchors);
 
             Canvas.SetLeft(_draggingBorder, _draggingPeer.CanvasX);
             Canvas.SetTop(_draggingBorder, _draggingPeer.CanvasY);
 
+            string targetName = !string.IsNullOrEmpty(bestAnchor.Name) ? bestAnchor.Name : bestAnchor.Id;
             CanvasSelectionInfoText.Text =
-                $"🎯 {_draggingPeer.DeviceName} -> {_draggingPeer.AttachedLocalMonitorId} {FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} Kenar (%{_draggingPeer.EdgeOffsetStart * 100:F0} - %{_draggingPeer.EdgeOffsetEnd * 100:F0} kesiti)";
+                $"🎯 {_draggingPeer.DeviceName} -> {targetName} {FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} Kenar (%{_draggingPeer.EdgeOffsetStart * 100:F0} - %{_draggingPeer.EdgeOffsetEnd * 100:F0} kesiti)";
         }
     }
 
@@ -1081,8 +1127,15 @@ public partial class MainWindow : Window
             _draggingBorder.ReleaseMouseCapture();
             _network.SavePeerTopologyToTrustedStore(_draggingPeer);
             _network.SendEdgeConfigToPeer(_draggingPeer);
+
+            var colonyDesc = _topology.BuildColonyLayoutDescriptors(_network.LocalDeviceId, _network.LocalDeviceName, _network.LocalPlatform);
+            _network.SendColonyTopologySyncToAllPeers(colonyDesc);
+
+            string targetName = !string.IsNullOrEmpty(_draggingPeer.AttachedToDeviceId)
+                ? _draggingPeer.AttachedToDeviceId
+                : _draggingPeer.AttachedLocalMonitorId;
             AppendLog(
-                $"[Ekran Konfigürasyonu] '{_draggingPeer.DeviceName}' -> {_draggingPeer.AttachedLocalMonitorId} ({FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} kenar, %{_draggingPeer.EdgeOffsetStart * 100:F0}-%{_draggingPeer.EdgeOffsetEnd * 100:F0}) hizalandı.");
+                $"[Ekran Konfigürasyonu] '{_draggingPeer.DeviceName}' -> {targetName} ({FormatEdgeTr(_draggingPeer.AssignedEdgeOnLocal)} kenar, %{_draggingPeer.EdgeOffsetStart * 100:F0}-%{_draggingPeer.EdgeOffsetEnd * 100:F0}) hizalandı.");
             _draggingBorder = null;
             _draggingPeer = null;
             RefreshPeersList();
@@ -1111,6 +1164,7 @@ public partial class MainWindow : Window
         var oldEdge = _selectedPeer.AssignedEdgeOnLocal;
         var outermostMon = _topology.GetOutermostMonitorForEdge(edge);
         _selectedPeer.HasCustomCanvasPosition = false;
+        _selectedPeer.AttachedToDeviceId = string.Empty;
         _selectedPeer.AttachedLocalMonitorId = outermostMon.MonitorId;
         _topology.AssignPeerToEdgeSegment(_selectedPeer, edge, 0.0f, 1.0f, outermostMon.MonitorId);
         if (oldEdge != edge && oldEdge != ScreenEdge.None)
@@ -1120,6 +1174,9 @@ public partial class MainWindow : Window
         DistributePeersOnEdge(edge);
         _network.SavePeerTopologyToTrustedStore(_selectedPeer);
         _network.SendEdgeConfigToPeer(_selectedPeer);
+
+        var colonyDesc = _topology.BuildColonyLayoutDescriptors(_network.LocalDeviceId, _network.LocalDeviceName, _network.LocalPlatform);
+        _network.SendColonyTopologySyncToAllPeers(colonyDesc);
 
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();
@@ -1137,6 +1194,7 @@ public partial class MainWindow : Window
         {
             var edge = edgesOrder[i % edgesOrder.Length];
             paired[i].AssignedEdgeOnLocal = edge;
+            paired[i].AttachedToDeviceId = string.Empty;
             paired[i].AttachedLocalMonitorId = _topology.GetOutermostMonitorForEdge(edge).MonitorId;
         }
 
@@ -1150,6 +1208,9 @@ public partial class MainWindow : Window
             _network.SavePeerTopologyToTrustedStore(p);
             _network.SendEdgeConfigToPeer(p);
         }
+
+        var colonyDesc = _topology.BuildColonyLayoutDescriptors(_network.LocalDeviceId, _network.LocalDeviceName, _network.LocalPlatform);
+        _network.SendColonyTopologySyncToAllPeers(colonyDesc);
 
         RefreshPeersList();
         RedrawDisplayArrangementCanvas();
@@ -1359,6 +1420,17 @@ public partial class MainWindow : Window
             RefreshPeersList();
             UpdateSelectedPeerPairingPanel();
             RedrawDisplayArrangementCanvas();
+        });
+    }
+
+    private void OnColonyTopologyChanged(List<ColonyNodeLayoutDescriptor> descriptors)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _topology.ApplyColonyTopology(descriptors, string.Empty, _network.LocalDeviceId);
+            RefreshPeersList();
+            RedrawDisplayArrangementCanvas();
+            AppendLog($"[Koloni Topolojisi] {descriptors.Count} cihazlık göreceli ekran düzeni senkronize edildi.");
         });
     }
 

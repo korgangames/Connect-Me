@@ -407,6 +407,52 @@ public sealed class ColonyMemberDescriptor
 }
 
 /// <summary>
+/// Describes a single node's relative spatial layout and docking configuration in the Colony mesh.
+/// Allows devices to arrange relative to any other device (e.g. C docked to B, while B is docked to A).
+/// </summary>
+public sealed class ColonyNodeLayoutDescriptor
+{
+    [JsonPropertyName("deviceId")]
+    public string DeviceId { get; set; } = string.Empty;
+
+    [JsonPropertyName("deviceName")]
+    public string DeviceName { get; set; } = string.Empty;
+
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = "windows";
+
+    [JsonPropertyName("screenWidth")]
+    public int ScreenWidth { get; set; } = 1920;
+
+    [JsonPropertyName("screenHeight")]
+    public int ScreenHeight { get; set; } = 1080;
+
+    [JsonPropertyName("attachedToDeviceId")]
+    public string AttachedToDeviceId { get; set; } = string.Empty;
+
+    [JsonPropertyName("attachedEdge")]
+    public int AttachedEdge { get; set; } = (int)ScreenEdge.Right;
+
+    [JsonPropertyName("edgeOffsetStart")]
+    public double EdgeOffsetStart { get; set; } = 0.0;
+
+    [JsonPropertyName("edgeOffsetEnd")]
+    public double EdgeOffsetEnd { get; set; } = 1.0;
+
+    [JsonPropertyName("colonyX")]
+    public double ColonyX { get; set; }
+
+    [JsonPropertyName("colonyY")]
+    public double ColonyY { get; set; }
+
+    [JsonPropertyName("canvasWidth")]
+    public double CanvasWidth { get; set; } = 140;
+
+    [JsonPropertyName("canvasHeight")]
+    public double CanvasHeight { get; set; } = 90;
+}
+
+/// <summary>
 /// Control, Mutual PIN Pairing, Multi-Monitor Topology Sync, Clipboard, and Drop Shelf message header sent over TCP port 42851.
 /// Followed by optional binary payload of length BinaryPayloadLength.
 /// </summary>
@@ -424,7 +470,11 @@ public sealed class TcpControlHeader
     // - "TRUSTED_RECONNECT_ACK": Receiver confirms valid trustToken and completes auto-pairing
     // - "COLONY_INTRODUCE": A connected peer introduces a new member to the colony mesh
     // - "COLONY_MEMBERS_SYNC": Syncs all members of a colony
+    // - "COLONY_TOPOLOGY_SYNC": Broadcasts the synchronized global multi-device relative topology layout
     // - "EDGE_HANDOFF": Reliable TCP fallback for mouse edge transition
+    // - "EDGE_RETURN": Remote device returns cursor control back to local host
+    // - "EDGE_RELAY": Intermediate device relays cursor transition across relative nodes (e.g. A -> B -> C)
+    // - "EDGE_CONFIG": Sender updates mutual edge alignment configuration
     // - "TOPOLOGY_SYNC": Sender broadcasts its updated multi-monitor layout (SenderMonitors)
     // - "CLIPBOARD_TEXT": Universal clipboard text sync
     // - "CLIPBOARD_IMAGE": Universal clipboard PNG sync
@@ -513,6 +563,15 @@ public sealed class TcpControlHeader
 
     [JsonPropertyName("audioRoute")]
     public AudioRouteTarget? AudioRoute { get; set; }
+
+    [JsonPropertyName("colonyTopology")]
+    public List<ColonyNodeLayoutDescriptor>? ColonyTopology { get; set; }
+
+    [JsonPropertyName("attachedToDeviceId")]
+    public string? AttachedToDeviceId { get; set; }
+
+    [JsonPropertyName("relayTargetDeviceId")]
+    public string? RelayTargetDeviceId { get; set; }
 }
 
 /// <summary>

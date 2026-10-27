@@ -1,3 +1,28 @@
+# Connect Me v1.8.20 — Göreceli Çoklu Cihaz Koloni Topolojisi, Global Kanvas Senkronizasyonu & Çok Atlamalı İmleç Aktarımı (Edge Relay)
+
+Bu sürüm; hem Windows hem de Linux arayüzlerinde daha önce cihazların yalnızca kendi etrafına yerleşim yapabilmesi kısıtını tamamen ortadan kaldırır. Cihazlar artık koloni içerisindeki herhangi bir diğer cihaza göreceli olarak eklenebilir, bu dizilim tüm arayüzlerde anında senkronize olur ve imleç zincirleme olarak ekranlar arasında gezinebilir:
+
+1. **Göreceli Çoklu Cihaz & Koloni Uzamsal Topolojisi (Relative Multi-Device Mesh Topology):**
+   - **Kök Neden:** Önceki mimaride her cihaz sadece kendi yerel monitörlerine doğrudan komşu olan cihazları yönetebiliyordu. Örneğin Bilgisayar A'nın sağına Bilgisayar B, Bilgisayar B'nin sağına ise Tablet C konulmak istendiğinde (A <-> B <-> C), A ve C cihazları bu dolaylı düzeni kendi kanvaslarında doğru görselleştiremiyor ve imleç B üzerinden C'ye geçemiyordu.
+   - **Çözüm:**
+     - Cihaz düğüm yapısına (PeerDeviceNode, TrustedDeviceRecord) AttachedToDeviceId, ColonyX ve ColonyY göreceli konum alanları eklendi.
+     - Kanvas kenetleme motoru (SnapPeerBoxToAnchorBoxesOnCanvas / _snap_peer_box_to_anchors_on_canvas) hem yerel monitörleri hem de ekrandaki tüm diğer cihaz kartlarını birer kenetleme çapası (*anchor*) olarak tanır.
+     - Bir cihaz diğerinin sağına, soluna, üstüne veya altına yanaştırıldığında doğrudan o cihaza bağıl olarak kenetlenir.
+
+2. **Global Koloni Kanvas Senkronizasyonu (COLONY_TOPOLOGY_SYNC):**
+   - İster Windows WPF ister Linux Tkinter arayüzünde olsun; bir kart sürüklendiğinde veya otomatik dizildiğinde tüm koloniye güncel COLONY_TOPOLOGY_SYNC TCP çerçevesi dağıtılır.
+   - Kolonideki tüm makineler (Windows ve Linux), ekranlarında aynı global dizilimi, cihazların birbirine olan göreceli konumlarını ve bağlandıkları noktaları gösteren görsel portal çizgilerini (*portal lines*) canlı olarak görüntüler.
+
+3. **Çok Atlamalı İmleç Aktarımı ve Kenar Rölesi (EDGE_RELAY / Multi-Hop Cursor Relay):**
+   - Host A makinesi Laptop B'yi kontrol ederken imleç Laptop B'nin sağ kenarındaki Tablet C sınırına çarptığında; B cihazı Host A'ya EDGE_RELAY bildirimi gönderir (SendEdgeRelayToHost).
+   - Host A bu sinyali aldığında giriş yakalama odağını kesintisiz bir şekilde anında Tablet C'ye devreder (SwitchControlToPeer).
+   - Ters yönde Tablet C sol kenara çarptığında B'ye aktarılır, B'den sol kenara gelindiğinde ise EDGE_RETURN ile Host A'nın kendi ekranına pürüzsüzce geri dönülür.
+
+4. **Görsel Bağlantı Portalları ve Çapa Rozetleri (Visual Anchors & Portal Lines):**
+   - 2D Ekran Kanvası üzerinde hangi cihazın kime ve hangi kenara kenetlendiği renkli kesikli bağlantı hatları ve hedef cihaz rozetleri (🔗 Laptop B Sağ) ile kullanıcıya kristal netliğinde sunulur.
+
+---
+
 # Connect Me v1.8.19 — Çoklu Cihaz & Koloni Ekran Dizilimi Canlı Senkronizasyonu ve Linux-Windows Akıcı İmleç Geçişi
 
 Bu sürüm; Linux ile Windows arasında imlecin bazen geçmemesi, takılması ve iki işletim sistemi açıkken ekran dizilimlerinin uyuşmaması / çakışması sorununu kökten çözer:

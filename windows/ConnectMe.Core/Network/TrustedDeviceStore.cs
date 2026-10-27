@@ -36,6 +36,15 @@ public sealed class TrustedDeviceRecord
     [JsonPropertyName("attachedLocalMonitorId")]
     public string AttachedLocalMonitorId { get; set; } = string.Empty;
 
+    [JsonPropertyName("attachedToDeviceId")]
+    public string AttachedToDeviceId { get; set; } = string.Empty;
+
+    [JsonPropertyName("colonyX")]
+    public double ColonyX { get; set; }
+
+    [JsonPropertyName("colonyY")]
+    public double ColonyY { get; set; }
+
     [JsonPropertyName("canvasX")]
     public double CanvasX { get; set; }
 

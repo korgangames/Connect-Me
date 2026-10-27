@@ -127,6 +127,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public event Action<PeerDeviceNode>? PeerDisconnected;
     public event Action<PeerDeviceNode>? RemotePinVerifiedWaitingLocalPin;
     public event Action<PeerDeviceNode, ScreenEdge>? RemoteEdgeConfigReceived;
+    public event Action<List<ColonyNodeLayoutDescriptor>>? ColonyTopologyChanged;
+    public event Action<string, ScreenEdge, float>? RemoteEdgeRelayRequested;
     public event Action<EdgeHandOffPacket, IPEndPoint>? RemoteEdgeHandOffReceived;
     public event Action<MouseMovePacket>? RemoteMouseMoveReceived;
     public event Action<MouseButtonPacket>? RemoteMouseButtonReceived;
@@ -392,6 +394,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         EdgeOffsetStart = peer.EdgeOffsetStart,
                         EdgeOffsetEnd = peer.EdgeOffsetEnd,
                         AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                        AttachedToDeviceId = peer.AttachedToDeviceId,
+                        ColonyX = peer.ColonyX,
+                        ColonyY = peer.ColonyY,
                         CanvasX = peer.CanvasX,
                         CanvasY = peer.CanvasY,
                         HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
@@ -632,6 +637,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 EdgeOffsetStart = peer.EdgeOffsetStart,
                 EdgeOffsetEnd = peer.EdgeOffsetEnd,
                 AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                AttachedToDeviceId = peer.AttachedToDeviceId,
+                ColonyX = peer.ColonyX,
+                ColonyY = peer.ColonyY,
                 CanvasX = peer.CanvasX,
                 CanvasY = peer.CanvasY,
                 HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
@@ -894,6 +902,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             rec.EdgeOffsetStart = peer.EdgeOffsetStart;
             rec.EdgeOffsetEnd = peer.EdgeOffsetEnd;
             rec.AttachedLocalMonitorId = peer.AttachedLocalMonitorId;
+            rec.AttachedToDeviceId = peer.AttachedToDeviceId;
+            rec.ColonyX = peer.ColonyX;
+            rec.ColonyY = peer.ColonyY;
             rec.CanvasX = peer.CanvasX;
             rec.CanvasY = peer.CanvasY;
             rec.HasCustomCanvasPosition = peer.HasCustomCanvasPosition;
@@ -1006,6 +1017,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 EdgeOffsetStart = peer.EdgeOffsetStart,
                 EdgeOffsetEnd = peer.EdgeOffsetEnd,
                 AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                AttachedToDeviceId = peer.AttachedToDeviceId,
+                ColonyX = peer.ColonyX,
+                ColonyY = peer.ColonyY,
                 CanvasX = peer.CanvasX,
                 CanvasY = peer.CanvasY,
                 HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
@@ -1359,6 +1373,64 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         });
     }
 
+    /// <summary>
+    /// Broadcasts the synchronized global Colony topology layout to all connected and mutually-paired peers.
+    /// Ensures every machine's canvas reflects the identical relative docking arrangement.
+    /// </summary>
+    public void SendColonyTopologySyncToAllPeers(List<ColonyNodeLayoutDescriptor> descriptors)
+    {
+        if (descriptors == null || descriptors.Count == 0)
+            return;
+
+        var header = new TcpControlHeader
+        {
+            Type = "COLONY_TOPOLOGY_SYNC",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform,
+            ColonyTopology = descriptors
+        };
+
+        var paired = _peers.Values.Where(p => p.IsMutuallyPaired).ToList();
+        foreach (var peer in paired)
+        {
+            _ = Task.Run(async () =>
+            {
+                await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
+            });
+        }
+
+        Log($"[Koloni Topolojisi] {descriptors.Count} cihazlık göreceli ekran düzeni {paired.Count} bağlı cihaza senkronize edildi.");
+    }
+
+    /// <summary>
+    /// Sends an EDGE_RELAY TCP control packet to the controlling Host machine.
+    /// Requests the Host to seamlessly switch active input streaming to the specified adjacent peer in the colony.
+    /// </summary>
+    public void SendEdgeRelayToHost(PeerDeviceNode hostPeer, string relayTargetDeviceId, ScreenEdge returnEdge, float normPos)
+    {
+        if (hostPeer == null || string.IsNullOrEmpty(relayTargetDeviceId))
+            return;
+
+        var header = new TcpControlHeader
+        {
+            Type = "EDGE_RELAY",
+            SenderId = LocalDeviceId,
+            SenderName = LocalDeviceName,
+            SenderPlatform = LocalPlatform,
+            RelayTargetDeviceId = relayTargetDeviceId,
+            ReturnEdge = (int)returnEdge,
+            NormalizedPosition = normPos
+        };
+
+        _ = Task.Run(async () =>
+        {
+            await SendTcpFrameToPeerAsync(hostPeer, header).ConfigureAwait(false);
+        });
+
+        Log($"[Kenar Aktarımı] '{hostPeer.DeviceName}' ana makinesine imleç aktarım sinyali iletildi -> Hedef: '{relayTargetDeviceId}' ({returnEdge}, %{(int)(normPos * 100)}).");
+    }
+
     private async Task<bool> SendTcpFrameToPeerAsync(
         PeerDeviceNode peer,
         TcpControlHeader header,
@@ -1558,6 +1630,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         peer.EdgeOffsetStart = trustedRec.EdgeOffsetStart;
                         peer.EdgeOffsetEnd = trustedRec.EdgeOffsetEnd;
                         peer.AttachedLocalMonitorId = trustedRec.AttachedLocalMonitorId;
+                        peer.AttachedToDeviceId = trustedRec.AttachedToDeviceId;
+                        peer.ColonyX = trustedRec.ColonyX;
+                        peer.ColonyY = trustedRec.ColonyY;
                         peer.CanvasX = trustedRec.CanvasX;
                         peer.CanvasY = trustedRec.CanvasY;
                         peer.HasCustomCanvasPosition = trustedRec.HasCustomCanvasPosition;
@@ -1846,6 +1921,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         EdgeOffsetStart = peer.EdgeOffsetStart,
                         EdgeOffsetEnd = peer.EdgeOffsetEnd,
                         AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                        AttachedToDeviceId = peer.AttachedToDeviceId,
+                        ColonyX = peer.ColonyX,
+                        ColonyY = peer.ColonyY,
                         CanvasX = peer.CanvasX,
                         CanvasY = peer.CanvasY,
                         HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
@@ -1982,6 +2060,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 EdgeOffsetStart = peer.EdgeOffsetStart,
                 EdgeOffsetEnd = peer.EdgeOffsetEnd,
                 AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                AttachedToDeviceId = peer.AttachedToDeviceId,
+                ColonyX = peer.ColonyX,
+                ColonyY = peer.ColonyY,
                 CanvasX = peer.CanvasX,
                 CanvasY = peer.CanvasY,
                 HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
@@ -2083,6 +2164,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         EdgeOffsetStart = peer.EdgeOffsetStart,
                         EdgeOffsetEnd = peer.EdgeOffsetEnd,
                         AttachedLocalMonitorId = peer.AttachedLocalMonitorId,
+                        AttachedToDeviceId = peer.AttachedToDeviceId,
+                        ColonyX = peer.ColonyX,
+                        ColonyY = peer.ColonyY,
                         CanvasX = peer.CanvasX,
                         CanvasY = peer.CanvasY,
                         HasCustomCanvasPosition = peer.HasCustomCanvasPosition,
@@ -2286,6 +2370,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                                     EdgeOffsetStart = rec.EdgeOffsetStart,
                                     EdgeOffsetEnd = rec.EdgeOffsetEnd,
                                     AttachedLocalMonitorId = rec.AttachedLocalMonitorId,
+                                    AttachedToDeviceId = rec.AttachedToDeviceId,
+                                    ColonyX = rec.ColonyX,
+                                    ColonyY = rec.ColonyY,
                                     CanvasX = rec.CanvasX,
                                     CanvasY = rec.CanvasY,
                                     HasCustomCanvasPosition = rec.HasCustomCanvasPosition,
@@ -2319,6 +2406,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                                 existing.EdgeOffsetStart = rec.EdgeOffsetStart;
                                 existing.EdgeOffsetEnd = rec.EdgeOffsetEnd;
                                 existing.AttachedLocalMonitorId = rec.AttachedLocalMonitorId;
+                                existing.AttachedToDeviceId = rec.AttachedToDeviceId;
+                                existing.ColonyX = rec.ColonyX;
+                                existing.ColonyY = rec.ColonyY;
                                 existing.CanvasX = rec.CanvasX;
                                 existing.CanvasY = rec.CanvasY;
                                 existing.HasCustomCanvasPosition = rec.HasCustomCanvasPosition;
@@ -2423,6 +2513,28 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         Log($"[Ekran Konfigürasyonu] '{peer.DeviceName}' ({remoteIp}) karşılıklı kenar düzenini güncelledi -> {returnEdge} (Ofset: {peer.EdgeOffsetStart:F2} - {peer.EdgeOffsetEnd:F2}).");
                         RemoteEdgeConfigReceived?.Invoke(peer, returnEdge);
                         PeerDiscoveredOrUpdated?.Invoke(peer);
+                    }
+                    break;
+                }
+
+                case "COLONY_TOPOLOGY_SYNC":
+                {
+                    if (header.ColonyTopology is { Count: > 0 })
+                    {
+                        Log($"[Koloni Topolojisi] '{header.SenderName}' ({remoteIp}) tarafından {header.ColonyTopology.Count} cihazlık göreceli ekran düzeni senkronize edildi.");
+                        ColonyTopologyChanged?.Invoke(header.ColonyTopology);
+                    }
+                    break;
+                }
+
+                case "EDGE_RELAY":
+                {
+                    if (!string.IsNullOrEmpty(header.RelayTargetDeviceId))
+                    {
+                        var retEdge = (ScreenEdge)(header.ReturnEdge ?? 0);
+                        float retNorm = (float)(header.NormalizedPosition ?? 0.5);
+                        Log($"[Kenar Aktarımı] '{header.SenderName}' ({remoteIp}) imleci '{header.RelayTargetDeviceId}' cihazına aktarmayı talep etti ({retEdge}, %{(int)(retNorm * 100)}).");
+                        RemoteEdgeRelayRequested?.Invoke(header.RelayTargetDeviceId, retEdge, retNorm);
                     }
                     break;
                 }

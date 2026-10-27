@@ -1709,6 +1709,8 @@ class ConnectMeLinuxNode:
         self.on_pin_request_received: Optional[Callable[[str, str], None]] = None
         self.on_peer_discovered: Optional[Callable[[dict], None]] = None
         self.on_peer_updated: Optional[Callable[[dict], None]] = None
+        self.on_topology_changed: Optional[Callable[[], None]] = None
+        self.colony_topology: List[dict] = []
         self._last_auto_connect_attempt: Dict[str, float] = {}
         self.suppressed_autoconnect: Set[str] = set()
 
@@ -1817,6 +1819,9 @@ class ConnectMeLinuxNode:
             "edgeOffsetStart": 0.0,
             "edgeOffsetEnd": 1.0,
             "attachedMonitorId": None,
+            "attachedToDeviceId": "",
+            "colonyX": None,
+            "colonyY": None,
             "canvasX": None,
             "canvasY": None
         })
@@ -1830,7 +1835,8 @@ class ConnectMeLinuxNode:
         canvas_y: Optional[float] = None,
         edge_offset_start: float = 0.0,
         edge_offset_end: float = 1.0,
-        attached_monitor_id: Optional[str] = None
+        attached_monitor_id: Optional[str] = None,
+        attached_to_device_id: Optional[str] = None
     ) -> None:
         rec = self.peer_arrangements.setdefault(device_id, {})
         rec["assignedEdge"] = edge
@@ -1839,10 +1845,14 @@ class ConnectMeLinuxNode:
         rec["edgeOffsetEnd"] = edge_offset_end
         if attached_monitor_id is not None:
             rec["attachedMonitorId"] = attached_monitor_id
+        if attached_to_device_id is not None:
+            rec["attachedToDeviceId"] = attached_to_device_id
         if canvas_x is not None:
             rec["canvasX"] = canvas_x
+            rec["colonyX"] = canvas_x
         if canvas_y is not None:
             rec["canvasY"] = canvas_y
+            rec["colonyY"] = canvas_y
         self._save_peer_arrangements()
         if device_id in self.peers:
             self.peers[device_id]["assignedEdge"] = edge
@@ -1851,16 +1861,176 @@ class ConnectMeLinuxNode:
             self.peers[device_id]["edgeOffsetEnd"] = edge_offset_end
             if attached_monitor_id is not None:
                 self.peers[device_id]["attachedMonitorId"] = attached_monitor_id
+            if attached_to_device_id is not None:
+                self.peers[device_id]["attachedToDeviceId"] = attached_to_device_id
             if canvas_x is not None:
                 self.peers[device_id]["canvasX"] = canvas_x
+                self.peers[device_id]["colonyX"] = canvas_x
+            if canvas_y is not None:
                 self.peers[device_id]["canvasY"] = canvas_y
+                self.peers[device_id]["colonyY"] = canvas_y
         edge_name = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}.get(edge, "Kenar")
-        self.log(f"[Ekran Düzeni] '{device_id}' {edge_name} kenara yerleştirildi (%{int(edge_offset_start*100)} - %{int(edge_offset_end*100)}).")
+        target_info = attached_to_device_id if attached_to_device_id else (attached_monitor_id or "DISPLAY1")
+        self.log(f"[Ekran Düzeni] '{device_id}' -> {target_info} {edge_name} kenara yerleştirildi (%{int(edge_offset_start*100)} - %{int(edge_offset_end*100)}).")
         if self.on_peer_updated and device_id in self.peers:
             try:
                 self.on_peer_updated(self.peers[device_id])
             except Exception:
                 pass
+
+    def build_colony_layout_descriptors(self) -> List[dict]:
+        """Builds a synchronized list of ColonyNodeLayoutDescriptor dictionaries for all nodes in mesh."""
+        min_x, min_y, total_w, total_h = self.topology.virtual_desktop_bounds()
+        descriptors = [
+            {
+                "deviceId": self.device_id,
+                "deviceName": self.device_name,
+                "platform": "linux",
+                "screenWidth": total_w,
+                "screenHeight": total_h,
+                "attachedToDeviceId": "",
+                "attachedEdge": EDGE_NONE,
+                "edgeOffsetStart": 0.0,
+                "edgeOffsetEnd": 1.0,
+                "colonyX": 0.0,
+                "colonyY": 0.0,
+                "canvasWidth": 140.0,
+                "canvasHeight": 90.0
+            }
+        ]
+        for p in self.peers.values():
+            descriptors.append({
+                "deviceId": p["deviceId"],
+                "deviceName": p.get("deviceName", p["deviceId"]),
+                "platform": p.get("platform", "android"),
+                "screenWidth": p.get("screenWidth", 1920),
+                "screenHeight": p.get("screenHeight", 1080),
+                "attachedToDeviceId": p.get("attachedToDeviceId", ""),
+                "attachedEdge": p.get("assignedEdge", EDGE_RIGHT),
+                "edgeOffsetStart": float(p.get("edgeOffsetStart", 0.0)),
+                "edgeOffsetEnd": float(p.get("edgeOffsetEnd", 1.0)),
+                "colonyX": float(p.get("colonyX", p.get("canvasX", 0.0) or 0.0)),
+                "colonyY": float(p.get("colonyY", p.get("canvasY", 0.0) or 0.0)),
+                "canvasWidth": float(p.get("canvasWidth", 140.0) or 140.0),
+                "canvasHeight": float(p.get("canvasHeight", 90.0) or 90.0)
+            })
+        return descriptors
+
+    def apply_colony_topology(self, topology_list: List[dict], sender_id: str) -> None:
+        """Applies received colony topology to local peers dict."""
+        my_desc = next((d for d in topology_list if d.get("deviceId") == self.device_id), None)
+        for desc in topology_list:
+            did = desc.get("deviceId")
+            if did == self.device_id or not did:
+                continue
+            if did in self.peers:
+                p = self.peers[did]
+                p["deviceName"] = desc.get("deviceName", p.get("deviceName"))
+                p["platform"] = desc.get("platform", p.get("platform"))
+                p["colonyX"] = float(desc.get("colonyX", 0.0))
+                p["colonyY"] = float(desc.get("colonyY", 0.0))
+                p["canvasX"] = p["colonyX"]
+                p["canvasY"] = p["colonyY"]
+                p["attachedToDeviceId"] = desc.get("attachedToDeviceId", "")
+                p["assignedEdge"] = desc.get("attachedEdge", EDGE_RIGHT)
+                p["edgeOffsetStart"] = float(desc.get("edgeOffsetStart", 0.0))
+                p["edgeOffsetEnd"] = float(desc.get("edgeOffsetEnd", 1.0))
+
+                if desc.get("attachedToDeviceId") == self.device_id:
+                    p["assignedEdge"] = desc.get("attachedEdge", EDGE_RIGHT)
+                elif my_desc and my_desc.get("attachedToDeviceId") == did:
+                    opposite = {EDGE_LEFT: EDGE_RIGHT, EDGE_RIGHT: EDGE_LEFT, EDGE_TOP: EDGE_BOTTOM, EDGE_BOTTOM: EDGE_TOP}.get(my_desc.get("attachedEdge", EDGE_RIGHT), EDGE_LEFT)
+                    p["assignedEdge"] = opposite
+                    p["edgeOffsetStart"] = float(my_desc.get("edgeOffsetStart", 0.0))
+                    p["edgeOffsetEnd"] = float(my_desc.get("edgeOffsetEnd", 1.0))
+
+                self.set_peer_arrangement(
+                    did,
+                    p["assignedEdge"],
+                    edge_offset=(p["edgeOffsetStart"] + p["edgeOffsetEnd"]) / 2.0,
+                    canvas_x=p["canvasX"],
+                    canvas_y=p["canvasY"],
+                    edge_offset_start=p["edgeOffsetStart"],
+                    edge_offset_end=p["edgeOffsetEnd"],
+                    attached_monitor_id=p.get("attachedMonitorId"),
+                    attached_to_device_id=p.get("attachedToDeviceId")
+                )
+
+    def send_colony_topology_sync_to_all_peers(self, descriptors: Optional[List[dict]] = None) -> None:
+        """Broadcasts global colony relative topology layout to all mutually paired peers."""
+        if descriptors is None:
+            descriptors = self.build_colony_layout_descriptors()
+        header = {
+            "type": "COLONY_TOPOLOGY_SYNC",
+            "senderId": self.device_id,
+            "senderName": self.device_name,
+            "senderPlatform": "linux",
+            "colonyTopology": descriptors
+        }
+        for p in self.peers.values():
+            if p.get("isMutuallyPaired"):
+                def _do_send(target_p):
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.settimeout(3.0)
+                        s.connect((target_p["ipAddress"], target_p.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+                        self._send_tcp_frame(s, header)
+                        s.close()
+                    except Exception:
+                        pass
+                threading.Thread(target=_do_send, args=(p,), daemon=True).start()
+        self.log(f"[Koloni Topolojisi] {len(descriptors)} cihazlık göreceli ekran düzeni bağlı cihazlara senkronize edildi.")
+
+    def send_edge_relay_to_host(self, host_peer: dict, relay_target_id: str, return_edge: int, norm_pos: float) -> None:
+        """Sends an EDGE_RELAY TCP control packet to the controlling Host machine."""
+        if not host_peer or not relay_target_id:
+            return
+        header = {
+            "type": "EDGE_RELAY",
+            "senderId": self.device_id,
+            "senderName": self.device_name,
+            "senderPlatform": "linux",
+            "relayTargetDeviceId": relay_target_id,
+            "returnEdge": return_edge,
+            "normalizedPosition": norm_pos
+        }
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3.0)
+            s.connect((host_peer["ipAddress"], host_peer.get("tcpControlPort", DATA_CONTROL_TCP_PORT)))
+            self._send_tcp_frame(s, header)
+            s.close()
+            self.log(f"[Kenar Aktarımı] '{host_peer.get('deviceName')}' ana makinesine imleç aktarım sinyali iletildi -> Hedef: '{relay_target_id}'.")
+        except Exception as ex:
+            self.log(f"[Kenar Aktarımı Uyarı] Host'a aktarım sinyali iletilemedi: {ex}")
+
+    def find_adjacent_peer_in_colony(self, from_device_id: str, edge: int, norm_pos: float = 0.5) -> Optional[dict]:
+        """Finds any peer in the colony that is spatially adjacent to from_device_id on the specified edge."""
+        candidates = []
+        for p in self.peers.values():
+            if not p.get("isMutuallyPaired"):
+                continue
+            att_dev = p.get("attachedToDeviceId", "")
+            if from_device_id == self.device_id and not att_dev and p.get("assignedEdge") == edge:
+                candidates.append(p)
+            elif att_dev == from_device_id and p.get("assignedEdge") == edge:
+                candidates.append(p)
+
+        if candidates:
+            for p in candidates:
+                s = float(p.get("edgeOffsetStart", 0.0)) - 0.02
+                e = float(p.get("edgeOffsetEnd", 1.0)) + 0.02
+                if s <= norm_pos <= e:
+                    return p
+            return candidates[0]
+
+        if from_device_id in self.peers:
+            parent_id = self.peers[from_device_id].get("attachedToDeviceId")
+            if parent_id and parent_id in self.peers:
+                opposite = {EDGE_LEFT: EDGE_RIGHT, EDGE_RIGHT: EDGE_LEFT, EDGE_TOP: EDGE_BOTTOM, EDGE_BOTTOM: EDGE_TOP}.get(self.peers[from_device_id].get("assignedEdge", EDGE_RIGHT), EDGE_LEFT)
+                if opposite == edge:
+                    return self.peers[parent_id]
+        return None
 
     def send_edge_config_to_peer(self, peer: dict) -> None:
         """Sends TCP EDGE_CONFIG to remote device to inform its return entrance edge."""
@@ -3256,56 +3426,54 @@ class ConnectMeLinuxNode:
                         except Exception:
                             pass
 
-                    # Check if cursor hits boundary to return to Windows/remote with push resistance
+                    # Check if cursor hits boundary to return to Windows/remote or relay to adjacent colony peer
                     if self.active_remote_peer is not None:
                         return_triggered = False
+                        relay_triggered = False
+                        relay_peer = None
                         ret_edge = EDGE_NONE
                         ret_norm = 0.5
                         RESISTANCE_THRESHOLD = 24.0
 
-                        # If cursor entered through LEFT edge, pushing against LEFT edge returns to remote's RIGHT edge
-                        if self.entry_edge == EDGE_LEFT:
-                            if self.cursor_x <= min_x and dx < 0:
-                                self.return_edge_push_accum += abs(dx)
-                                if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
-                                    return_triggered = True
-                                    ret_edge = EDGE_RIGHT
-                                    ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
-                            elif dx > 3:
-                                self.return_edge_push_accum = 0.0
+                        pushing_edge = EDGE_NONE
+                        push_amount = 0.0
 
-                        # If cursor entered through RIGHT edge, pushing against RIGHT edge returns to remote's LEFT edge
-                        elif self.entry_edge == EDGE_RIGHT:
-                            if self.cursor_x >= min_x + vw and dx > 0:
-                                self.return_edge_push_accum += abs(dx)
-                                if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
-                                    return_triggered = True
-                                    ret_edge = EDGE_LEFT
-                                    ret_norm = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
-                            elif dx < -3:
-                                self.return_edge_push_accum = 0.0
+                        if self.cursor_x <= min_x and dx < 0:
+                            pushing_edge = EDGE_LEFT
+                            push_amount = abs(dx)
+                        elif self.cursor_x >= min_x + vw and dx > 0:
+                            pushing_edge = EDGE_RIGHT
+                            push_amount = abs(dx)
+                        elif self.cursor_y <= min_y and dy < 0:
+                            pushing_edge = EDGE_TOP
+                            push_amount = abs(dy)
+                        elif self.cursor_y >= min_y + vh and dy > 0:
+                            pushing_edge = EDGE_BOTTOM
+                            push_amount = abs(dy)
 
-                        # If cursor entered through TOP edge, pushing against TOP edge returns to remote's BOTTOM edge
-                        elif self.entry_edge == EDGE_TOP:
-                            if self.cursor_y <= min_y and dy < 0:
-                                self.return_edge_push_accum += abs(dy)
-                                if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
-                                    return_triggered = True
-                                    ret_edge = EDGE_BOTTOM
-                                    ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
-                            elif dy > 3:
-                                self.return_edge_push_accum = 0.0
+                        if pushing_edge != EDGE_NONE:
+                            self.return_edge_push_accum += push_amount
+                            if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
+                                if pushing_edge in (EDGE_LEFT, EDGE_RIGHT):
+                                    norm_val = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
+                                else:
+                                    norm_val = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
 
-                        # If cursor entered through BOTTOM edge, pushing against BOTTOM edge returns to remote's TOP edge
-                        elif self.entry_edge == EDGE_BOTTOM:
-                            if self.cursor_y >= min_y + vh and dy > 0:
-                                self.return_edge_push_accum += abs(dy)
-                                if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
+                                # Case A: Pushing against the entry edge from Host -> return to Host!
+                                if pushing_edge == self.entry_edge:
                                     return_triggered = True
-                                    ret_edge = EDGE_TOP
-                                    ret_norm = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
-                            elif dy < -3:
-                                self.return_edge_push_accum = 0.0
+                                    ret_edge = {EDGE_LEFT: EDGE_RIGHT, EDGE_RIGHT: EDGE_LEFT, EDGE_TOP: EDGE_BOTTOM, EDGE_BOTTOM: EDGE_TOP}.get(self.entry_edge, EDGE_NONE)
+                                    ret_norm = norm_val
+                                else:
+                                    # Case B: Pushing against an edge that has another adjacent peer in colony!
+                                    adj = self.find_adjacent_peer_in_colony(self.device_id, pushing_edge, norm_val)
+                                    if adj:
+                                        relay_triggered = True
+                                        relay_peer = adj
+                                        ret_edge = {EDGE_LEFT: EDGE_RIGHT, EDGE_RIGHT: EDGE_LEFT, EDGE_TOP: EDGE_BOTTOM, EDGE_BOTTOM: EDGE_TOP}.get(pushing_edge, EDGE_NONE)
+                                        ret_norm = norm_val
+                        elif abs(dx) > 3 or abs(dy) > 3:
+                            self.return_edge_push_accum = 0.0
 
                         if return_triggered:
                             target = self.active_remote_peer
@@ -3317,6 +3485,16 @@ class ConnectMeLinuxNode:
                                 except Exception:
                                     pass
                             threading.Thread(target=self.return_control_to_peer, args=(target, ret_edge, ret_norm), daemon=True).start()
+                        elif relay_triggered and relay_peer:
+                            host = self.active_remote_peer
+                            self.active_remote_peer = None
+                            self.return_edge_push_accum = 0.0
+                            if self.on_cursor_update:
+                                try:
+                                    self.on_cursor_update(False, 0, 0)
+                                except Exception:
+                                    pass
+                            threading.Thread(target=self.send_edge_relay_to_host, args=(host, relay_peer["deviceId"], ret_edge, ret_norm), daemon=True).start()
 
                 elif pkt_type == PACKET_MOUSE_BUTTON and len(data) >= 6:
                     btn, pressed = struct.unpack("<BB", data[4:6])

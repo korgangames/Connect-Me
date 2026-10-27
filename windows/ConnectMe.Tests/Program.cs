@@ -37,6 +37,7 @@ public static class Program
         await TestColonyBeaconAndSinglePinColonyMeshAsync();
         TestWasapiAudioLoopback();
         await TestAudioMatrixAndRoutingAsync();
+        await TestRelativeSpatialTopologyAndMultiDeviceColonySyncAsync();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -975,6 +976,117 @@ public static class Program
 
         AssertTrue(receivedRouteOnB == null,
             $"Ses Sıfırlama: Yönlendirme devre dışı bırakıldığında tüm cihazlar yerel moda döndü (receivedRouteOnB={receivedRouteOnB?.TargetDeviceId ?? "null"})");
+
+        try { Directory.Delete(tempShelf, true); } catch { }
+    }
+
+    private static async Task TestRelativeSpatialTopologyAndMultiDeviceColonySyncAsync()
+    {
+        // 1. Relative Canvas Snapping to another peer card
+        var topology = new SpatialTopologyEngine();
+        var peerB = new PeerDeviceNode { DeviceId = "peer-B", DeviceName = "Laptop B", MyEnteredPinVerifiedByRemote = true, RemoteEnteredMyPinVerified = true, CanvasX = 200, CanvasY = 100, CanvasWidth = 140, CanvasHeight = 90 };
+        var peerC = new PeerDeviceNode { DeviceId = "peer-C", DeviceName = "Tablet C", MyEnteredPinVerifiedByRemote = true, RemoteEnteredMyPinVerified = true };
+
+        var anchors = new List<CanvasAnchorBox>
+        {
+            new("DISPLAY1", "Birincil Ekran", true, 0, 100, 160, 90),
+            new("peer-B", "Laptop B", false, 200, 100, 140, 90)
+        };
+
+        // Drag Peer C to the right of Peer B (around (360, 100))
+        var (snappedAnchor, snappedEdge, finalX, finalY, segStart, segEnd) =
+            topology.SnapPeerBoxToAnchorBoxesOnCanvas(peerC, 360, 100, 140, 90, anchors);
+
+        AssertTrue(snappedAnchor.Id == "peer-B" && snappedEdge == ScreenEdge.Right && peerC.AttachedToDeviceId == "peer-B",
+            "2D Koloni Kanvası: Peer C doğrudan Peer B'nin sağ kenarına bağıl olarak kenetlendi");
+
+        // 2. Adjacency navigation for multi-hop cursor relay
+        peerB.AssignedEdgeOnLocal = ScreenEdge.Right;
+        peerB.AttachedToDeviceId = string.Empty;
+        topology.AssignPeerToEdge(ScreenEdge.Right, peerB);
+
+        var adjRightOfB = topology.FindAdjacentPeerOnEdge("peer-B", ScreenEdge.Right);
+        var adjLeftOfC = topology.FindAdjacentPeerOnEdge("peer-C", ScreenEdge.Left);
+
+        AssertTrue(adjRightOfB?.DeviceId == "peer-C" && adjLeftOfC?.DeviceId == "peer-B",
+            "Göreceli Topoloji Navigasyonu: Node B sağında Node C'yi, Node C solunda Node B'yi tespit etti");
+
+        // 3. Colony Topology Synchronization over TCP (COLONY_TOPOLOGY_SYNC)
+        string tempShelf = Path.Combine(Path.GetTempPath(), "ConnectMeColonyRelSync_" + Guid.NewGuid().ToString("N")[..6]);
+        await using var nodeA = new ConnectMeNetworkNode("node-a", "Host A", "windows", tempShelf, fixedPin: "111222");
+        await using var nodeB = new ConnectMeNetworkNode("node-b", "Node B", "windows", tempShelf, fixedPin: "333444");
+
+        nodeA.Start(discoveryPort: 43350, inputUdpPort: 43351, controlTcpPort: 43352);
+        nodeB.Start(discoveryPort: 43360, inputUdpPort: 43361, controlTcpPort: 43362);
+
+        var pBOnA = nodeA.RegisterManualPeer("127.0.0.1", "Node B", "windows", udpPort: 43361, tcpPort: 43362, customDeviceId: "node-b");
+        var pAOnB = nodeB.RegisterManualPeer("127.0.0.1", "Host A", "windows", udpPort: 43351, tcpPort: 43352, customDeviceId: "node-a");
+        var pCOnB = nodeB.RegisterManualPeer("127.0.0.1", "Node C", "windows", udpPort: 43371, tcpPort: 43372, customDeviceId: "node-c");
+        pCOnB.MyEnteredPinVerifiedByRemote = true;
+        pCOnB.RemoteEnteredMyPinVerified = true;
+
+        await nodeA.SubmitRemotePinForPairingAsync(pBOnA, "333444", rememberDevice: false);
+        await nodeB.SubmitRemotePinForPairingAsync(pAOnB, "111222", rememberDevice: false);
+        await Task.Delay(200);
+
+        List<ColonyNodeLayoutDescriptor>? receivedTopologyOnB = null;
+        nodeB.ColonyTopologyChanged += topo => receivedTopologyOnB = topo;
+
+        var topoDescriptors = new List<ColonyNodeLayoutDescriptor>
+        {
+            new() { DeviceId = "node-a", DeviceName = "Host A", Platform = "windows", AttachedToDeviceId = "", AttachedEdge = (int)ScreenEdge.None },
+            new() { DeviceId = "node-b", DeviceName = "Node B", Platform = "windows", AttachedToDeviceId = "node-a", AttachedEdge = (int)ScreenEdge.Right, ColonyX = 200, ColonyY = 50 },
+            new() { DeviceId = "node-c", DeviceName = "Node C", Platform = "windows", AttachedToDeviceId = "node-b", AttachedEdge = (int)ScreenEdge.Right, ColonyX = 360, ColonyY = 50 }
+        };
+
+        nodeA.SendColonyTopologySyncToAllPeers(topoDescriptors);
+        await Task.Delay(250);
+
+        AssertTrue(receivedTopologyOnB != null && receivedTopologyOnB.Count == 3,
+            "Koloni Topoloji Senkronizasyonu (COLONY_TOPOLOGY_SYNC): Node B tüm koloninin 3 cihazlık göreceli düzenini aldı");
+
+        var topologyB = new SpatialTopologyEngine();
+        topologyB.AssignPeerToEdge(ScreenEdge.None, pAOnB);
+        topologyB.AssignPeerToEdge(ScreenEdge.None, pCOnB);
+        topologyB.ApplyColonyTopology(receivedTopologyOnB!, "node-a", "node-b");
+
+        AssertTrue(pAOnB.AssignedEdgeOnLocal == ScreenEdge.Left && pCOnB.AssignedEdgeOnLocal == ScreenEdge.Right,
+            "Göreceli Ekran Uyarlaması: Node B kendi arayüzünde Node A'yı solunda, Node C'yi ise sağında simetrik olarak konumlandırdı");
+
+        // 4. Multi-hop cursor EDGE_RELAY
+        string? relayedTargetOnA = null;
+        ScreenEdge relayedEdgeOnA = ScreenEdge.None;
+        nodeA.RemoteEdgeRelayRequested += (targetId, edge, norm) =>
+        {
+            relayedTargetOnA = targetId;
+            relayedEdgeOnA = edge;
+        };
+
+        nodeB.SendEdgeRelayToHost(pAOnB, "node-c", ScreenEdge.Left, 0.6f);
+        await Task.Delay(200);
+
+        AssertTrue(relayedTargetOnA == "node-c" && relayedEdgeOnA == ScreenEdge.Left,
+            "Çok Atlamalı İmleç Aktarımı (EDGE_RELAY): Node B kenar sınırında Node C'ye geçiş için Host A'ya aktarım sinyali iletti");
+
+        // 5. Persistence of relative topology in TrustedDeviceStore
+        string storePath = Path.Combine(tempShelf, "trusted_test.json");
+        var store = new TrustedDeviceStore(storePath);
+        store.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
+        {
+            DeviceId = "node-c",
+            DeviceName = "Tablet C",
+            Platform = "android",
+            TrustToken = "testtoken12345",
+            AttachedToDeviceId = "node-b",
+            AssignedEdge = ScreenEdge.Right,
+            ColonyX = 360,
+            ColonyY = 50
+        });
+
+        var freshStore = new TrustedDeviceStore(storePath);
+        bool isTr = freshStore.IsDeviceTrusted("node-c", out var loadedRec);
+        AssertTrue(isTr && loadedRec?.AttachedToDeviceId == "node-b" && Math.Abs(loadedRec.ColonyX - 360) < 0.1,
+            "TrustedDeviceStore: Göreceli kenetlenme (AttachedToDeviceId) ve koloni koordinatları başarıyla diske kaydedilip okundu");
 
         try { Directory.Delete(tempShelf, true); } catch { }
     }
