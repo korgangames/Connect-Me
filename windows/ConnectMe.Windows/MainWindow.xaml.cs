@@ -1347,9 +1347,15 @@ public partial class MainWindow : Window
         Dispatcher.InvokeAsync(() =>
         {
             peer.AssignedEdgeOnLocal = newEdge;
+            peer.HasCustomCanvasPosition = false;
             var outermost = _topology.GetOutermostMonitorForEdge(newEdge);
-            peer.AttachedLocalMonitorId = outermost.MonitorId;
-            _topology.AssignPeerToEdgeSegment(peer, newEdge, 0.0f, 1.0f, outermost.MonitorId);
+            string monitorId = !string.IsNullOrEmpty(peer.AttachedLocalMonitorId) 
+                && _topology.CurrentTopology.Monitors.Any(m => m.MonitorId == peer.AttachedLocalMonitorId)
+                    ? peer.AttachedLocalMonitorId
+                    : outermost.MonitorId;
+            peer.AttachedLocalMonitorId = monitorId;
+            _topology.AssignPeerToEdgeSegment(peer, newEdge, peer.EdgeOffsetStart, peer.EdgeOffsetEnd, monitorId);
+            _network.SavePeerTopologyToTrustedStore(peer);
             RefreshPeersList();
             UpdateSelectedPeerPairingPanel();
             RedrawDisplayArrangementCanvas();

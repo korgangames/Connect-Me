@@ -499,6 +499,15 @@ public sealed class TcpControlHeader
     [JsonPropertyName("normalizedPosition")]
     public double? NormalizedPosition { get; set; }
 
+    [JsonPropertyName("edgeOffsetStart")]
+    public double? EdgeOffsetStart { get; set; }
+
+    [JsonPropertyName("edgeOffsetEnd")]
+    public double? EdgeOffsetEnd { get; set; }
+
+    [JsonPropertyName("attachedMonitorId")]
+    public string? AttachedMonitorId { get; set; }
+
     [JsonPropertyName("audioSinks")]
     public List<AudioSinkDescriptor>? AudioSinks { get; set; }
 

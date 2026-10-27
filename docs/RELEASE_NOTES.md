@@ -1,3 +1,26 @@
+# Connect Me v1.8.19 — Çoklu Cihaz & Koloni Ekran Dizilimi Canlı Senkronizasyonu ve Linux-Windows Akıcı İmleç Geçişi
+
+Bu sürüm; Linux ile Windows arasında imlecin bazen geçmemesi, takılması ve iki işletim sistemi açıkken ekran dizilimlerinin uyuşmaması / çakışması sorununu kökten çözer:
+
+1. **İki Yönlü Gerçek Zamanlı Ekran & Koloni Dizilimi Senkronizasyonu (Bi-Directional Colony Layout Mirroring):**
+   - **Kök Neden:** Windows tarafında kanvas üzerinden ekran dizilimi değiştirildiğinde Windows karşı tarafa `EDGE_CONFIG` paketi gönderiyordu; ancak Linux arka plan servisinde (`_handle_tcp_client`) `EDGE_CONFIG` paketi işlenmiyordu (paket tamamen yok sayılıyordu). Sonuç olarak Windows'un bildirdiği ekran konumu Linux'ta güncellenmiyor, Linux kendi eski konfigürasyonunu koruyor ve iki işletim sisteminin arayüzünde farklı / çakışan ekran dizilimleri görünüyordu. Kullanıcı Linux'tan Windows'a geçmek için fareyi kenara sürdüğünde Linux orada cihaz olmadığını düşünüp geçişi engelliyordu.
+   - **Çözüm:**
+     - Linux daemon (`connectme_linux_daemon.py`) içerisine tam teşekküllü `EDGE_CONFIG` işleyicisi entegre edildi.
+     - `EDGE_CONFIG` protokol paketi genişletilerek `returnEdge`, `edgeOffsetStart`, `edgeOffsetEnd`, `edgeOffset`, `attachedMonitorId`, `senderScreenWidth` ve `senderScreenHeight` değerlerini eksiksiz taşıyacak şekilde güncellendi.
+     - Linux tarafı `EDGE_CONFIG` aldığında yerel cihaz düzenini ve topoloji deposunu anında günceller; Linux grafik arayüzü (`connectme_linux_gui.py`) 2D kanvasındaki kartları otomatik olarak yeni kenara kaydırır ve kenar sensörlerini günceller.
+     - Windows tarafında da `OnRemoteEdgeConfigReceived` metodu gelen kesit sınırlarını (`EdgeOffsetStart`, `EdgeOffsetEnd`) koruyarak kanvası ve topolojiyi anında yeniden çizer. Artık ana makinede yapılan her düzenleme koloniye bağlı tüm cihazlarda matematiksel simetriyle (%100 ayna düzeninde) canlı olarak eşleşir.
+
+2. **Linux'tan Windows'a Akıcı, Kesintisiz ve Pürüzsüz Kenar Geçişi (Smooth Wayland & evdev Edge Traversal):**
+   - **Kök Neden:**
+     - Linux çekirdek seviyesindeki `HardwareInputGrabber` sınıfında kenara itme eşiği `_accum_push >= 15.0` olarak ayarlanmıştı ve kenar sınır algılama payı çok dardı (`rel_x >= mon.width - 2`). Özellikle Wayland altında yavaş hareketlerde veya fare kenara dayandığında piksel itme birikimi sıfırlanabiliyor veya aşılması zor bir direnç oluşturuyordu.
+     - Ayrıca Tkinter `ScreenEdgeSentinels` modülünde monitör ID'si (örn. Linux'ta `eDP-1` / `HDMI-A-1` vs Windows `DISPLAY1`) uyuşmadığında hedef cihaz bulunamıyordu.
+   - **Çözüm:**
+     - Çekirdek seviyesindeki itme eşiği `15.0` pikselden `6.0` piksele düşürüldü; kenar algılama sınır payı genişletildi (`rel_x >= mon.width - 6`, `rel_x <= 5`, `rel_y <= 5`, `rel_y >= mon.height - 6`). Fare hafifçe kenara itildiğinde direnç hissettirmeden akıcı bir şekilde Windows ekranına geçer.
+     - `ScreenEdgeSentinels` sınır algılama payı `8px` olarak genişletildi ve monitör ID'si doğrudan eşleşmese bile kenardaki en uygun cihaza fallback mekanizması eklendi.
+     - Köşe ölü bölgesi (`dead_zone`) 24px'ten 16px'e optimize edildi ve geçiş soğuma süresi 0.8 saniyeye indirilerek ekranlar arası git-gel geçişleri hızlandırıldı.
+
+---
+
 # Connect Me v1.8.18 — Linux 2D Kanvas Sürükle-Bırak, KVM İmleç Geçişi & Türkçe Klavye Kodlama Onarımı
 
 Bu sürüm; Linux (Nobara / Fedora / Ubuntu / Arch) kullanıcılarının bildirdiği üç kritik kullanılabilirlik ve KVM sorununu kökten çözer:

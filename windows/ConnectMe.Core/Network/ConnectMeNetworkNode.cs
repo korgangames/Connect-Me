@@ -1345,7 +1345,12 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             SenderId = LocalDeviceId,
             SenderName = LocalDeviceName,
             SenderPlatform = LocalPlatform,
-            ReturnEdge = (int)oppositeEdge
+            ReturnEdge = (int)oppositeEdge,
+            EdgeOffsetStart = peer.EdgeOffsetStart,
+            EdgeOffsetEnd = peer.EdgeOffsetEnd,
+            AttachedMonitorId = peer.AttachedLocalMonitorId,
+            SenderScreenWidth = LocalScreenWidth,
+            SenderScreenHeight = LocalScreenHeight
         };
 
         _ = Task.Run(async () =>
@@ -2409,7 +2414,13 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     if (peer != null)
                     {
                         peer.AssignedEdgeOnLocal = returnEdge;
-                        Log($"[Ekran Konfigürasyonu] '{peer.DeviceName}' ({remoteIp}) karşılıklı kenar düzenini güncelledi -> {returnEdge}.");
+                        if (header.EdgeOffsetStart.HasValue)
+                            peer.EdgeOffsetStart = (float)header.EdgeOffsetStart.Value;
+                        if (header.EdgeOffsetEnd.HasValue)
+                            peer.EdgeOffsetEnd = (float)header.EdgeOffsetEnd.Value;
+                        if (!string.IsNullOrEmpty(header.AttachedMonitorId))
+                            peer.AttachedLocalMonitorId = header.AttachedMonitorId;
+                        Log($"[Ekran Konfigürasyonu] '{peer.DeviceName}' ({remoteIp}) karşılıklı kenar düzenini güncelledi -> {returnEdge} (Ofset: {peer.EdgeOffsetStart:F2} - {peer.EdgeOffsetEnd:F2}).");
                         RemoteEdgeConfigReceived?.Invoke(peer, returnEdge);
                         PeerDiscoveredOrUpdated?.Invoke(peer);
                     }

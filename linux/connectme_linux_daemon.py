@@ -1534,28 +1534,28 @@ class LinuxHardwareInputGrabber:
         rel_x = cur_x - mon.virtualX
         rel_y = cur_y - mon.virtualY
 
-        dead_zone = 24
+        dead_zone = 16
         in_v_corner = rel_y < dead_zone or rel_y > (mon.height - dead_zone)
         in_h_corner = rel_x < dead_zone or rel_x > (mon.width - dead_zone)
 
         hit_edge = EDGE_NONE
         outward_push = 0.0
 
-        if rel_x >= mon.width - 2 and dx > 0 and not in_v_corner:
+        if rel_x >= mon.width - 6 and dx > 0 and not in_v_corner:
             hit_edge = EDGE_RIGHT
             outward_push = dx
-        elif rel_x <= 1 and dx < 0 and not in_v_corner:
+        elif rel_x <= 5 and dx < 0 and not in_v_corner:
             hit_edge = EDGE_LEFT
             outward_push = -dx
-        elif rel_y <= 1 and dy < 0 and not in_h_corner:
+        elif rel_y <= 5 and dy < 0 and not in_h_corner:
             hit_edge = EDGE_TOP
             outward_push = -dy
-        elif rel_y >= mon.height - 2 and dy > 0 and not in_h_corner:
+        elif rel_y >= mon.height - 6 and dy > 0 and not in_h_corner:
             hit_edge = EDGE_BOTTOM
             outward_push = dy
 
         if hit_edge == EDGE_NONE:
-            if rel_x > 10 and rel_x < mon.width - 10 and rel_y > 10 and rel_y < mon.height - 10:
+            if rel_x > 15 and rel_x < mon.width - 15 and rel_y > 15 and rel_y < mon.height - 15:
                 self._accum_push = 0.0
                 self._push_edge = EDGE_NONE
             return
@@ -1582,10 +1582,10 @@ class LinuxHardwareInputGrabber:
 
         self._accum_push += outward_push
 
-        if self._accum_push >= 15.0:
+        if self._accum_push >= 6.0:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
-            self._edge_cooldown_until = time.time() + 1.2
+            self._edge_cooldown_until = time.time() + 0.8
 
             peer_name = target_peer.get("deviceName", "Cihaz")
             self.node.log(f"[Otomatik Kenar Geçişi] 🎯 İmleç {hit_edge}. kenardan '{peer_name}' cihazına otomatik aktarılıyor (norm={norm_pos:.2f}).")
@@ -1878,7 +1878,13 @@ class ConnectMeLinuxNode:
             "senderId": self.device_id,
             "senderName": self.device_name,
             "senderPlatform": self.platform,
-            "returnEdge": opposite_edge
+            "returnEdge": opposite_edge,
+            "edgeOffsetStart": float(peer.get("edgeOffsetStart", 0.0)),
+            "edgeOffsetEnd": float(peer.get("edgeOffsetEnd", 1.0)),
+            "edgeOffset": float(peer.get("edgeOffset", 0.5)),
+            "attachedMonitorId": peer.get("attachedMonitorId") or "",
+            "senderScreenWidth": self.topology.total_width,
+            "senderScreenHeight": self.topology.total_height,
         }
         self.send_tcp_control_to_peer(peer, hdr)
 
@@ -3033,6 +3039,47 @@ class ConnectMeLinuxNode:
                     self.return_host_control_to_local(notify_peer=False, return_edge=edge, norm_pos=norm_pos)
                 else:
                     self.return_control_to_local(edge, norm_pos)
+
+            elif msg_type == "EDGE_CONFIG":
+                sender_id = header.get("senderId", remote_ip)
+                sender_name = header.get("senderName", remote_ip)
+                return_edge = header.get("returnEdge", EDGE_RIGHT)
+                peer = self.peers.get(sender_id)
+                if not peer:
+                    for p in self.peers.values():
+                        if p.get("ipAddress") == remote_ip:
+                            peer = p
+                            break
+                if peer:
+                    peer["assignedEdge"] = return_edge
+                    if "edgeOffsetStart" in header:
+                        peer["edgeOffsetStart"] = float(header["edgeOffsetStart"])
+                    if "edgeOffsetEnd" in header:
+                        peer["edgeOffsetEnd"] = float(header["edgeOffsetEnd"])
+                    if "edgeOffset" in header:
+                        peer["edgeOffset"] = float(header["edgeOffset"])
+                    else:
+                        peer["edgeOffset"] = (peer.get("edgeOffsetStart", 0.0) + peer.get("edgeOffsetEnd", 1.0)) / 2.0
+
+                    outermost = self.topology.get_outermost_monitor_for_edge(return_edge)
+                    mon_id = getattr(outermost, "monitorId", "") if outermost else ""
+                    peer["attachedMonitorId"] = mon_id
+                    peer["canvasX"] = None
+                    peer["canvasY"] = None
+                    self.set_peer_arrangement(
+                        peer["deviceId"],
+                        return_edge,
+                        edge_offset=peer["edgeOffset"],
+                        edge_offset_start=peer.get("edgeOffsetStart", 0.0),
+                        edge_offset_end=peer.get("edgeOffsetEnd", 1.0),
+                        attached_monitor_id=mon_id
+                    )
+                    self.log(f"[Ekran Konfigürasyonu] '{sender_name}' ({remote_ip}) karşılıklı kenar düzenini güncelledi -> Kenar {return_edge} (Ofset: {peer.get('edgeOffsetStart', 0.0):.2f} - {peer.get('edgeOffsetEnd', 1.0):.2f}).")
+                    if self.on_peer_updated:
+                        try:
+                            self.on_peer_updated(peer)
+                        except Exception:
+                            pass
 
             elif msg_type == "DISCONNECT":
                 sender_id = header.get("senderId", remote_ip)

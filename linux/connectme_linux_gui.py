@@ -179,24 +179,24 @@ class ScreenEdgeSentinels:
         rel_x = cur_x - mon.virtualX
         rel_y = cur_y - mon.virtualY
 
-        # Dead-corner koruması (24px): Pencere kapatma ('X') ve köşe butonları sırasında yanlışlıkla geçişi engeller
-        dead_zone = 24
+        # Dead-corner koruması (16px): Pencere kapatma ('X') ve köşe butonları sırasında yanlışlıkla geçişi engeller
+        dead_zone = 16
         in_v_corner = rel_y < dead_zone or rel_y > (mon.height - dead_zone)
         in_h_corner = rel_x < dead_zone or rel_x > (mon.width - dead_zone)
 
         hit_edge = EDGE_NONE
         norm_pos = 0.5
 
-        if rel_x >= mon.width - 5 and not in_v_corner:
+        if rel_x >= mon.width - 8 and not in_v_corner:
             hit_edge = EDGE_RIGHT
             norm_pos = max(0.0, min(1.0, rel_y / float(max(1, mon.height))))
-        elif rel_x <= 4 and not in_v_corner:
+        elif rel_x <= 7 and not in_v_corner:
             hit_edge = EDGE_LEFT
             norm_pos = max(0.0, min(1.0, rel_y / float(max(1, mon.height))))
-        elif rel_y <= 4 and not in_h_corner:
+        elif rel_y <= 7 and not in_h_corner:
             hit_edge = EDGE_TOP
             norm_pos = max(0.0, min(1.0, rel_x / float(max(1, mon.width))))
-        elif rel_y >= mon.height - 5 and not in_h_corner:
+        elif rel_y >= mon.height - 8 and not in_h_corner:
             hit_edge = EDGE_BOTTOM
             norm_pos = max(0.0, min(1.0, rel_x / float(max(1, mon.width))))
 
@@ -209,8 +209,10 @@ class ScreenEdgeSentinels:
 
         mon_id = getattr(mon, "monitorId", None)
         target = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon_id)
+        if not target and mon_id:
+            target = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, None)
         if target:
-            self.set_cooldown(1.2)
+            self.set_cooldown(0.8)
             if self.on_edge_triggered:
                 self.on_edge_triggered(target, hit_edge, norm_pos)
             return
@@ -1206,6 +1208,9 @@ class ConnectMeLinuxGui:
                 self.shelf_list.insert(tk.END, f"  📥 {f.name} ({size_kb:.1f} KB)")
 
         # 4. 2D Kanvas Çizimi
+        for pid, p in self.node.peers.items():
+            if p.get("canvasX") is None:
+                self.peer_canvas_coords.pop(pid, None)
         self._draw_2d_canvas()
 
         # 5. Kenar Geçiş Bariyerlerini Güncelle (Host Modu)
