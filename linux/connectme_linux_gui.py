@@ -628,7 +628,7 @@ class ConnectMeLinuxGui:
         ttk.Button(right_ctrl, text="📐 Sıfırla", command=self._reset_canvas_layout).pack(side=tk.RIGHT, padx=3)
 
         # GENİŞ 2D EKRAN DİZİLİM KANVASI
-        self.canvas = tk.Canvas(tab, bg="#090D13", highlightthickness=1.5, highlightbackground="#21262D")
+        self.canvas = tk.Canvas(tab, bg="#090D13", highlightthickness=1, highlightbackground="#21262D")
         self.canvas.pack(fill=tk.BOTH, expand=True, pady=4)
         self.canvas.bind("<MouseWheel>", self._on_canvas_mousewheel)
         self.canvas.bind("<Button-4>", lambda e: self._zoom_canvas(0.08))
@@ -643,7 +643,7 @@ class ConnectMeLinuxGui:
         self.canvas_info_lbl = ttk.Label(
             bottom_frame,
             text="Ekran kutularını sürükleyip merkez ekranın istediğiniz kenarına yapıştırın veya aşağıdaki butonlarla kenarlara dağıtın.",
-            font=("Segoe UI", 9.5),
+            font=("Segoe UI", 10),
             foreground="#38BDF8"
         )
         self.canvas_info_lbl.pack(fill=tk.X, pady=(0, 4))
@@ -658,7 +658,7 @@ class ConnectMeLinuxGui:
             legend_box,
             text="🟦 Yerel Monitör  |  🟩 Aktif Cihaz  |  🟧 PIN Bekleyen  |  🟦 Parlak Mavi: Kontakt Noktası",
             foreground="#64748B",
-            font=("Segoe UI", 8.5)
+            font=("Segoe UI", 9)
         ).pack(side=tk.LEFT)
 
         move_box = ttk.Frame(row2)
@@ -1914,12 +1914,12 @@ class ConnectMeLinuxGui:
                     portal_core = "#38BDF8" if is_selected else "#10B981"
                     # Glowing portal segment line on local monitor edge
                     self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_glow, width=8, capstyle=tk.ROUND)
-                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_core, width=4.5, capstyle=tk.ROUND)
+                    self.canvas.create_line(plx1, ply1, plx2, ply2, fill=portal_core, width=4, capstyle=tk.ROUND)
 
                     # Portal midpoint & node circle
                     pmx = (plx1 + plx2) / 2.0
                     pmy = (ply1 + ply2) / 2.0
-                    self.canvas.create_oval(pmx - 4, pmy - 4, pmx + 4, pmy + 4, fill=portal_core, outline="#FFFFFF", width=1.5)
+                    self.canvas.create_oval(pmx - 4, pmy - 4, pmx + 4, pmy + 4, fill=portal_core, outline="#FFFFFF", width=2)
 
                     # Clean connector line between portal and peer card
                     self.canvas.create_line(pmx, pmy, c_anchor_x, c_anchor_y, fill=line_col, width=2)

@@ -2,7 +2,7 @@
 
 **Proje Adı:** Connect Me  
 **Organizasyon:** Korgan Games (`korgangames/Connect-Me`)  
-**Sürüm:** 1.8.16 (Çoklu Monitör Sanal Masaüstü, Dinamik Kontakt Noktaları, Çift Yönlü Ses Matrisi, Linux & Windows UX Eşitliği)  
+**Sürüm:** 1.8.17 (Çoklu Monitör Sanal Masaüstü, Dinamik Kontakt Noktaları, Çift Yönlü Ses Matrisi, Linux & Windows UX Eşitliği)  
 **Hedef Platformlar:** Windows (10/11), Android (8+ / 14 / 15), Linux (Nobara — KDE Plasma 5/6 Wayland & X11)  
 **Bağlantı Teknolojileri:** Hibrit Wi-Fi (LAN / mDNS / UDP Fast-Path / TCP Framed) + Bluetooth (BLE Keşif & HID)
 

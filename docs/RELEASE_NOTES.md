@@ -1,3 +1,18 @@
+# Connect Me v1.8.17 — Linux Tkinter Font Boyutu TclError Düzeltmesi
+
+Bu sürüm; Linux (Nobara / Fedora / Ubuntu / Arch) ortamlarında Python 3.14+ ve Tcl/Tk ile Connect Me grafik arayüzü başlatılırken ortaya çıkan `expected integer but got "9.5"` çökme hatasını kökten çözer.
+
+---
+
+### 🌟 v1.8.17 Düzeltmeleri:
+
+* **🐛 Linux Tkinter TclError Font Boyutu Düzeltildi (`expected integer but got "9.5"`):**
+  - **Sorun:** Linux arayüzündeki 2D kanvas alt çubuğuna eklenen dinamik durum etiketi ve lejant etiketinde ondalıklı font boyutu (`font=("Segoe UI", 9.5)` ve `font=("Segoe UI", 8.5)`) tanımlandığı için Linux Tcl/Tk kütüphanesi başlatma sırasında `_tkinter.TclError: expected integer but got "9.5"` hatası vererek uygulamanın açılmasını engelliyordu.
+  - **Çözüm:** Tüm Tkinter etiket ve kanvas font boyutları katı tam sayıya (`10` ve `9`) dönüştürüldü. Ayrıca kanvas ve portal çizgilerindeki ondalıklı kalınlık değerleri (`highlightthickness`, `width`) Tcl/Tk ile %100 uyumlu tam sayılara sabitlendi.
+  - Artık Linux ortamında grafik arayüz sıfır hatayla ve kusursuzca açılır.
+
+---
+
 # Connect Me v1.8.16 — Linux 2D Ekran Kanvası Kontakt Noktaları, Çoklu Cihaz Kenar Dağıtımı & Windows UX/UI Eşitliği
 
 Bu sürüm; Linux sürümünü Windows sürümü ile 2D çoklu cihaz ekran düzeni ve etkileşimli kontakt noktaları (contact points) açısından %100 eşitliğe (parity) kavuşturur. Tek bir ekran kenarına birden fazla cihazın (örneğin telefon ve laptop) çakışmadan bağlanabilmesini sağlar, Linux GUI'sine Windows ile birebir tutarlı araç çubuklarını ve görsel portal çizgilerini kazandırır ve kenar geçiş denetçilerini çoklu monitör/kontakt noktası duyarlı hale getirir.
