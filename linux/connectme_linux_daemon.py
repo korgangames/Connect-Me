@@ -1190,7 +1190,7 @@ class LinuxHardwareInputGrabber:
                 min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
                 self.cur_x = min_x + vw // 2
                 self.cur_y = min_y + vh // 2
-        self._edge_cooldown_until = time.time() + 1.2
+        self._edge_cooldown_until = time.time() + 0.35
 
         # Physically nudge OS cursor away from the boundary edge to prevent instant bounce back
         try:
@@ -1514,12 +1514,28 @@ class LinuxHardwareInputGrabber:
             return
 
         with self._coord_lock:
-            self.cur_x += dx
-            self.cur_y += dy
+            # Apply dynamic pointer acceleration so internal tracking matches desktop compositor speed
+            accel = 1.0
+            spd_sq = dx * dx + dy * dy
+            if spd_sq > 49:  # > 7 raw counts per event
+                accel = min(3.5, 1.0 + (spd_sq ** 0.5) / 10.0)
+
+            self.cur_x += int(dx * accel)
+            self.cur_y += int(dy * accel)
 
             min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
             max_x = min_x + vw - 1
             max_y = min_y + vh - 1
+
+            # When mouse is pushed outward near edges, immediately saturate coordinates to eliminate drift
+            if dx > 0 and self.cur_x > max_x - 30:
+                self.cur_x = max_x
+            elif dx < 0 and self.cur_x < min_x + 30:
+                self.cur_x = min_x
+            if dy > 0 and self.cur_y > max_y - 30:
+                self.cur_y = max_y
+            elif dy < 0 and self.cur_y < min_y + 30:
+                self.cur_y = min_y
 
             self.cur_x = max(min_x, min(max_x, self.cur_x))
             self.cur_y = max(min_y, min(max_y, self.cur_y))
@@ -1534,28 +1550,28 @@ class LinuxHardwareInputGrabber:
         rel_x = cur_x - mon.virtualX
         rel_y = cur_y - mon.virtualY
 
-        dead_zone = 16
+        dead_zone = 12
         in_v_corner = rel_y < dead_zone or rel_y > (mon.height - dead_zone)
         in_h_corner = rel_x < dead_zone or rel_x > (mon.width - dead_zone)
 
         hit_edge = EDGE_NONE
         outward_push = 0.0
 
-        if rel_x >= mon.width - 6 and dx > 0 and not in_v_corner:
+        if rel_x >= mon.width - 12 and dx > 0 and not in_v_corner:
             hit_edge = EDGE_RIGHT
             outward_push = dx
-        elif rel_x <= 5 and dx < 0 and not in_v_corner:
+        elif rel_x <= 11 and dx < 0 and not in_v_corner:
             hit_edge = EDGE_LEFT
             outward_push = -dx
-        elif rel_y <= 5 and dy < 0 and not in_h_corner:
+        elif rel_y <= 11 and dy < 0 and not in_h_corner:
             hit_edge = EDGE_TOP
             outward_push = -dy
-        elif rel_y >= mon.height - 6 and dy > 0 and not in_h_corner:
+        elif rel_y >= mon.height - 12 and dy > 0 and not in_h_corner:
             hit_edge = EDGE_BOTTOM
             outward_push = dy
 
         if hit_edge == EDGE_NONE:
-            if rel_x > 15 and rel_x < mon.width - 15 and rel_y > 15 and rel_y < mon.height - 15:
+            if rel_x > 25 and rel_x < mon.width - 25 and rel_y > 25 and rel_y < mon.height - 25:
                 self._accum_push = 0.0
                 self._push_edge = EDGE_NONE
             return
@@ -1570,7 +1586,9 @@ class LinuxHardwareInputGrabber:
         else:
             norm_pos = max(0.02, min(0.98, rel_x / float(max(1, mon.width))))
 
-        target_peer = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon.monitorId)
+        target_peer = self.node.find_adjacent_peer_in_colony(self.node.device_id, hit_edge, norm_pos)
+        if not target_peer:
+            target_peer = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon.monitorId)
         if not target_peer:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
@@ -1582,13 +1600,14 @@ class LinuxHardwareInputGrabber:
 
         self._accum_push += outward_push
 
-        if self._accum_push >= 6.0:
+        # Snappy barrier push: 2.0 outward push is enough for immediate, natural crossing
+        if self._accum_push >= 2.0:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
-            self._edge_cooldown_until = time.time() + 0.8
+            self._edge_cooldown_until = time.time() + 0.35
 
             peer_name = target_peer.get("deviceName", "Cihaz")
-            self.node.log(f"[Otomatik Kenar Geçişi] 🎯 İmleç {hit_edge}. kenardan '{peer_name}' cihazına otomatik aktarılıyor (norm={norm_pos:.2f}).")
+            self.node.log(f"[Otomatik Kenar Geçişi] 🎯 İmleç {hit_edge}. kenardan '{peer_name}' cihazına anında aktarılıyor (norm={norm_pos:.2f}).")
 
             threading.Thread(
                 target=self.node.switch_control_to_peer,
@@ -1634,7 +1653,7 @@ class LinuxHardwareInputGrabber:
         self.active_peer = None
         self._accum_push = 0.0
         self._push_edge = EDGE_NONE
-        self._edge_cooldown_until = time.time() + 1.2
+        self._edge_cooldown_until = time.time() + 0.35
 
         for dev in list(self._pointer_devs + self._kbd_devs):
             try:
@@ -1917,19 +1936,20 @@ class ConnectMeLinuxNode:
             curr_id, curr_x, curr_y, curr_w, curr_h = queue.pop(0)
 
             if self.device_id not in placed and self.local_attached_to_device_id == curr_id:
-                off = max(0.0, min(0.95, float(self.local_edge_offset_start)))
+                s_off = max(0.0, min(0.95, float(getattr(self, "local_edge_offset_start", 0.0))))
+                e_off = max(0.05, min(1.0, float(getattr(self, "local_edge_offset_end", 1.0))))
                 edge = self.local_attached_edge
                 if edge == EDGE_RIGHT:
                     lx = curr_x + curr_w
-                    ly = curr_y + round(off * curr_h)
+                    ly = curr_y + round(e_off * curr_h) - total_h if (s_off <= 0.01 and e_off < 0.98) else curr_y + round(s_off * curr_h)
                 elif edge == EDGE_LEFT:
                     lx = curr_x - total_w
-                    ly = curr_y + round(off * curr_h)
+                    ly = curr_y + round(e_off * curr_h) - total_h if (s_off <= 0.01 and e_off < 0.98) else curr_y + round(s_off * curr_h)
                 elif edge == EDGE_TOP:
-                    lx = curr_x + round(off * curr_w)
+                    lx = curr_x + round(e_off * curr_w) - total_w if (s_off <= 0.01 and e_off < 0.98) else curr_x + round(s_off * curr_w)
                     ly = curr_y - total_h
                 elif edge == EDGE_BOTTOM:
-                    lx = curr_x + round(off * curr_w)
+                    lx = curr_x + round(e_off * curr_w) - total_w if (s_off <= 0.01 and e_off < 0.98) else curr_x + round(s_off * curr_w)
                     ly = curr_y + curr_h
                 else:
                     lx = curr_x + curr_w
@@ -1949,19 +1969,20 @@ class ConnectMeLinuxNode:
                     p["attachedToDeviceId"] = curr_id
                     pw = p.get("screenWidth", 1920)
                     ph = p.get("screenHeight", 1080)
-                    off = max(0.0, min(0.95, float(p.get("edgeOffsetStart", 0.0))))
+                    s_off = max(0.0, min(0.95, float(p.get("edgeOffsetStart", 0.0))))
+                    e_off = max(0.05, min(1.0, float(p.get("edgeOffsetEnd", 1.0))))
                     edge = p.get("assignedEdge", EDGE_RIGHT)
                     if edge == EDGE_RIGHT:
                         px = curr_x + curr_w
-                        py = curr_y + round(off * curr_h)
+                        py = curr_y + round(e_off * curr_h) - ph if (s_off <= 0.01 and e_off < 0.98) else curr_y + round(s_off * curr_h)
                     elif edge == EDGE_LEFT:
                         px = curr_x - pw
-                        py = curr_y + round(off * curr_h)
+                        py = curr_y + round(e_off * curr_h) - ph if (s_off <= 0.01 and e_off < 0.98) else curr_y + round(s_off * curr_h)
                     elif edge == EDGE_TOP:
-                        px = curr_x + round(off * curr_w)
+                        px = curr_x + round(e_off * curr_w) - pw if (s_off <= 0.01 and e_off < 0.98) else curr_x + round(s_off * curr_w)
                         py = curr_y - ph
                     elif edge == EDGE_BOTTOM:
-                        px = curr_x + round(off * curr_w)
+                        px = curr_x + round(e_off * curr_w) - pw if (s_off <= 0.01 and e_off < 0.98) else curr_x + round(s_off * curr_w)
                         py = curr_y + curr_h
                     else:
                         px = curr_x + curr_w

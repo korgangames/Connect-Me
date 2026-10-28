@@ -6,9 +6,9 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>ConnectMe.Core</RootNamespace>
-    <Version>1.8.21</Version>
-    <AssemblyVersion>1.8.21</AssemblyVersion>
-    <FileVersion>1.8.21</FileVersion>
+    <Version>1.8.22</Version>
+    <AssemblyVersion>1.8.22</AssemblyVersion>
+    <FileVersion>1.8.22</FileVersion>
   </PropertyGroup>
 
 </Project>

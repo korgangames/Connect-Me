@@ -1,3 +1,32 @@
+# Connect Me v1.8.22 — Akıcı Linux İmleç Geçişi, Gerçek Zamanlı Kanvas Kenetlenmesi & Orantılı Kontakt Noktası
+
+Bu sürüm; Linux cihazından diğer cihazlara imleç aktarılırken yaşanan takılma/tutarsızlıkları ve Linux arayüzünde cihaz kartı sürüklenirken kontakt noktasının (%0 - %100) değişmeme ve kilitlenme sorunlarını kökten çözer:
+
+1. **Linux Çekirdek Giriş Yakalayıcısında (HardwareInputGrabber) Akıcı İmleç Geçişi:**
+   - **Kök Neden:** Wayland (Nobara KDE Plasma vb.) altında masaüstü imleç koordinatları Tkinter penceresi dışındayken okunamadığından `HardwareInputGrabber` donanım seviyesinde evdev bağıl hareketlerini (`dx, dy`) sayıyordu. Ancak masaüstü kompozitörü (libinput) ivmelendirme (acceleration) uyguladığından ekran imleci kenara ulaştığında bile `cur_x` yüzlerce piksel geride kalıyor ve kullanıcının fareyi defalarca zorla itmesini gerektiriyordu. Ayrıca 6px'lik dar kenar eşiği ve 6.0'lık yüksek itme barajı geçişi geciktiriyor, geri dönüşlerdeki 1.2 saniyelik uzun soğuma süresi (`_edge_cooldown_until`) imlecin tekrar geçişini engelliyordu.
+   - **Çözüm:**
+     - Evdev girdilerine dinamik hız ivmelendirmesi eklendi; kenara doğru yönelen fare itmelerinde koordinatlar anında sınıra doyurulur (drift engellenir).
+     - Kenar algılama toleransı 12px'e genişletildi.
+     - İtme barajı 6.0'dan 2.0'a düşürüldü; ekran kenarına yapılan doğal ve yumuşak bir dokunuşla imleç anında diğer ekrana aktarılır.
+     - Kenar geçiş soğuma süresi 1.2 saniyeden 0.35 saniyeye (350ms) çekilerek çift yönlü geçişler son derece akıcı ve kararlı hale getirildi.
+     - Komşu cihaz çözümlemesinde doğrudan `find_adjacent_peer_in_colony` önceliklendirildi.
+
+2. **Gerçek Zamanlı Kanvas Kenetlenmesi & Görsel Geribildirim (Real-time Drag Snapping):**
+   - **Kök Neden:** Windows WPF'te kart sürüklenirken gerçek zamanlı olarak kenara yapışıp koordinat ve kontakt çizgisini anlık güncellerken, Linux GUI'sinde kart fareyle serbest yüzüyor, portal ve bağlantı çizgisi eski yerinde donuk kalıyor, yalnızca fare bırakıldığında kenetlenmeye çalışıyordu.
+   - **Çözüm:**
+     - `_on_peer_drag_motion` fonksiyonuna gerçek zamanlı kenetlenme ve `_update_portal_preview` entegre edildi.
+     - Kart sürüklendiği anda ilgili kenara manyetik olarak oturur; parlak portal çizgisi (`peer_portal_{pid}`) ve hedef bilgi etiketi fare hareketini anlık ve pürüzsüz takip eder.
+
+3. **Dinamik ve Orantılı Kontakt Noktası Hesaplaması (Proportional Contact Segment & World Coordinate Fix):**
+   - **Kök Neden:** Önceki geometrik kesişim algoritmasında kart yüksekliği monitör yüksekliğine eşit veya yakın olduğunda `overlap_top` her zaman 0.0 ve `overlap_bottom` her zaman 1.0 kalıyordu. Ayrıca kart yukarı veya sola taşırıldığında `edgeOffsetStart` 0.0'a kilitleniyor, koloni koordinatları hesaplanırken kart tekrar en başa (0) sıçrıyor ve dairesel ebeveyn bağı kilitlenmelere yol açıyordu.
+   - **Çözüm:**
+     - Kartın kenar boyunca izafi merkez konumu (`norm_mid`) ve orantılı kanat açıklığı (`half_span`) ile kontakt segmenti (`seg_start`, `seg_end`) dinamik olarak türetildi.
+     - Kart kenar boyunca yukarı kaydırıldığında kontakt noktası orantılı şekilde yukarı (%0 - %40), aşağı kaydırıldığında ise aşağı (%60 - %100) hareket eder.
+     - `recompute_colony_world_coordinates` ve C# `ComputeChildCoords` algoritmalarına üst ve sol yönlü negatif ofset desteği eklendi.
+     - Sürüklenen cihaz yerel makineye bağlandığında olası döngüsel ebeveyn referansları otomatik temizlenir.
+
+---
+
 # Connect Me v1.8.21 — Global Birleşik Koloni Kanvası & Linux Orantılı Yakınlaştırma Ölçeklemesi (Zoom Bugfix)
 
 Bu sürüm; hem Windows hem de Linux arayüzlerinde harici cihazların (ör. Huawei tablet/telefon) her iki makinede de sanki yalnızca kendine bağlıymış gibi görünmesi sorununu küresel birleşik koloni koordinat sistemiyle çözer ve Linux arayüzündeki zoom ölçekleme hatasını giderir:

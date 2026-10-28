@@ -10,10 +10,10 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>ConnectMe.Windows</RootNamespace>
     <AssemblyName>ConnectMe.Windows</AssemblyName>
-    <Version>1.8.21</Version>
-    <AssemblyVersion>1.8.21</AssemblyVersion>
-    <FileVersion>1.8.21</FileVersion>
-    <InformationalVersion>1.8.21 (v1-8-21)</InformationalVersion>
+    <Version>1.8.22</Version>
+    <AssemblyVersion>1.8.22</AssemblyVersion>
+    <FileVersion>1.8.22</FileVersion>
+    <InformationalVersion>1.8.22 (v1-8-22)</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

@@ -208,11 +208,13 @@ class ScreenEdgeSentinels:
             return
 
         mon_id = getattr(mon, "monitorId", None)
-        target = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon_id)
+        target = self.node.find_adjacent_peer_in_colony(self.node.device_id, hit_edge, norm_pos)
+        if not target:
+            target = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon_id)
         if not target and mon_id:
             target = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, None)
         if target:
-            self.set_cooldown(0.8)
+            self.set_cooldown(0.35)
             if self.on_edge_triggered:
                 self.on_edge_triggered(target, hit_edge, norm_pos)
             return
@@ -1493,8 +1495,12 @@ class ConnectMeLinuxGui:
         self._drag_data["peer_id"] = peer_id
         self._drag_data["start_x"] = event.x
         self._drag_data["start_y"] = event.y
+        self._drag_data["offset_x"] = event.x - coords[0]
+        self._drag_data["offset_y"] = event.y - coords[1]
         self._drag_data["card_x"] = coords[0]
         self._drag_data["card_y"] = coords[1]
+        self._drag_data["card_w"] = card_w
+        self._drag_data["card_h"] = card_h
         try:
             self.canvas.lift(f"peer_{peer_id}")
             self.canvas.itemconfig(f"peer_box_{peer_id}", outline="#38BDF8", width=3)
@@ -1520,45 +1526,125 @@ class ConnectMeLinuxGui:
         if not pid or pid not in self.node.peers:
             return
 
-        dx = event.x - self._drag_data["start_x"]
-        dy = event.y - self._drag_data["start_y"]
-        self._drag_data["start_x"] = event.x
-        self._drag_data["start_y"] = event.y
+        card_w = self._drag_data.get("card_w", 120.0)
+        card_h = self._drag_data.get("card_h", 70.0)
+        raw_x = event.x - self._drag_data.get("offset_x", card_w / 2.0)
+        raw_y = event.y - self._drag_data.get("offset_y", card_h / 2.0)
+        self._drag_data["card_x"] = raw_x
+        self._drag_data["card_y"] = raw_y
 
-        self._drag_data["card_x"] += dx
-        self._drag_data["card_y"] += dy
-
-        try:
-            self.canvas.move(f"peer_{pid}", dx, dy)
-        except Exception:
-            pass
-
-        peer = self.node.peers[pid]
-        p_w = peer.get("screenWidth", 1920) or 1920
-        p_h = peer.get("screenHeight", 1080) or 1080
-        scale = self._get_current_canvas_scale()
-        card_w = max(120.0, p_w * scale)
-        card_h = max(70.0, p_h * scale)
         local_mon_rects = self._get_canvas_local_mon_rects()
-
         snapped_edge, final_x, final_y, seg_start, seg_end, target_id, target_name, is_local, target_mon_id = self._snap_peer_box_to_anchors_on_canvas(
-            pid, self._drag_data["card_x"], self._drag_data["card_y"], card_w, card_h, local_mon_rects
+            pid, raw_x, raw_y, card_w, card_h, local_mon_rects
         )
 
-        try:
-            c_anchor_x = self._drag_data["card_x"] + card_w / 2.0
-            c_anchor_y = self._drag_data["card_y"] + card_h / 2.0
-            line_coords = self.canvas.coords(f"peer_line_{pid}")
-            if line_coords and len(line_coords) == 4:
-                self.canvas.coords(f"peer_line_{pid}", line_coords[0], line_coords[1], c_anchor_x, c_anchor_y)
-        except Exception:
-            pass
+        # Smooth real-time snapping: move visual box so user sees exact snapped placement as they drag
+        card_coords = self.canvas.coords(f"peer_box_{pid}")
+        if card_coords and len(card_coords) == 4:
+            dx = final_x - card_coords[0]
+            dy = final_y - card_coords[1]
+            try:
+                self.canvas.move(f"peer_{pid}", dx, dy)
+            except Exception:
+                pass
+
+        # Update real-time glowing portal segment and connector line
+        self._update_portal_preview(pid, snapped_edge, seg_start, seg_end, target_id, is_local, target_mon_id, final_x, final_y, card_w, card_h, local_mon_rects)
 
         edge_names = {EDGE_LEFT: "Sol", EDGE_RIGHT: "Sağ", EDGE_TOP: "Üst", EDGE_BOTTOM: "Alt"}
-        dev_name = peer.get("deviceName", pid)
+        dev_name = self.node.peers[pid].get("deviceName", pid)
         msg = f"🎯 {dev_name} -> {target_name} {edge_names.get(snapped_edge, 'Sağ')} Kenar (%{int(seg_start*100)} - %{int(seg_end*100)} kesiti)"
         if hasattr(self, "canvas_info_lbl"):
             self.canvas_info_lbl.config(text=msg)
+
+    def _update_portal_preview(
+        self,
+        pid: str,
+        arr_edge: int,
+        seg_start: float,
+        seg_end: float,
+        target_id: str,
+        is_local: bool,
+        target_mon_id: str,
+        final_x: float,
+        final_y: float,
+        card_w: float,
+        card_h: float,
+        local_mon_rects: list
+    ):
+        """Redraws or repositions the glowing portal segment and connector line in real-time during drag."""
+        scale = self._get_current_canvas_scale()
+        amx1, amy1, amx2, amy2 = 0, 0, 100, 100
+
+        if not is_local and target_id in self.node.peers:
+            parent_p = self.node.peers[target_id]
+            parent_w = max(120.0, (parent_p.get("screenWidth", 1920) or 1920) * scale)
+            parent_h = max(70.0, (parent_p.get("screenHeight", 1080) or 1080) * scale)
+            if target_id in self.peer_canvas_coords:
+                parent_x, parent_y = self.peer_canvas_coords[target_id]
+            else:
+                metrics = self._get_colony_layout_metrics()
+                parent_x = metrics[1] + float(parent_p.get("colonyX", 0.0)) * scale
+                parent_y = metrics[2] + float(parent_p.get("colonyY", 0.0)) * scale
+            amx1, amy1, amx2, amy2 = parent_x, parent_y, parent_x + parent_w, parent_y + parent_h
+        else:
+            attached_box = None
+            if target_mon_id:
+                for mon_item in local_mon_rects:
+                    if getattr(mon_item[0], "monitorId", "") == target_mon_id:
+                        attached_box = mon_item
+                        break
+            if not attached_box and local_mon_rects:
+                attached_box = local_mon_rects[0]
+            if attached_box:
+                _, amx1, amy1, amx2, amy2 = attached_box
+
+        am_w = max(1.0, amx2 - amx1)
+        am_h = max(1.0, amy2 - amy1)
+        p_s = seg_start
+        p_e = seg_end
+
+        if arr_edge == EDGE_LEFT:
+            plx1 = plx2 = amx1 - 2
+            ply1 = amy1 + p_s * am_h
+            ply2 = amy1 + p_e * am_h
+            c_anchor_x, c_anchor_y = final_x + card_w, final_y + card_h / 2.0
+        elif arr_edge == EDGE_RIGHT:
+            plx1 = plx2 = amx2 + 2
+            ply1 = amy1 + p_s * am_h
+            ply2 = amy1 + p_e * am_h
+            c_anchor_x, c_anchor_y = final_x, final_y + card_h / 2.0
+        elif arr_edge == EDGE_TOP:
+            ply1 = ply2 = amy1 - 2
+            plx1 = amx1 + p_s * am_w
+            plx2 = amx1 + p_e * am_w
+            c_anchor_x, c_anchor_y = final_x + card_w / 2.0, final_y + card_h
+        elif arr_edge == EDGE_BOTTOM:
+            ply1 = ply2 = amy2 + 2
+            plx1 = amx1 + p_s * am_w
+            plx2 = amx1 + p_e * am_w
+            c_anchor_x, c_anchor_y = final_x + card_w / 2.0, final_y
+        else:
+            plx1 = plx2 = amx2 + 2
+            ply1 = amy1
+            ply2 = amy2
+            c_anchor_x, c_anchor_y = final_x, final_y + card_h / 2.0
+
+        portal_tag = f"peer_portal_{pid}"
+        connector_tag = f"peer_line_{pid}"
+        pmx = (plx1 + plx2) / 2.0
+        pmy = (ply1 + ply2) / 2.0
+
+        try:
+            self.canvas.delete(portal_tag)
+            self.canvas.delete(connector_tag)
+            self.canvas.create_line(plx1, ply1, plx2, ply2, fill="#0284C7", width=8, capstyle=tk.ROUND, tags=(portal_tag,))
+            self.canvas.create_line(plx1, ply1, plx2, ply2, fill="#38BDF8", width=4, capstyle=tk.ROUND, tags=(portal_tag,))
+            self.canvas.create_oval(pmx - 4, pmy - 4, pmx + 4, pmy + 4, fill="#38BDF8", outline="#FFFFFF", width=2, tags=(portal_tag,))
+            self.canvas.create_line(pmx, pmy, c_anchor_x, c_anchor_y, fill="#38BDF8", width=2, tags=(connector_tag,))
+            self.canvas.lift(f"peer_{pid}")
+        except Exception:
+            pass
 
     def _snap_peer_box_to_anchors_on_canvas(
         self,
@@ -1649,26 +1735,38 @@ class ConnectMeLinuxGui:
             snapped_edge = EDGE_LEFT if norm_dx < 0 else EDGE_RIGHT
             final_x = (a_left - card_w - gap) if snapped_edge == EDGE_LEFT else (a_right + gap)
 
-            min_y = a_top - card_h * 0.80
-            max_y = a_bottom - card_h * 0.20
-            final_y = max(min_y, min(max_y, dragged_y))
+            norm_mid = max(0.08, min(0.92, (peer_cy - a_top) / a_h))
+            half_span = max(0.10, min(0.40, (card_h / 2.0) / a_h))
 
-            overlap_top = max(a_top, final_y)
-            overlap_bottom = min(a_bottom, final_y + card_h)
-            seg_start = max(0.0, min(0.95, (overlap_top - a_top) / a_h))
-            seg_end = max(seg_start + 0.05, min(1.0, (overlap_bottom - a_top) / a_h))
+            if card_h >= a_h * 0.85 and abs(norm_mid - 0.5) < 0.12:
+                seg_start = 0.0
+                seg_end = 1.0
+            elif norm_mid < 0.5:
+                seg_start = 0.0
+                seg_end = max(0.20, min(1.0, norm_mid + half_span))
+            else:
+                seg_start = max(0.0, min(0.80, norm_mid - half_span))
+                seg_end = 1.0
+
+            final_y = a_top + norm_mid * a_h - card_h / 2.0
         else:
             snapped_edge = EDGE_TOP if norm_dy < 0 else EDGE_BOTTOM
             final_y = (a_top - card_h - gap) if snapped_edge == EDGE_TOP else (a_bottom + gap)
 
-            min_x = a_left - card_w * 0.80
-            max_x = a_right - card_w * 0.20
-            final_x = max(min_x, min(max_x, dragged_x))
+            norm_mid = max(0.08, min(0.92, (peer_cx - a_left) / a_w))
+            half_span = max(0.10, min(0.40, (card_w / 2.0) / a_w))
 
-            overlap_left = max(a_left, final_x)
-            overlap_right = min(a_right, final_x + card_w)
-            seg_start = max(0.0, min(0.95, (overlap_left - a_left) / a_w))
-            seg_end = max(seg_start + 0.05, min(1.0, (overlap_right - a_left) / a_w))
+            if card_w >= a_w * 0.85 and abs(norm_mid - 0.5) < 0.12:
+                seg_start = 0.0
+                seg_end = 1.0
+            elif norm_mid < 0.5:
+                seg_start = 0.0
+                seg_end = max(0.20, min(1.0, norm_mid + half_span))
+            else:
+                seg_start = max(0.0, min(0.80, norm_mid - half_span))
+                seg_end = 1.0
+
+            final_x = a_left + norm_mid * a_w - card_w / 2.0
 
         return snapped_edge, final_x, final_y, seg_start, seg_end, best["id"], best["name"], best["is_local"], best.get("monitor_id", "")
 
@@ -1721,9 +1819,13 @@ class ConnectMeLinuxGui:
         if is_local:
             peer["attachedMonitorId"] = target_mon_id or "DISPLAY1"
             peer["attachedToDeviceId"] = self.node.device_id
+            if self.node.local_attached_to_device_id == pid:
+                self.node.local_attached_to_device_id = ""
         else:
             peer["attachedMonitorId"] = ""
             peer["attachedToDeviceId"] = target_id
+            if self.node.local_attached_to_device_id == pid:
+                self.node.local_attached_to_device_id = ""
 
         self.node.set_peer_arrangement(
             pid,

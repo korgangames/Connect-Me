@@ -565,14 +565,25 @@ public sealed class SpatialTopologyEngine
                 ? bestAnchor.Left - peerBoxW - gap
                 : bestAnchor.Left + bestAnchor.Width + gap;
 
-            double minY = bestAnchor.Top - peerBoxH * 0.70;
-            double maxY = bestAnchor.Top + bestAnchor.Height - peerBoxH * 0.30;
-            finalY = Math.Clamp(draggedTop, minY, maxY);
+            double normMid = Math.Clamp((peerCenterY - bestAnchor.Top) / Math.Max(1.0, bestAnchor.Height), 0.08, 0.92);
+            double halfSpan = Math.Clamp((peerBoxH / 2.0) / Math.Max(1.0, bestAnchor.Height), 0.10, 0.40);
 
-            double overlapTop = Math.Max(bestAnchor.Top, finalY);
-            double overlapBottom = Math.Min(bestAnchor.Top + bestAnchor.Height, finalY + peerBoxH);
-            segStart = (float)Math.Clamp((overlapTop - bestAnchor.Top) / Math.Max(1.0, bestAnchor.Height), 0.0, 0.95);
-            segEnd = (float)Math.Clamp((overlapBottom - bestAnchor.Top) / Math.Max(1.0, bestAnchor.Height), segStart + 0.05, 1.0);
+            if (peerBoxH >= bestAnchor.Height * 0.85 && Math.Abs(normMid - 0.5) < 0.12)
+            {
+                segStart = 0.0f;
+                segEnd = 1.0f;
+            }
+            else if (normMid < 0.5)
+            {
+                segStart = 0.0f;
+                segEnd = (float)Math.Clamp(normMid + halfSpan, 0.20, 1.0);
+            }
+            else
+            {
+                segStart = (float)Math.Clamp(normMid - halfSpan, 0.0, 0.80);
+                segEnd = 1.0f;
+            }
+            finalY = bestAnchor.Top + normMid * bestAnchor.Height - peerBoxH / 2.0;
         }
         else
         {
@@ -581,14 +592,25 @@ public sealed class SpatialTopologyEngine
                 ? bestAnchor.Top - peerBoxH - gap
                 : bestAnchor.Top + bestAnchor.Height + gap;
 
-            double minX = bestAnchor.Left - peerBoxW * 0.70;
-            double maxX = bestAnchor.Left + bestAnchor.Width - peerBoxW * 0.30;
-            finalX = Math.Clamp(draggedLeft, minX, maxX);
+            double normMid = Math.Clamp((peerCenterX - bestAnchor.Left) / Math.Max(1.0, bestAnchor.Width), 0.08, 0.92);
+            double halfSpan = Math.Clamp((peerBoxW / 2.0) / Math.Max(1.0, bestAnchor.Width), 0.10, 0.40);
 
-            double overlapLeft = Math.Max(bestAnchor.Left, finalX);
-            double overlapRight = Math.Min(bestAnchor.Left + bestAnchor.Width, finalX + peerBoxW);
-            segStart = (float)Math.Clamp((overlapLeft - bestAnchor.Left) / Math.Max(1.0, bestAnchor.Width), 0.0, 0.95);
-            segEnd = (float)Math.Clamp((overlapRight - bestAnchor.Left) / Math.Max(1.0, bestAnchor.Width), segStart + 0.05, 1.0);
+            if (peerBoxW >= bestAnchor.Width * 0.85 && Math.Abs(normMid - 0.5) < 0.12)
+            {
+                segStart = 0.0f;
+                segEnd = 1.0f;
+            }
+            else if (normMid < 0.5)
+            {
+                segStart = 0.0f;
+                segEnd = (float)Math.Clamp(normMid + halfSpan, 0.20, 1.0);
+            }
+            else
+            {
+                segStart = (float)Math.Clamp(normMid - halfSpan, 0.0, 0.80);
+                segEnd = 1.0f;
+            }
+            finalX = bestAnchor.Left + normMid * bestAnchor.Width - peerBoxW / 2.0;
         }
 
         peer.CanvasX = finalX;
@@ -603,12 +625,20 @@ public sealed class SpatialTopologyEngine
         {
             peer.AttachedLocalMonitorId = bestAnchor.Id;
             peer.AttachedToDeviceId = string.Empty;
+            if (string.Equals(LocalAttachedToDeviceId, peer.DeviceId, StringComparison.OrdinalIgnoreCase))
+            {
+                LocalAttachedToDeviceId = string.Empty;
+            }
             AssignPeerToEdgeSegment(peer, snappedEdge, segStart, segEnd, bestAnchor.Id);
         }
         else
         {
             peer.AttachedToDeviceId = bestAnchor.Id;
             peer.AttachedLocalMonitorId = string.Empty;
+            if (string.Equals(LocalAttachedToDeviceId, peer.DeviceId, StringComparison.OrdinalIgnoreCase))
+            {
+                LocalAttachedToDeviceId = string.Empty;
+            }
             lock (_sync)
             {
                 peer.AssignedEdgeOnLocal = snappedEdge;
@@ -791,7 +821,7 @@ public sealed class SpatialTopologyEngine
                     string.Equals(LocalAttachedToDeviceId, currId, StringComparison.OrdinalIgnoreCase))
                 {
                     ComputeChildCoords(currX, currY, currW, currH, LocalWidth, LocalHeight,
-                        LocalAttachedEdge, LocalEdgeOffsetStart, out double lx, out double ly);
+                        LocalAttachedEdge, LocalEdgeOffsetStart, LocalEdgeOffsetEnd, out double lx, out double ly);
                     LocalColonyX = lx;
                     LocalColonyY = ly;
                     placed.Add(localDeviceId);
@@ -813,7 +843,7 @@ public sealed class SpatialTopologyEngine
                         int ph = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
 
                         ComputeChildCoords(currX, currY, currW, currH, pw, ph,
-                            peer.AssignedEdgeOnLocal, peer.EdgeOffsetStart, out double px, out double py);
+                            peer.AssignedEdgeOnLocal, peer.EdgeOffsetStart, peer.EdgeOffsetEnd, out double px, out double py);
 
                         peer.ColonyX = px;
                         peer.ColonyY = py;
@@ -858,26 +888,35 @@ public sealed class SpatialTopologyEngine
 
     private static void ComputeChildCoords(
         double parentX, double parentY, int parentW, int parentH,
-        int childW, int childH, ScreenEdge edge, float offset,
+        int childW, int childH, ScreenEdge edge, float offsetStart, float offsetEnd,
         out double childX, out double childY)
     {
-        float off = Math.Clamp(offset, 0.0f, 0.95f);
+        float sOff = Math.Clamp(offsetStart, 0.0f, 0.95f);
+        float eOff = Math.Clamp(offsetEnd, 0.05f, 1.0f);
         switch (edge)
         {
             case ScreenEdge.Right:
                 childX = parentX + parentW;
-                childY = parentY + Math.Round(off * parentH);
+                childY = (sOff <= 0.01f && eOff < 0.98f)
+                    ? parentY + Math.Round(eOff * parentH) - childH
+                    : parentY + Math.Round(sOff * parentH);
                 break;
             case ScreenEdge.Left:
                 childX = parentX - childW;
-                childY = parentY + Math.Round(off * parentH);
+                childY = (sOff <= 0.01f && eOff < 0.98f)
+                    ? parentY + Math.Round(eOff * parentH) - childH
+                    : parentY + Math.Round(sOff * parentH);
                 break;
             case ScreenEdge.Top:
-                childX = parentX + Math.Round(off * parentW);
+                childX = (sOff <= 0.01f && eOff < 0.98f)
+                    ? parentX + Math.Round(eOff * parentW) - childW
+                    : parentX + Math.Round(sOff * parentW);
                 childY = parentY - childH;
                 break;
             case ScreenEdge.Bottom:
-                childX = parentX + Math.Round(off * parentW);
+                childX = (sOff <= 0.01f && eOff < 0.98f)
+                    ? parentX + Math.Round(eOff * parentW) - childW
+                    : parentX + Math.Round(sOff * parentW);
                 childY = parentY + parentH;
                 break;
             default:
