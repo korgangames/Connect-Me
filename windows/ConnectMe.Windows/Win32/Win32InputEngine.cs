@@ -47,6 +47,8 @@ public sealed class Win32InputEngine : IDisposable
     private const int VK_CONTROL = 0x11;
     private const int VK_MENU = 0x12; // Alt
     private const int VK_ESCAPE = 0x1B;
+    private const int VK_PRIOR = 0x21; // Page Up
+    private const int VK_NEXT = 0x22;  // Page Down
     private const int VK_LWIN = 0x5B;
     private const int VK_RWIN = 0x5C;
     private const int VK_SCROLL = 0x91;
@@ -71,6 +73,8 @@ public sealed class Win32InputEngine : IDisposable
     private bool _ctrlDown;
     private bool _altDown;
     private bool _winDown;
+    private bool _pageUpDown;
+    private bool _pageDownDown;
 
     private PeerDeviceNode? _controllingRemotePeer;
     private ScreenEdge _incomingEntryEdge = ScreenEdge.None;
@@ -254,6 +258,8 @@ public sealed class Win32InputEngine : IDisposable
     public void SwitchControlToPeer(PeerDeviceNode peer, ScreenEdge localExitEdge, ScreenEdge targetEntranceEdge, float normalizedPosition)
     {
         ActiveRemotePeer = peer;
+        _pageUpDown = false;
+        _pageDownDown = false;
         var primary = _topology.LocalMonitors.FirstOrDefault(m => m.IsPrimary)
                       ?? _topology.LocalMonitors.FirstOrDefault()
                       ?? new PhysicalMonitorDescriptor { MonitorId = "P", Name = "Monitör P", VirtualX = 0, VirtualY = 0, Width = 1920, Height = 1080, IsPrimary = true };
@@ -757,17 +763,32 @@ public sealed class Win32InputEngine : IDisposable
 
                 // Check Global Safety / Lock Hotkeys:
                 // 1) Scroll Lock OR Ctrl+Alt+L -> Return to Windows if remote, or toggle screen lock
-                // 2) Ctrl+Alt+Shift+Esc -> Emergency return to Windows
+                // 2) PageUp + PageDown simultaneously (or Ctrl+Alt+Shift+Esc) -> Emergency return to Windows
                 if (isDown)
                 {
                     bool isScrollLock = vk == VK_SCROLL;
                     bool isCtrlAltL = _ctrlDown && _altDown && vk == VK_L;
+                    bool isPageUpDown = (_pageUpDown && (vk == VK_NEXT || _pageDownDown)) || (_pageDownDown && (vk == VK_PRIOR || _pageUpDown));
                     bool isEmergencyEsc = _ctrlDown && _altDown && _shiftDown && vk == VK_ESCAPE;
+                    bool isEmergencyReclaim = isPageUpDown || isEmergencyEsc;
 
-                    if (isEmergencyEsc || ((isScrollLock || isCtrlAltL) && ActiveRemotePeer != null))
+                    if (isEmergencyReclaim || ((isScrollLock || isCtrlAltL) && ActiveRemotePeer != null))
                     {
-                        ReturnControlToLocal(ScreenEdge.None, 0.5f, notifyPeer: true);
-                        return (IntPtr)1;
+                        if (ActiveRemotePeer != null)
+                        {
+                            ReturnControlToLocal(ScreenEdge.None, 0.5f, notifyPeer: true);
+                            return (IntPtr)1;
+                        }
+
+                        if (_controllingRemotePeer != null)
+                        {
+                            var host = _controllingRemotePeer;
+                            _controllingRemotePeer = null;
+                            _incomingEntryEdge = ScreenEdge.None;
+                            _incomingPushAccum = 0;
+                            _network.SendEdgeReturnToPeer(host, ScreenEdge.None, 0.5f);
+                            return (IntPtr)1;
+                        }
                     }
 
                     if (isScrollLock || isCtrlAltL)
@@ -812,6 +833,12 @@ public sealed class Win32InputEngine : IDisposable
         bool state = isDown;
         switch (vk)
         {
+            case VK_PRIOR:
+                _pageUpDown = state;
+                break;
+            case VK_NEXT:
+                _pageDownDown = state;
+                break;
             case 0xA0: // VK_LSHIFT
             case 0xA1: // VK_RSHIFT
             case VK_SHIFT:
@@ -1010,6 +1037,8 @@ public sealed class Win32InputEngine : IDisposable
 
     private void ReleaseHeldModifiers()
     {
+        _pageUpDown = false;
+        _pageDownDown = false;
         if (_shiftDown)
         {
             keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);

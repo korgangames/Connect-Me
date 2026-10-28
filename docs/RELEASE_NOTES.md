@@ -1,3 +1,32 @@
+# Connect Me v1.8.23 — Dinamik Ekran Hotplug Algılama, Mantıksal Çözünürlük Ölçeklemesi & PageUp+PageDown Acil Kurtarma Kısayolu
+
+Bu sürüm; Linux'ta ikinci ekran bağlandığında yaşanan arayüz güncellenmeme ve harici ekranın yarısında diğer cihaza geçme hatasını çözer; Windows ve Linux için `PageUp + PageDown` eşzamanlı acil kontrol geri alma kısayolunu getirir:
+
+1. **Linux Dinamik Ekran Hotplug Algılama (Automatic Display Hotplug Detection):**
+   - **Kök Neden:** Linux arka plan servisinde (`ConnectMeLinuxNode`) monitör listesi yalnızca uygulama ilk açıldığında taranıyor; sonrasında sisteme yeni bir harici ekran (HDMI, DP, USB-C) bağlandığında topoloji güncellenmiyordu. Bu nedenle arayüz kanvası ikinci ekranı göstermiyor, sanal masaüstü sınırları eski tek monitör boyutunda (ör. 1920px) kalıyordu.
+   - **Çözüm:**
+     - Çekirdek DRM alt sistemini (`/sys/class/drm/card*-*/status` ve `modes`) 0 CPU yüküyle her 1.5 saniyede bir izleyen `_monitor_hotplug_watcher_loop` daemon izleyici eklendi.
+     - Ekran kablosu takıldığında veya çıkarıldığında sistem anında algılar, `refresh_monitors()` tetiklenir, sanal masaüstü sınırları güncellenir, koloni dünya koordinatları yeniden hesaplanır ve tüm bağlı cihazlara otomatik `COLONY_TOPOLOGY_SYNC` yayını yapılır.
+     - Linux grafik arayüzüne (`connectme_linux_gui.py`) otomatik `_on_display_topology_updated` geri çağrımı ve 2 saniyelik Tkinter ekran metrik kontrolü entegre edilerek kanvasın kullanıcı hiçbir butona basmadan gerçek zamanlı güncellenmesi sağlandı.
+
+2. **KDE Plasma Wayland Mantıksal Çözünürlük ve Örtüşme Düzeltmesi (Logical Resolution Scaling Bugfix):**
+   - **Kök Neden:** Harici ekranın yarısında diğer cihaza geçilmesinin iki temel nedeni vardı:
+     a) Wayland / KDE Plasma 6 kompozitör uzayında fare imleci ve pencereler **mantıksal piksel** (logical pixels) koordinatlarında hareket ederken, `_parse_kscreen_json` ve DRM parser'ları ekranın fiziksel panel modunu (ör. 4K 3840x2160 veya 2K 2560x1440) alıyordu. Ölçeklendirme (ör. %150 veya %200) uygulandığında mantıksal boyut yarıya düşmesine rağmen ConnectMe ekranı iki kat geniş sanıyor veya birinci monitörün sağ sınırı ikinci monitörün içine yüzlerce piksel taşıp örtüşüyordu (`curr.virtualX + curr.width > nxt.virtualX`).
+     b) İmleç birinci ekranın dışına çıktığında ikinci ekranın içini hala birinci ekranın sağ kenarı sanarak `hit_edge = EDGE_RIGHT` tetikliyor ve harici ekranın tam ortasında farenin diğer cihaza zıplamasına yol açıyordu.
+   - **Çözüm:**
+     - `_parse_kscreen_json` içerisine KDE Plasma 6'nın sağladığı `geometry` mantıksal piksel verisi öncelikli olarak okutuldu.
+     - Fiziksel modlardan gelen çözünürlüklerde `scaleFactor > 1.05` olduğunda çözünürlük otomatik olarak mantıksal boyuta dönüştürüldü (`logical_w = round(raw_w / scale)`).
+     - Yan yana duran monitörler arasındaki örtüşmeler (`nxt.virtualX - curr.virtualX`) otomatik tespit edilip sınırlandırıldı.
+     - `is_internal_seam` algoritması çoklu ekran geometrisi ve tolerans (16px yatay, 24px dikey) farkındalığıyla güçlendirildi; böylece iki monitör arasında gezinirken kenar atlaması asla tetiklenmez, yalnızca en dış kenara ulaşıldığında diğer cihaza geçilir.
+     - `HardwareInputGrabber._process_local_mouse_move` içerisine dinamik `ensure_bounds` çağrısı eklenerek imlecin yeni bağlanan ekran uzayına sorunsuz yayılması garanti altına alındı.
+
+3. **PageUp + PageDown Eşzamanlı Acil Kurtarma Kısayolu (Windows & Linux):**
+   - Kullanıcı talebi doğrultusunda Windows'taki eski `Ctrl+Alt+Shift+Esc` acil kontrol geri alma kısayolu **`PageUp + PageDown` tuşlarına aynı anda basılması** kombinasyonuna çevrildi ve aynı özellik Linux için de eksiksiz olarak getirildi.
+   - **Windows:** `Win32InputEngine.cs` düşük seviye klavye kancasında `VK_PRIOR` (Page Up) ve `VK_NEXT` (Page Down) eşzamanlı basımı tespit edildiği anda uzak cihazdaki kontrol anında sonlandırılır ve fare/klavye Windows yerel masaüstüne çekilir.
+   - **Linux:** Hem çekirdek seviyesindeki `LinuxHardwareInputGrabber` (evdev) döngüsünde hem de `connectme_linux_gui.py` Tkinter global tuş dinleyicisinde `PageUp + PageDown` eşzamanlı basımı anında yakalanarak fare ve klavye kontrolü Linux'a iade edilir. Floating HUD banner metni `[PageUp+PageDown]` olarak güncellendi.
+
+---
+
 # Connect Me v1.8.22 — Akıcı Linux İmleç Geçişi, Gerçek Zamanlı Kanvas Kenetlenmesi & Orantılı Kontakt Noktası
 
 Bu sürüm; Linux cihazından diğer cihazlara imleç aktarılırken yaşanan takılma/tutarsızlıkları ve Linux arayüzünde cihaz kartı sürüklenirken kontakt noktasının (%0 - %100) değişmeme ve kilitlenme sorunlarını kökten çözer:

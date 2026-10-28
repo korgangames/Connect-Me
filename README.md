@@ -16,11 +16,11 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
 
 | İşletim Sistemi | Paket | Dosya Adı | Doğrudan İndir |
 | :--- | :---: | :--- | :--- |
-| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.8.22.zip` | [⬇️ **ConnectMe-Windows-x64-v1.8.22.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.22/ConnectMe-Windows-x64-v1.8.22.zip) |
-| 📱 **Android** | `.apk` | `ConnectMe-v1.8.22.apk` | [⬇️ **ConnectMe-v1.8.22.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.22/ConnectMe-v1.8.22.apk) |
-| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.8.22.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.8.22.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.22/ConnectMe-Linux-x64-v1.8.22.tar.gz) |
+| 🪟 **Windows** | `.zip` | `ConnectMe-Windows-x64-v1.8.23.zip` | [⬇️ **ConnectMe-Windows-x64-v1.8.23.zip**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.23/ConnectMe-Windows-x64-v1.8.23.zip) |
+| 📱 **Android** | `.apk` | `ConnectMe-v1.8.23.apk` | [⬇️ **ConnectMe-v1.8.23.apk**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.23/ConnectMe-v1.8.23.apk) |
+| 🐧 **Linux (Nobara)** | `.tar.gz` | `ConnectMe-Linux-x64-v1.8.23.tar.gz` | [⬇️ **ConnectMe-Linux-x64-v1.8.23.tar.gz**](https://github.com/korgangames/Connect-Me/releases/download/v1.8.23/ConnectMe-Linux-x64-v1.8.23.tar.gz) |
 
-> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.8.22 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.8.22)  
+> 📦 **GitHub Sürüm Sayfası:** [**Connect Me v1.8.23 Release Sayfası**](https://github.com/korgangames/Connect-Me/releases/tag/v1.8.23)  
 > 📖 Detaylı adım adım resimli kurulum kılavuzu için [**DOWNLOADS.md**](DOWNLOADS.md) sayfasını inceleyebilirsiniz.
 
 ---
@@ -31,7 +31,7 @@ Tüm paketler **bağımsız grafik arayüz (GUI)** olarak derlenmiştir; hiçbir
    - Nobara / KDE Plasma Linux bilgisayarınızı birincil ana makine yapabilir; fiziksel farenizi ve klavyenizi Android telefonunuza, tabletinize veya Windows PC'nize kesintisiz aktarabilirsiniz.
    - **Doğal Kenar Duyargaları (`ScreenEdgeSentinels`):** Linux ekran kenarlarına yaklaşıldığında fare akıcı bir şekilde Android/Windows ekranına geçer.
    - **Hızlı Geçiş Butonu:** 2D Kanvasta her cihaz için **`[🎯 Fareyi Bu Cihaza Aktar]`** butonu ve `ScrollLock` / `Ctrl+Alt+Yön` kısayolları.
-   - **Geri Dönüş Barı:** Üst durum çubuğundaki `[Esc / Geri Dön]` veya kenar itme direnciyle anında yerel Linux masaüstüne dönüş.
+   - **Acil Geri Dönüş ve Güvenlik:** `PageUp + PageDown` eşzamanlı tuş kombinasyonu veya `ScrollLock` ile Windows ve Linux'ta anında yerel masaüstüne dönüş.
 2. **🐝 Koloni Modu (Colony Network — Tek PIN ile Tüm Ağa Bağlanma):**
    - Birbirine bağlı cihazlar ağda tek bir koloni (küme) olarak algılanır.
    - Kolonideki tek bir cihazın 6 haneli kodunu girdiğinizde, diğer koloni üyeleri yeni cihazı otomatik tanır ve tek tek şifre girmeden tüm ekosistem birbirine bağlanır.

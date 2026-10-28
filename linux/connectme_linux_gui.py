@@ -235,6 +235,8 @@ class HostCaptureOverlay:
         self.last_y_root = 0
         self._push_accum = 0.0
         self._fallback_job: Optional[str] = None
+        self._pageup_down = False
+        self._pagedown_down = False
 
         if hasattr(self.node, "hardware_grabber"):
             self.node.hardware_grabber.on_deactivated = lambda: self.root.after(0, lambda: self.deactivate(notify_peer=False))
@@ -258,7 +260,7 @@ class HostCaptureOverlay:
 
         # Create Top Floating HUD Banner (Compact, never covers the user's screen or traps clicks)
         min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
-        hud_w = 660
+        hud_w = 710
         hud_h = 46
         hud_x = min_x + max(20, (vw - hud_w) // 2)
         hud_y = min_y + 16
@@ -276,7 +278,7 @@ class HostCaptureOverlay:
         grab_tag = " [Donanım 1000Hz]" if grab_ok else " [Yazılımsal Takip]"
         lbl = tk.Label(
             self.overlay,
-            text=f"🟢 Kontrol '{peer_name}' Ekranında{grab_tag}  |  Geri Dönüş: [ScrollLock] tuşu veya",
+            text=f"🟢 Kontrol '{peer_name}' Ekranında{grab_tag}  |  Geri Dönüş: [PageUp+PageDown] veya [ScrollLock] tuşu veya",
             fg="#4ADE80",
             bg="#0F172A",
             font=("Segoe UI", 9, "bold")
@@ -381,7 +383,14 @@ class HostCaptureOverlay:
     def _on_key_press(self, event):
         if not self.is_active or not self.active_peer:
             return
-        if event.keysym == "Scroll_Lock":
+        if event.keysym in ("Prior", "Page_Up"):
+            self._pageup_down = True
+        elif event.keysym in ("Next", "Page_Down"):
+            self._pagedown_down = True
+
+        if (self._pageup_down and self._pagedown_down) or event.keysym == "Scroll_Lock":
+            self._pageup_down = False
+            self._pagedown_down = False
             self.deactivate(notify_peer=True)
             return
 
@@ -402,6 +411,11 @@ class HostCaptureOverlay:
     def _on_key_release(self, event):
         if not self.is_active or not self.active_peer:
             return
+        if event.keysym in ("Prior", "Page_Up"):
+            self._pageup_down = False
+        elif event.keysym in ("Next", "Page_Down"):
+            self._pagedown_down = False
+
         vk = KEYSYM_TO_VK.get(event.keysym, ord(event.char.upper()) if event.char else 0)
         mods = 0
         char_code = ord(event.char) if event.char else 0
@@ -411,6 +425,8 @@ class HostCaptureOverlay:
         if not self.is_active:
             return
         self.is_active = False
+        self._pageup_down = False
+        self._pagedown_down = False
         self._stop_fallback_poll()
         self.last_x_root = 0
         self.last_y_root = 0
@@ -444,13 +460,15 @@ class ConnectMeLinuxGui:
         self.selected_peer_id: str = ""
         self.peer_canvas_coords = {}
         self._drag_data = {"peer_id": None, "start_x": 0, "start_y": 0, "orig_x": 0, "orig_y": 0}
+        self._pageup_down = False
+        self._pagedown_down = False
 
         # Daemon node başlat
         self.node = ConnectMeLinuxNode(on_log=self._log)
         self.node.on_cursor_update = self._on_cursor_update
         self.node.on_pin_request_received = self._on_pin_request_received
         self.node.on_peer_updated = lambda p: self.root.after(0, self._refresh_state)
-        self.node.on_topology_changed = lambda: self.root.after(0, self._draw_2d_canvas)
+        self.node.on_topology_changed = lambda: self.root.after(0, self._on_display_topology_updated)
         self.node.on_audio_sinks_updated = lambda: self.root.after(0, self._refresh_audio_sinks_dropdown)
         self.node.on_audio_route_changed = lambda r: self.root.after(0, lambda: self._on_audio_route_changed_gui(r))
         self.node.start()
@@ -464,15 +482,20 @@ class ConnectMeLinuxGui:
         self.node.on_host_control_switched = lambda peer, edge, norm: self.root.after(0, lambda: self._on_host_control_switched(peer, edge, norm))
         self.node.on_host_control_returned = lambda: self.root.after(0, self._on_host_control_returned)
 
-        # Global Kısayol Tuşları (KVM Hotkeys)
+        # Global Kısayol Tuşları (KVM Hotkeys & Emergency Reclaim)
         self.root.bind_all("<Scroll_Lock>", lambda e: self._toggle_host_capture())
         self.root.bind_all("<Control-Alt-Right>", lambda e: self._switch_to_edge_peer(EDGE_RIGHT))
         self.root.bind_all("<Control-Alt-Left>", lambda e: self._switch_to_edge_peer(EDGE_LEFT))
+        self.root.bind_all("<KeyPress-Prior>", self._on_emergency_pageup_press, add="+")
+        self.root.bind_all("<KeyRelease-Prior>", self._on_emergency_pageup_release, add="+")
+        self.root.bind_all("<KeyPress-Next>", self._on_emergency_pagedown_press, add="+")
+        self.root.bind_all("<KeyRelease-Next>", self._on_emergency_pagedown_release, add="+")
         self.root.bind_all("<Motion>", lambda e: getattr(self.node, "hardware_grabber", None) and self.node.hardware_grabber.sync_cursor(e.x_root, e.y_root), add="+")
 
         self._apply_dark_theme()
         self._build_ui()
         self._start_refresh_timer()
+        self._periodic_display_check()
         threading.Thread(target=self._check_for_updates, daemon=True).start()
 
     def _apply_dark_theme(self):
@@ -2427,6 +2450,53 @@ class ConnectMeLinuxGui:
             messagebox.showerror("Hata", f"Yetkilendirme penceresi açılamadı: {ex}")
 
     _fix_input_permissions = _fix_uinput_permissions
+
+    def _on_emergency_pageup_press(self, event=None):
+        self._pageup_down = True
+        self._check_emergency_reclaim()
+
+    def _on_emergency_pageup_release(self, event=None):
+        self._pageup_down = False
+
+    def _on_emergency_pagedown_press(self, event=None):
+        self._pagedown_down = True
+        self._check_emergency_reclaim()
+
+    def _on_emergency_pagedown_release(self, event=None):
+        self._pagedown_down = False
+
+    def _check_emergency_reclaim(self):
+        if self._pageup_down and self._pagedown_down:
+            self._pageup_down = False
+            self._pagedown_down = False
+            self._log("[Acil Durum] ⬅️ [PageUp + PageDown] basıldı, fare ve klavye kontrolü anında Linux'a geri alınıyor.")
+            if self.host_capture_overlay and self.host_capture_overlay.is_active:
+                self.host_capture_overlay.deactivate(notify_peer=True)
+            if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.is_active:
+                self.node.hardware_grabber.deactivate(notify_peer=True)
+
+    def _on_display_topology_updated(self):
+        self._refresh_monitors()
+
+    def _periodic_display_check(self):
+        try:
+            rw = self.root.winfo_screenwidth()
+            rh = self.root.winfo_screenheight()
+            if hasattr(self, "_last_gui_rw") and (rw != self._last_gui_rw or rh != self._last_gui_rh):
+                self._last_gui_rw = rw
+                self._last_gui_rh = rh
+                self._refresh_monitors()
+            else:
+                self._last_gui_rw = rw
+                self._last_gui_rh = rh
+        except Exception:
+            pass
+        finally:
+            if self.root:
+                try:
+                    self.root.after(2000, self._periodic_display_check)
+                except Exception:
+                    pass
 
     def _refresh_monitors(self):
         try:

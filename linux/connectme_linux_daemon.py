@@ -153,25 +153,72 @@ class LinuxMultiMonitorTopology:
                 scaleFactor=1.0,
                 isPrimary=False,
             ))
+
+        # Deduplicate monitors by monitorId and coordinate rect
+        unique_mons: List[PhysicalMonitor] = []
+        seen_ids = set()
+        seen_rects = set()
+        for m in detected:
+            rect_key = (m.virtualX, m.virtualY, m.width, m.height)
+            if m.monitorId in seen_ids or rect_key in seen_rects:
+                continue
+            seen_ids.add(m.monitorId)
+            seen_rects.add(rect_key)
+            unique_mons.append(m)
+
+        detected = unique_mons or detected
+
         if not any(m.isPrimary for m in detected):
             detected[0].isPrimary = True
+
         # Sort monitors deterministically by X then Y
         detected.sort(key=lambda m: (m.virtualX, m.virtualY))
+
+        # Resolve adjacent monitor overlapping:
+        # If monitor A and B are side-by-side horizontally, clamp A's width to B's virtualX
+        for i in range(len(detected) - 1):
+            curr = detected[i]
+            nxt = detected[i + 1]
+            if nxt.virtualX > curr.virtualX:
+                if curr.virtualX + curr.width > nxt.virtualX:
+                    curr.width = max(320, nxt.virtualX - curr.virtualX)
+
         self.monitors = detected
         return self.monitors
 
-    def ensure_bounds(self, cur_x: int, cur_y: int) -> None:
+    def ensure_bounds(self, cur_x: int, cur_y: int) -> bool:
         """Dynamically expands known monitor dimensions if cursor travels beyond current bounds."""
         if not self.monitors:
-            return
+            return False
         max_r = max(m.right for m in self.monitors)
         max_b = max(m.bottom for m in self.monitors)
+        min_l = min(m.virtualX for m in self.monitors)
+        min_t = min(m.virtualY for m in self.monitors)
+        changed = False
+
         if cur_x >= max_r:
             rightmost = max(self.monitors, key=lambda m: m.right)
             rightmost.width += (cur_x - max_r + 1)
+            changed = True
+        elif cur_x < min_l:
+            leftmost = min(self.monitors, key=lambda m: m.virtualX)
+            delta = min_l - cur_x
+            leftmost.virtualX -= delta
+            leftmost.width += delta
+            changed = True
+
         if cur_y >= max_b:
             bottommost = max(self.monitors, key=lambda m: m.bottom)
             bottommost.height += (cur_y - max_b + 1)
+            changed = True
+        elif cur_y < min_t:
+            topmost = min(self.monitors, key=lambda m: m.virtualY)
+            delta = min_t - cur_y
+            topmost.virtualY -= delta
+            topmost.height += delta
+            changed = True
+
+        return changed
 
     def virtual_desktop_bounds(self) -> Tuple[int, int, int, int]:
         min_x = min(m.virtualX for m in self.monitors)
@@ -191,23 +238,32 @@ class LinuxMultiMonitorTopology:
         return vh
 
     def is_internal_seam(self, mon: PhysicalMonitor, edge: int, x: int, y: int) -> bool:
-        """Returns True if stepping 4px across `edge` lands inside another local physical monitor."""
-        probe_x, probe_y = x, y
-        if edge == EDGE_LEFT:
-            probe_x = mon.virtualX - 4
-        elif edge == EDGE_RIGHT:
-            probe_x = mon.right + 4
-        elif edge == EDGE_TOP:
-            probe_y = mon.virtualY - 4
-        elif edge == EDGE_BOTTOM:
-            probe_y = mon.bottom + 4
-        else:
-            return False
+        """Returns True if stepping across `edge` lands inside or directly adjacent to another local physical monitor."""
+        for other in self.monitors:
+            if other.monitorId == mon.monitorId:
+                continue
 
-        return any(
-            other.monitorId != mon.monitorId and other.contains(probe_x, probe_y)
-            for other in self.monitors
-        )
+            if edge == EDGE_RIGHT:
+                if abs(other.virtualX - mon.right) <= 16 or (other.virtualX <= mon.right + 16 and other.right > mon.right):
+                    if (other.virtualY - 24) <= y <= (other.bottom + 24):
+                        return True
+
+            elif edge == EDGE_LEFT:
+                if abs(mon.virtualX - other.right) <= 16 or (other.right >= mon.virtualX - 16 and other.virtualX < mon.virtualX):
+                    if (other.virtualY - 24) <= y <= (other.bottom + 24):
+                        return True
+
+            elif edge == EDGE_TOP:
+                if abs(mon.virtualY - other.bottom) <= 16 or (other.bottom >= mon.virtualY - 16 and other.virtualY < mon.virtualY):
+                    if (other.virtualX - 24) <= x <= (other.right + 24):
+                        return True
+
+            elif edge == EDGE_BOTTOM:
+                if abs(other.virtualY - mon.bottom) <= 16 or (other.virtualY <= mon.bottom + 16 and other.bottom > mon.bottom):
+                    if (other.virtualX - 24) <= x <= (other.right + 24):
+                        return True
+
+        return False
 
     def find_monitor_at(self, x: int, y: int) -> Optional[PhysicalMonitor]:
         for m in self.monitors:
@@ -239,7 +295,7 @@ class LinuxMultiMonitorTopology:
         if not shutil.which(cmd[0]):
             return None
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=2.0)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3.5)
             return proc.stdout if proc.returncode == 0 else None
         except Exception:
             return None
@@ -275,15 +331,28 @@ class LinuxMultiMonitorTopology:
             else:
                 vx, vy = 0, 0
 
-            # 2. Parse resolution (width and height) via currentModeId or modes
+            # 2. Check logical geometry first if available (KDE Plasma 6 provides scaled logical coords here)
             raw_w, raw_h = 0, 0
+            has_geom = False
+            geom = item.get("geometry")
+            if isinstance(geom, dict):
+                gw = int(geom.get("width", 0))
+                gh = int(geom.get("height", 0))
+                if gw > 0 and gh > 0:
+                    raw_w = gw
+                    raw_h = gh
+                    has_geom = True
+                    if "x" in geom and "y" in geom and vx == 0 and vy == 0:
+                        vx = int(geom.get("x", 0))
+                        vy = int(geom.get("y", 0))
+
             cur_mode_id = str(item.get("currentModeId") or "")
             modes = item.get("modes", [])
             if isinstance(modes, dict):
                 modes = list(modes.values())
 
             # Find matching mode by ID
-            if cur_mode_id and isinstance(modes, list):
+            if (raw_w <= 0 or raw_h <= 0) and cur_mode_id and isinstance(modes, list):
                 for m in modes:
                     if str(m.get("id", "")) == cur_mode_id:
                         sz = m.get("size", {})
@@ -334,6 +403,11 @@ class LinuxMultiMonitorTopology:
             rot = item.get("rotation", 1)
             if rot in (2, 4, 90, 270):
                 raw_w, raw_h = raw_h, raw_w
+
+            # If geometry was not provided directly and scale is applied, normalize physical mode to logical coordinates
+            if not has_geom and scale > 1.05:
+                raw_w = max(320, int(round(raw_w / scale)))
+                raw_h = max(240, int(round(raw_h / scale)))
 
             result.append(
                 PhysicalMonitor(
@@ -424,13 +498,18 @@ class LinuxMultiMonitorTopology:
                         current_scale = float(scale_m.group(1))
 
             if current_name and (current_w > 0 or current_h > 0):
+                w_norm = current_w or 1920
+                h_norm = current_h or 1080
+                if current_scale > 1.05 and w_norm > 1200:
+                    w_norm = max(320, int(round(w_norm / current_scale)))
+                    h_norm = max(240, int(round(h_norm / current_scale)))
                 result.append(PhysicalMonitor(
                     monitorId=current_name,
                     name=f"Monitör {idx} ({current_name})",
                     virtualX=current_vx,
                     virtualY=current_vy,
-                    width=current_w or 1920,
-                    height=current_h or 1080,
+                    width=w_norm,
+                    height=h_norm,
                     scaleFactor=current_scale,
                     isPrimary=current_prim,
                 ))
@@ -456,6 +535,10 @@ class LinuxMultiMonitorTopology:
                         w = int(mode.get("width", 1920))
                         h = int(mode.get("height", 1080))
                         break
+                sc = float(item.get("scale", 1.0))
+                if sc > 1.05:
+                    w = max(320, int(round(w / sc)))
+                    h = max(240, int(round(h / sc)))
                 result.append(
                     PhysicalMonitor(
                         monitorId=name,
@@ -464,7 +547,7 @@ class LinuxMultiMonitorTopology:
                         virtualY=int(pos.get("y", 0)),
                         width=w,
                         height=h,
-                        scaleFactor=float(item.get("scale", 1.0)),
+                        scaleFactor=sc,
                         isPrimary=(i == 1),
                     )
                 )
@@ -525,6 +608,9 @@ class LinuxMultiMonitorTopology:
                     if cname in mid:
                         w, h = mw, mh
                         break
+                if scale > 1.05 and w > 1200:
+                    w = max(320, int(round(w / scale)))
+                    h = max(240, int(round(h / scale)))
                 result.append(PhysicalMonitor(
                     monitorId=cname,
                     name=f"Monitör {i} ({cname})",
@@ -545,6 +631,7 @@ class LinuxMultiMonitorTopology:
             if not drm_path.exists():
                 return []
             connected_outputs = []
+            seen_conn_names = set()
             for p in sorted(drm_path.glob("card*-*")):
                 status_file = p / "status"
                 if status_file.exists():
@@ -552,6 +639,9 @@ class LinuxMultiMonitorTopology:
                         content = status_file.read_text(encoding="utf-8").strip()
                         if content == "connected":
                             name = p.name.split("-", 1)[1] if "-" in p.name else p.name
+                            if name in seen_conn_names:
+                                continue
+                            seen_conn_names.add(name)
                             w, h = 1920, 1080
                             modes_file = p / "modes"
                             if modes_file.exists():
@@ -1124,6 +1214,8 @@ class LinuxHardwareInputGrabber:
         self._alt_down = False
         self._meta_down = False
         self._caps_lock = False
+        self._pageup_down = False
+        self._pagedown_down = False
 
         self._init_initial_coordinates()
 
@@ -1436,9 +1528,22 @@ class LinuxHardwareInputGrabber:
                                 self.node.send_mouse_scroll(self.active_peer, event.value * 120, 0)
 
                     elif event.type == ecodes.EV_KEY:
-                        # Emergency return hotkey: Scroll Lock only (ESC is preserved for apps/games)
-                        if event.code == ecodes.KEY_SCROLLLOCK and event.value == 1:
-                            self.node.log("[Donanım Yakalama] ⬅️ [ScrollLock] tuşuna basıldı, kontrol Linux'a geri alınıyor.")
+                        # Emergency return hotkey: PageUp + PageDown simultaneously OR ScrollLock
+                        if event.code == ecodes.KEY_PAGEUP:
+                            self._pageup_down = (event.value in (1, 2))
+                        elif event.code == ecodes.KEY_PAGEDOWN:
+                            self._pagedown_down = (event.value in (1, 2))
+
+                        is_pageup_pagedown = (self._pageup_down and event.code == ecodes.KEY_PAGEDOWN and event.value in (1, 2)) or \
+                                             (self._pagedown_down and event.code == ecodes.KEY_PAGEUP and event.value in (1, 2)) or \
+                                             (self._pageup_down and self._pagedown_down)
+                        is_scroll_lock = (event.code == ecodes.KEY_SCROLLLOCK and event.value == 1)
+
+                        if is_pageup_pagedown or is_scroll_lock:
+                            self._pageup_down = False
+                            self._pagedown_down = False
+                            trigger_msg = "[PageUp+PageDown]" if is_pageup_pagedown else "[ScrollLock]"
+                            self.node.log(f"[Donanım Yakalama] ⬅️ {trigger_msg} acil kurtarma tuşuna basıldı, kontrol Linux'a geri alınıyor.")
                             threading.Thread(target=self.deactivate, args=(True,), daemon=True).start()
                             continue
 
@@ -1522,6 +1627,9 @@ class LinuxHardwareInputGrabber:
 
             self.cur_x += int(dx * accel)
             self.cur_y += int(dy * accel)
+
+            # Ensure bounds dynamically in case external monitor is connected or cursor travels into extended space
+            self.node.topology.ensure_bounds(self.cur_x, self.cur_y)
 
             min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
             max_x = min_x + vw - 1
@@ -1651,6 +1759,8 @@ class LinuxHardwareInputGrabber:
             return
         self.is_active = False
         self.active_peer = None
+        self._pageup_down = False
+        self._pagedown_down = False
         self._accum_push = 0.0
         self._push_edge = EDGE_NONE
         self._edge_cooldown_until = time.time() + 0.35
@@ -2722,6 +2832,55 @@ class ConnectMeLinuxNode:
         threading.Thread(target=self._udp_input_loop, daemon=True).start()
         threading.Thread(target=self._clipboard_monitor_loop, daemon=True).start()
         threading.Thread(target=self._audio_receiver_loop, daemon=True).start()
+        threading.Thread(target=self._monitor_hotplug_watcher_loop, daemon=True).start()
+
+    def _get_drm_display_signature(self) -> str:
+        sig_parts = []
+        try:
+            drm_path = Path("/sys/class/drm")
+            if drm_path.exists():
+                for p in sorted(drm_path.glob("card*-*")):
+                    st_file = p / "status"
+                    if st_file.exists():
+                        try:
+                            content = st_file.read_text(encoding="utf-8", errors="ignore").strip()
+                            modes_file = p / "modes"
+                            top_mode = ""
+                            if modes_file.exists():
+                                lines = modes_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+                                if lines:
+                                    top_mode = lines[0].strip()
+                            sig_parts.append(f"{p.name}:{content}:{top_mode}")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return "|".join(sig_parts)
+
+    def _monitor_hotplug_watcher_loop(self) -> None:
+        """Polls DRM connector status and display changes every 1.5s to dynamically handle hotplug events."""
+        last_sig = self._get_drm_display_signature()
+        while self.running:
+            time.sleep(1.5)
+            try:
+                curr_sig = self._get_drm_display_signature()
+                if curr_sig != last_sig:
+                    last_sig = curr_sig
+                    self.log("[Donanım Ekran Algılama] 🔌 Ekran donanımında değişiklik algılandı, topoloji güncelleniyor...")
+                    old_mons = [(m.monitorId, m.virtualX, m.virtualY, m.width, m.height) for m in self.topology.monitors]
+                    new_mons = self.topology.refresh_monitors()
+                    new_mons_sig = [(m.monitorId, m.virtualX, m.virtualY, m.width, m.height) for m in new_mons]
+                    if new_mons_sig != old_mons:
+                        self.log(f"[Donanım Ekran Algılama] 🖥️ Yeni monitör düzeni başarıyla uygulandı ({len(new_mons)} ekran).")
+                        self.recompute_colony_world_coordinates()
+                        self.send_colony_topology_sync_to_all_peers()
+                        if self.on_topology_changed:
+                            try:
+                                self.on_topology_changed()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
 
     def stop(self) -> None:
         """Stops the daemon background loops, releases sockets, and cleans up."""
