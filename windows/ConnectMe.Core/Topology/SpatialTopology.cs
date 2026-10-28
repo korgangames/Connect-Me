@@ -682,7 +682,7 @@ public sealed class SpatialTopologyEngine
     /// Finds any peer in the colony that is spatially adjacent to the given node on the specified edge.
     /// Used for multi-hop cursor relay transitions (e.g. from Node B to Node C when cursor pushes Right).
     /// </summary>
-    public PeerDeviceNode? FindAdjacentPeerOnEdge(string fromDeviceId, ScreenEdge edge, float normPos = 0.5f)
+    public PeerDeviceNode? FindAdjacentPeerOnEdge(string fromDeviceId, ScreenEdge edge, float normPos = 0.5f, string? monitorId = null)
     {
         lock (_sync)
         {
@@ -693,6 +693,23 @@ public sealed class SpatialTopologyEngine
                              (string.IsNullOrEmpty(p.AttachedToDeviceId) && string.Equals(fromDeviceId, LocalAttachedToDeviceId, StringComparison.OrdinalIgnoreCase))) &&
                             p.AssignedEdgeOnLocal == edge)
                 .ToList();
+
+            if (!string.IsNullOrEmpty(monitorId))
+            {
+                var onThisMon = attachedChildren.Where(p =>
+                    string.IsNullOrEmpty(p.AttachedLocalMonitorId) ||
+                    string.Equals(p.AttachedLocalMonitorId, monitorId, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p.AttachedLocalMonitorId, "ALL", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                if (onThisMon.Count > 0)
+                {
+                    attachedChildren = onThisMon;
+                }
+                else
+                {
+                    attachedChildren.Clear();
+                }
+            }
 
             if (attachedChildren.Count > 0)
             {
@@ -842,7 +859,29 @@ public sealed class SpatialTopologyEngine
                         int pw = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
                         int ph = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
 
-                        ComputeChildCoords(currX, currY, currW, currH, pw, ph,
+                        double ancX = currX;
+                        double ancY = currY;
+                        int ancW = currW;
+                        int ancH = currH;
+
+                        // Multi-monitor anchor adjustment: If attached directly to local device and has AttachedLocalMonitorId,
+                        // offset anchor rectangle to that specific monitor's virtual coordinates and dimensions!
+                        if (string.Equals(currId, localDeviceId, StringComparison.OrdinalIgnoreCase) &&
+                            !string.IsNullOrEmpty(peer.AttachedLocalMonitorId))
+                        {
+                            var targetMon = _localMonitors.FirstOrDefault(m => string.Equals(m.MonitorId, peer.AttachedLocalMonitorId, StringComparison.OrdinalIgnoreCase));
+                            if (targetMon != null)
+                            {
+                                int minX = _localMonitors.Count > 0 ? _localMonitors.Min(m => m.VirtualX) : 0;
+                                int minY = _localMonitors.Count > 0 ? _localMonitors.Min(m => m.VirtualY) : 0;
+                                ancX = currX + (targetMon.VirtualX - minX);
+                                ancY = currY + (targetMon.VirtualY - minY);
+                                ancW = targetMon.Width;
+                                ancH = targetMon.Height;
+                            }
+                        }
+
+                        ComputeChildCoords(ancX, ancY, ancW, ancH, pw, ph,
                             peer.AssignedEdgeOnLocal, peer.EdgeOffsetStart, peer.EdgeOffsetEnd, out double px, out double py);
 
                         peer.ColonyX = px;
@@ -1195,12 +1234,17 @@ public sealed class SpatialTopologyEngine
         {
             var onThisMonitor = candidates.Where(p =>
                 string.IsNullOrEmpty(p.AttachedLocalMonitorId) ||
-                p.AttachedLocalMonitorId == monitorId ||
-                p.AttachedLocalMonitorId == "ALL").ToList();
+                string.Equals(p.AttachedLocalMonitorId, monitorId, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(p.AttachedLocalMonitorId, "ALL", StringComparison.OrdinalIgnoreCase)).ToList();
 
             if (onThisMonitor.Count > 0)
             {
                 candidates = onThisMonitor;
+            }
+            else
+            {
+                // Peer is explicitly attached to a different physical monitor; do not match across monitors
+                return null;
             }
         }
 

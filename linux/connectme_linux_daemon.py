@@ -1694,7 +1694,7 @@ class LinuxHardwareInputGrabber:
         else:
             norm_pos = max(0.02, min(0.98, rel_x / float(max(1, mon.width))))
 
-        target_peer = self.node.find_adjacent_peer_in_colony(self.node.device_id, hit_edge, norm_pos)
+        target_peer = self.node.find_adjacent_peer_in_colony(self.node.device_id, hit_edge, norm_pos, mon.monitorId)
         if not target_peer:
             target_peer = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon.monitorId)
         if not target_peer:
@@ -2082,21 +2082,35 @@ class ConnectMeLinuxNode:
                     s_off = max(0.0, min(0.95, float(p.get("edgeOffsetStart", 0.0))))
                     e_off = max(0.05, min(1.0, float(p.get("edgeOffsetEnd", 1.0))))
                     edge = p.get("assignedEdge", EDGE_RIGHT)
+
+                    # Multi-monitor anchor adjustment: If attached directly to local device and has attachedMonitorId,
+                    # offset relative to that specific monitor's virtual coordinates and dimensions!
+                    anc_x, anc_y, anc_w, anc_h = curr_x, curr_y, curr_w, curr_h
+                    if curr_id == self.device_id and p.get("attachedMonitorId"):
+                        target_mon_id = p.get("attachedMonitorId")
+                        for mon in self.topology.monitors:
+                            if mon.monitorId == target_mon_id:
+                                anc_x = curr_x + (mon.virtualX - min_x)
+                                anc_y = curr_y + (mon.virtualY - min_y)
+                                anc_w = mon.width
+                                anc_h = mon.height
+                                break
+
                     if edge == EDGE_RIGHT:
-                        px = curr_x + curr_w
-                        py = curr_y + round(e_off * curr_h) - ph if (s_off <= 0.01 and e_off < 0.98) else curr_y + round(s_off * curr_h)
+                        px = anc_x + anc_w
+                        py = anc_y + round(e_off * anc_h) - ph if (s_off <= 0.01 and e_off < 0.98) else anc_y + round(s_off * anc_h)
                     elif edge == EDGE_LEFT:
-                        px = curr_x - pw
-                        py = curr_y + round(e_off * curr_h) - ph if (s_off <= 0.01 and e_off < 0.98) else curr_y + round(s_off * curr_h)
+                        px = anc_x - pw
+                        py = anc_y + round(e_off * anc_h) - ph if (s_off <= 0.01 and e_off < 0.98) else anc_y + round(s_off * anc_h)
                     elif edge == EDGE_TOP:
-                        px = curr_x + round(e_off * curr_w) - pw if (s_off <= 0.01 and e_off < 0.98) else curr_x + round(s_off * curr_w)
-                        py = curr_y - ph
+                        px = anc_x + round(e_off * anc_w) - pw if (s_off <= 0.01 and e_off < 0.98) else anc_x + round(s_off * anc_w)
+                        py = anc_y - ph
                     elif edge == EDGE_BOTTOM:
-                        px = curr_x + round(e_off * curr_w) - pw if (s_off <= 0.01 and e_off < 0.98) else curr_x + round(s_off * curr_w)
-                        py = curr_y + curr_h
+                        px = anc_x + round(e_off * anc_w) - pw if (s_off <= 0.01 and e_off < 0.98) else anc_x + round(s_off * anc_w)
+                        py = anc_y + anc_h
                     else:
-                        px = curr_x + curr_w
-                        py = curr_y
+                        px = anc_x + anc_w
+                        py = anc_y
                     p["colonyX"] = float(px)
                     p["colonyY"] = float(py)
                     p["canvasX"] = float(px)
@@ -2265,7 +2279,7 @@ class ConnectMeLinuxNode:
         except Exception as ex:
             self.log(f"[Kenar Aktarımı Uyarı] Host'a aktarım sinyali iletilemedi: {ex}")
 
-    def find_adjacent_peer_in_colony(self, from_device_id: str, edge: int, norm_pos: float = 0.5) -> Optional[dict]:
+    def find_adjacent_peer_in_colony(self, from_device_id: str, edge: int, norm_pos: float = 0.5, monitor_id: Optional[str] = None) -> Optional[dict]:
         """Finds any peer in the colony that is spatially adjacent to from_device_id on the specified edge."""
         candidates = []
         for p in self.peers.values():
@@ -2276,6 +2290,13 @@ class ConnectMeLinuxNode:
                 candidates.append(p)
             elif att_dev == from_device_id and p.get("assignedEdge") == edge:
                 candidates.append(p)
+
+        if monitor_id:
+            on_this_mon = [p for p in candidates if not p.get("attachedMonitorId") or p.get("attachedMonitorId") in (monitor_id, "ALL")]
+            if on_this_mon:
+                candidates = on_this_mon
+            else:
+                candidates = []
 
         if candidates:
             for p in candidates:
@@ -2301,6 +2322,14 @@ class ConnectMeLinuxNode:
         min_x, min_y, total_w, total_h = self.topology.virtual_desktop_bounds()
         if from_device_id == self.device_id:
             fx, fy, fw, fh = self.local_colony_x, self.local_colony_y, total_w, total_h
+            if monitor_id:
+                for mon in self.topology.monitors:
+                    if mon.monitorId == monitor_id:
+                        fx = self.local_colony_x + (mon.virtualX - min_x)
+                        fy = self.local_colony_y + (mon.virtualY - min_y)
+                        fw = mon.width
+                        fh = mon.height
+                        break
         elif from_device_id in self.peers:
             fp = self.peers[from_device_id]
             fx = fp.get("colonyX", 0.0)
@@ -2439,9 +2468,9 @@ class ConnectMeLinuxNode:
 
         # Filter by attached physical monitor if specified
         if monitor_id:
-            on_this_mon = [p for p in candidates if not p.get("attachedMonitorId") or p.get("attachedMonitorId") in (monitor_id, "ALL")]
-            if on_this_mon:
-                candidates = on_this_mon
+            candidates = [p for p in candidates if not p.get("attachedMonitorId") or p.get("attachedMonitorId") in (monitor_id, "ALL")]
+            if not candidates:
+                return None
 
         # Check for segment match [edgeOffsetStart .. edgeOffsetEnd]
         exact_matches = [
@@ -3816,7 +3845,9 @@ class ConnectMeLinuxNode:
                                     ret_norm = norm_val
                                 else:
                                     # Case B: Pushing against an edge that has another adjacent peer in colony!
-                                    adj = self.find_adjacent_peer_in_colony(self.device_id, pushing_edge, norm_val)
+                                    cur_mon = self.topology.find_monitor_at(int(self.cursor_x), int(self.cursor_y))
+                                    cur_mon_id = getattr(cur_mon, "monitorId", None) if cur_mon else None
+                                    adj = self.find_adjacent_peer_in_colony(self.device_id, pushing_edge, norm_val, cur_mon_id)
                                     if adj:
                                         relay_triggered = True
                                         relay_peer = adj
@@ -4285,6 +4316,9 @@ class ConnectMeLinuxNode:
         active_playback_proc: Optional[subprocess.Popen] = None
         current_playback_sr = 48000
         current_playback_ch = 2
+        current_playback_sink: Optional[str] = None
+        consecutive_failures = 0
+        last_failure_time = 0.0
 
         while self.running:
             try:
@@ -4321,53 +4355,89 @@ class ConnectMeLinuxNode:
                 self.audio_rx_last_sender = addr[0]
                 self.audio_rx_active = True
 
-                if (
+                target_sink = self.audio_rx_target_sink
+                needs_restart = (
                     active_playback_proc is None
                     or active_playback_proc.poll() is not None
                     or current_playback_sr != sr
                     or current_playback_ch != ch
-                ):
+                    or current_playback_sink != target_sink
+                )
+
+                if needs_restart:
                     if active_playback_proc:
                         try:
                             if active_playback_proc.stdin:
                                 active_playback_proc.stdin.close()
                             active_playback_proc.terminate()
+                            active_playback_proc.wait(timeout=0.2)
                         except Exception:
                             pass
+                        active_playback_proc = None
 
-                    play_cmd = None
-                    target_arg = []
-                    if self.audio_rx_target_sink:
-                        if shutil.which("pw-play"):
-                            target_arg = [f"--target={self.audio_rx_target_sink}"]
-                        elif shutil.which("paplay"):
-                            target_arg = ["-d", self.audio_rx_target_sink]
-                        elif shutil.which("aplay"):
-                            target_arg = ["-D", self.audio_rx_target_sink]
+                    # If repeatedly failing, avoid spinning at 200 process launches/sec
+                    if consecutive_failures >= 3 and (now - last_failure_time < 0.5):
+                        continue
 
-                    if shutil.which("pw-play"):
-                        play_cmd = ["pw-play", "--raw"] + target_arg + ["--format=s16", f"--rate={sr}", f"--channels={ch}", "-"]
-                    elif shutil.which("paplay"):
-                        play_cmd = ["paplay"] + target_arg + ["--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]
-                    elif shutil.which("aplay"):
-                        play_cmd = ["aplay"] + target_arg + ["-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q", "-"]
+                    # Build ordered player candidates
+                    # 1. pacat (PulseAudio / PipeWire-Pulse): Standard for raw PCM with sink targeting & jitter cushion
+                    candidates = []
+                    if shutil.which("pacat"):
+                        if target_sink and target_sink != "default":
+                            candidates.append(("pacat (özel çıkış)", ["pacat", "--playback", "-d", str(target_sink), f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=50"]))
+                        candidates.append(("pacat (varsayılan)", ["pacat", "--playback", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=50"]))
 
-                    if play_cmd:
+                    if shutil.which("pw-cat"):
+                        if target_sink and target_sink != "default":
+                            candidates.append(("pw-cat (özel çıkış)", ["pw-cat", "-p", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "-"]))
+                        candidates.append(("pw-cat (varsayılan)", ["pw-cat", "-p", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "-"]))
+                    elif shutil.which("pw-play"):
+                        if target_sink and target_sink != "default":
+                            candidates.append(("pw-play (özel çıkış)", ["pw-play", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "-"]))
+                        candidates.append(("pw-play (varsayılan)", ["pw-play", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "-"]))
+
+                    if shutil.which("paplay"):
+                        if target_sink and target_sink != "default":
+                            candidates.append(("paplay (özel çıkış)", ["paplay", "-d", str(target_sink), "--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]))
+                        candidates.append(("paplay (varsayılan)", ["paplay", "--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]))
+
+                    if shutil.which("aplay"):
+                        if target_sink and target_sink != "default":
+                            candidates.append(("aplay (özel çıkış)", ["aplay", "-D", str(target_sink), "-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q", "-"]))
+                        candidates.append(("aplay (varsayılan)", ["aplay", "-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q", "-"]))
+
+                    started = False
+                    for label, play_cmd in candidates:
                         try:
-                            active_playback_proc = subprocess.Popen(
+                            proc = subprocess.Popen(
                                 play_cmd,
                                 stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE,
                                 bufsize=0,
                             )
-                            current_playback_sr = sr
-                            current_playback_ch = ch
-                            self.audio_rx_last_player = play_cmd[0]
-                            self.log(f"[Ses Çalma] 🔊 Gelen ses akışı çalınıyor ({play_cmd[0]} - {sr}Hz {ch} kanal S16LE, Kaynak: {addr[0]}).")
+                            # Verify the player process didn't immediately exit
+                            time.sleep(0.015)
+                            if proc.poll() is None:
+                                active_playback_proc = proc
+                                current_playback_sr = sr
+                                current_playback_ch = ch
+                                current_playback_sink = target_sink
+                                self.audio_rx_last_player = label
+                                self.log(f"[Ses Çalma] 🔊 Gelen ses akışı çalınıyor ({label} - {sr}Hz {ch} kanal S16LE, Kaynak: {addr[0]}).")
+                                consecutive_failures = 0
+                                started = True
+                                break
+                            else:
+                                err_msg = proc.stderr.read().decode("utf-8", "ignore").strip() if proc.stderr else ""
+                                self.log(f"[Ses Çalma Uyarısı] '{label}' başlatılamadı (çıkış kodu {proc.returncode}): {err_msg}")
                         except Exception as p_err:
-                            self.log(f"[Ses Çalma Hatası] Oynatma süreci başlatılamadı: {p_err}")
-                            active_playback_proc = None
+                            self.log(f"[Ses Çalma Hatası] '{label}' süreci başlatılamadı: {p_err}")
+
+                    if not started:
+                        consecutive_failures += 1
+                        last_failure_time = time.time()
+                        active_playback_proc = None
 
                 if active_playback_proc and active_playback_proc.stdin:
                     try:
@@ -4375,6 +4445,8 @@ class ConnectMeLinuxNode:
                         active_playback_proc.stdin.flush()
                     except BrokenPipeError:
                         active_playback_proc = None
+                        consecutive_failures += 1
+                        last_failure_time = time.time()
                     except Exception:
                         pass
             except Exception:

@@ -70,9 +70,20 @@ class MainActivity : AppCompatActivity() {
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val targetIp = ConnectMeService.activeAudioRoute?.targetIp
+        var targetIp = ConnectMeService.activeAudioRoute?.targetIp
             ?: pendingAudioTarget?.ipAddress
             ?: resolveTargetPc()?.ipAddress
+
+        if (targetIp.isNullOrBlank() || targetIp == "127.0.0.1") {
+            val routeDevId = ConnectMeService.activeAudioRoute?.targetDeviceId
+                ?: pendingAudioTarget?.deviceId
+            if (!routeDevId.isNullOrBlank()) {
+                val peer = ConnectMeService.discoveredPeers.find { it.deviceId == routeDevId }
+                if (peer != null && peer.ipAddress.isNotEmpty() && peer.ipAddress != "127.0.0.1") {
+                    targetIp = peer.ipAddress
+                }
+            }
+        }
 
         if (result.resultCode == Activity.RESULT_OK && result.data != null && !targetIp.isNullOrBlank()) {
             val intent = Intent(this, AudioStreamService::class.java).apply {

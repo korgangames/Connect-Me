@@ -1784,7 +1784,7 @@ class ConnectMeService : Service() {
                     var resolvedIp = target.targetIp
                     if (resolvedIp.isEmpty() || resolvedIp == "127.0.0.1") {
                         val peer = discoveredPeers.find { it.deviceId == target.targetDeviceId }
-                        if (peer != null && peer.ipAddress.isNotEmpty()) {
+                        if (peer != null && peer.ipAddress.isNotEmpty() && peer.ipAddress != "127.0.0.1") {
                             resolvedIp = peer.ipAddress
                         }
                     }

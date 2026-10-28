@@ -29,6 +29,7 @@ public static class Program
         TestLinuxKScreenDoctorJsonParser();
         TestLinuxXRandrOutputParser();
         TestMultiMonitorCanvasMagneticSnapping();
+        TestMultiMonitorPerMonitorTopEdgeMatching();
         TestTrustedDeviceStorePersistence();
         await TestTcpFrameCodecAsync();
         await TestEndToEndMutualSixDigitPinAndLoopbackAsync();
@@ -433,6 +434,65 @@ public static class Program
             phonePeer.AttachedLocalMonitorId == "DISPLAY2" &&
             phonePeer.AssignedEdgeOnLocal == ScreenEdge.Right,
             "2D Çoklu Monitör Kanvasında İstenen Monitöre (DISPLAY2 Sağ Kenar) Manyetik Kenetleme");
+    }
+
+    private static void TestMultiMonitorPerMonitorTopEdgeMatching()
+    {
+        var topo = new SpatialTopologyEngine();
+        var mon1 = new PhysicalMonitorDescriptor
+        {
+            MonitorId = "DISPLAY1",
+            Name = "Monitör 1",
+            VirtualX = 0,
+            VirtualY = 0,
+            Width = 1920,
+            Height = 1080,
+            IsPrimary = true
+        };
+        var mon2 = new PhysicalMonitorDescriptor
+        {
+            MonitorId = "DISPLAY2",
+            Name = "Monitör 2",
+            VirtualX = 1920,
+            VirtualY = 0,
+            Width = 1920,
+            Height = 1080,
+            IsPrimary = false
+        };
+        topo.UpdateLocalMonitors([mon1, mon2]);
+
+        var peer = new PeerDeviceNode
+        {
+            DeviceId = "peer-linux",
+            DeviceName = "Linux PC",
+            Platform = "linux",
+            ScreenWidth = 1920,
+            ScreenHeight = 1080,
+            AttachedToDeviceId = "local-host",
+            AttachedLocalMonitorId = "DISPLAY2",
+            MyEnteredPinVerifiedByRemote = true,
+            RemoteEnteredMyPinVerified = true
+        };
+        topo.AssignPeerToEdgeSegment(peer, ScreenEdge.Top, 0.0f, 1.0f);
+        peer.AttachedLocalMonitorId = "DISPLAY2";
+        topo.RecomputeColonyWorldCoordinates("local-host");
+
+        // 1. Colony world coordinates must align with DISPLAY2 (X = 1920, Y = -1080)
+        AssertTrue(
+            peer.ColonyX == 1920 && peer.ColonyY == -1080,
+            "Çoklu Monitör: Monitör 2 üstüne atanan cihazın koloni koordinatları doğru (1920, -1080)");
+
+        // 2. Cursor hitting top edge on DISPLAY1 must NOT trigger transition to peer on DISPLAY2
+        var hitMon1 = topo.EvaluateCursorStep(960, 0, deltaX: 0, deltaY: -30);
+        AssertTrue(
+            !hitMon1.ShouldTransition,
+            "Çoklu Monitör: Monitör 1 üst kenarında Monitör 2'deki cihaza yanlış geçiş engellendi");
+
+        // 3. Cursor hitting top edge on DISPLAY2 MUST trigger transition to peer
+        var hitMon2 = topo.EvaluateCursorStep(2500, 0, deltaX: 0, deltaY: -30);
+        AssertTrue(
+            hitMon2.ShouldTransition && hitMon2.TargetPeer?.DeviceId == "peer-linux",
+            "Çoklu Monitör: Monitör 2 üst kenarından Monitör 2'ye bağlı cihaza geçiş başarıyla gerçekleşti");
     }
 
     private static async Task TestTcpFrameCodecAsync()
