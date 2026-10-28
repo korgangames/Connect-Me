@@ -1,3 +1,29 @@
+# Connect Me v1.8.21 — Global Birleşik Koloni Kanvası & Linux Orantılı Yakınlaştırma Ölçeklemesi (Zoom Bugfix)
+
+Bu sürüm; hem Windows hem de Linux arayüzlerinde harici cihazların (ör. Huawei tablet/telefon) her iki makinede de sanki yalnızca kendine bağlıymış gibi görünmesi sorununu küresel birleşik koloni koordinat sistemiyle çözer ve Linux arayüzündeki zoom ölçekleme hatasını giderir:
+
+1. **Global Birleşik Koloni Koordinat Sistemi (Global Unified Colony World Coordinates):**
+   - **Kök Neden:** Önceki sürümlerde her iki işletim sistemi kanvası yerel-merkezci (local-centric) mantıkla çalışıyordu. Windows ve Linux arayüzleri boş `AttachedToDeviceId` değerini "bana bağlı" olarak yorumluyordu; bu yüzden Windows'ta Huawei Windows'a bağlı görünürken, Linux'ta da aynı Huawei Linux'a bağlı görünüyordu. Gerçek küresel bağlantı ağacı iki makine arasında uyuşmuyordu.
+   - **Çözüm:**
+     - `SpatialTopology.cs` ve `connectme_linux_daemon.py` modüllerine deterministik `RecomputeColonyWorldCoordinates` ve `recompute_colony_world_coordinates` algoritmaları eklendi.
+     - Tüm cihazlar tek bir ortak küresel dünya koordinat sisteminde (`ColonyX`, `ColonyY`) konumlandırılır.
+     - Kanvas çapa yapısında (`CanvasAnchorBox`), yerel monitörler artık her zaman yerel makinenin açık `DeviceId`'si ile etiketlenir (`anchors.Add(Id = _network.LocalDeviceId)` / `anchors.append(id = self.node.device_id)`). Huawei Windows'a kenetlendiğinde açıkça `AttachedToDeviceId = "EGEMENGOKCUL"`, Linux'a kenetlendiğinde `AttachedToDeviceId = "Doomer-Nobara"` olarak tanımlanır.
+     - `COLONY_TOPOLOGY_SYNC` çerçevesiyle tüm ağ aynı küresel bağlantı ağacını alır; hem Windows hem Linux arayüzlerinde harici cihazın gerçekte kime bağlı olduğu kristal netliğinde ve %100 birebir aynı gösterilir.
+     - İmleç Windows'tan başlasa bile Linux üzerinden geçip Linux'a bağlı Android cihaza (`EDGE_RELAY`) kesintisiz olarak aktarılır.
+
+2. **Linux 2D Kanvasında Dinamik ve Orantılı Yakınlaştırma (Linux Canvas Proportional Zoom Scaling Bugfix):**
+   - **Kök Neden:** `connectme_linux_gui.py` içerisinde harici cihaz kartlarının genişliği `card_w = max(200, min(260, ...))` ve `card_h = max(110, min(135, ...))` ile yapay olarak dar bir aralığa hapsedilmişti. Ayrıca `self.peer_canvas_coords` sözlüğü eski yakınlaştırma seviyesindeki statik piksel değerlerini tuttuğundan; kullanıcı zoom yaptığında ana monitör banner'ı büyüyüp küçülürken harici cihazların banner'ları aynı pikselde ve aynı boyutta sabit kalıyordu.
+   - **Çözüm:**
+     - `_get_colony_layout_metrics` metodu ile tüm koloninin (yerel monitörler + harici cihazlar) toplam sınırları dinamik olarak hesaplandı.
+     - Harici cihaz kartlarının boyutları `card_w = max(120, int(pw * scale))` ve `card_h = max(70, int(ph * scale))` formülüyle tamamen dinamik hale getirildi; statik tavan sınırları kaldırıldı.
+     - Kart koordinatları dünya koordinatlarına bağlandı (`px1 = offset_x + float(p.get("colonyX", 0.0)) * scale`).
+     - Artık Linux arayüzünde zoom yapıldığında hem yerel monitörler hem de bağlı cihaz kartları pürüzsüz ve senkronize olarak birlikte büyüyüp küçülür.
+
+3. **Gelişmiş Çok Atlamalı İmleç Yönlendirme (Multi-Hop Cursor Relay):**
+   - İki yönlü ağaçta ebeveyn-çocuk ve geometrik dünya koordinat kesişimi ile Windows -> Linux -> Android rotasında imleç geçişi ve `EDGE_RETURN` ile geri dönüş tam kararlılıkla çalışır.
+
+---
+
 # Connect Me v1.8.20 — Göreceli Çoklu Cihaz Koloni Topolojisi, Global Kanvas Senkronizasyonu & Çok Atlamalı İmleç Aktarımı (Edge Relay)
 
 Bu sürüm; hem Windows hem de Linux arayüzlerinde daha önce cihazların yalnızca kendi etrafına yerleşim yapabilmesi kısıtını tamamen ortadan kaldırır. Cihazlar artık koloni içerisindeki herhangi bir diğer cihaza göreceli olarak eklenebilir, bu dizilim tüm arayüzlerde anında senkronize olur ve imleç zincirleme olarak ekranlar arasında gezinebilir:

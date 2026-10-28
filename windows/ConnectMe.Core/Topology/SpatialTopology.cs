@@ -131,6 +131,14 @@ public sealed class SpatialTopologyEngine
     public int LocalWidth { get; private set; } = 1920;
     public int LocalHeight { get; private set; } = 1080;
 
+    // Global Colony Mesh Coordinates for Local Node
+    public double LocalColonyX { get; set; } = 0;
+    public double LocalColonyY { get; set; } = 0;
+    public string LocalAttachedToDeviceId { get; set; } = string.Empty;
+    public ScreenEdge LocalAttachedEdge { get; set; } = ScreenEdge.None;
+    public float LocalEdgeOffsetStart { get; set; } = 0.0f;
+    public float LocalEdgeOffsetEnd { get; set; } = 1.0f;
+
     /// <summary>
     /// All physical monitors that make up the local computer's virtual desktop.
     /// </summary>
@@ -651,7 +659,8 @@ public sealed class SpatialTopologyEngine
             // Case 1: Peer C has AttachedToDeviceId == fromDeviceId and AssignedEdgeOnLocal == edge
             var attachedChildren = _peersById.Values
                 .Where(p => p.IsMutuallyPaired &&
-                            string.Equals(p.AttachedToDeviceId, fromDeviceId, StringComparison.OrdinalIgnoreCase) &&
+                            (string.Equals(p.AttachedToDeviceId, fromDeviceId, StringComparison.OrdinalIgnoreCase) ||
+                             (string.IsNullOrEmpty(p.AttachedToDeviceId) && string.Equals(fromDeviceId, LocalAttachedToDeviceId, StringComparison.OrdinalIgnoreCase))) &&
                             p.AssignedEdgeOnLocal == edge)
                 .ToList();
 
@@ -673,7 +682,208 @@ public sealed class SpatialTopologyEngine
                 }
             }
 
+            // Case 3: Geometric World Coordinate overlap
+            double fromX = 0, fromY = 0;
+            int fromW = 1920, fromH = 1080;
+            if (_peersById.TryGetValue(fromDeviceId, out var fp))
+            {
+                fromX = fp.ColonyX;
+                fromY = fp.ColonyY;
+                fromW = fp.ScreenWidth > 0 ? fp.ScreenWidth : 1920;
+                fromH = fp.ScreenHeight > 0 ? fp.ScreenHeight : 1080;
+            }
+            else
+            {
+                fromX = LocalColonyX;
+                fromY = LocalColonyY;
+                fromW = LocalWidth;
+                fromH = LocalHeight;
+            }
+
+            foreach (var p in _peersById.Values)
+            {
+                if (!p.IsMutuallyPaired || string.Equals(p.DeviceId, fromDeviceId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                int pw = p.ScreenWidth > 0 ? p.ScreenWidth : 1920;
+                int ph = p.ScreenHeight > 0 ? p.ScreenHeight : 1080;
+
+                switch (edge)
+                {
+                    case ScreenEdge.Right:
+                        if (Math.Abs(p.ColonyX - (fromX + fromW)) < 50 &&
+                            p.ColonyY + ph > fromY && p.ColonyY < fromY + fromH)
+                            return p;
+                        break;
+                    case ScreenEdge.Left:
+                        if (Math.Abs((p.ColonyX + pw) - fromX) < 50 &&
+                            p.ColonyY + ph > fromY && p.ColonyY < fromY + fromH)
+                            return p;
+                        break;
+                    case ScreenEdge.Top:
+                        if (Math.Abs((p.ColonyY + ph) - fromY) < 50 &&
+                            p.ColonyX + pw > fromX && p.ColonyX < fromX + fromW)
+                            return p;
+                        break;
+                    case ScreenEdge.Bottom:
+                        if (Math.Abs(p.ColonyY - (fromY + fromH)) < 50 &&
+                            p.ColonyX + pw > fromX && p.ColonyX < fromX + fromW)
+                            return p;
+                        break;
+                }
+            }
+
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Recomputes global world coordinates (ColonyX, ColonyY) for all nodes in the mesh.
+    /// Traverses the attachment tree starting from the root node (node without parent, default local computer).
+    /// </summary>
+    public void RecomputeColonyWorldCoordinates(string localDeviceId)
+    {
+        lock (_sync)
+        {
+            var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            bool localHasParent = !string.IsNullOrEmpty(LocalAttachedToDeviceId) &&
+                                  _peersById.ContainsKey(LocalAttachedToDeviceId);
+
+            if (!localHasParent)
+            {
+                LocalColonyX = 0;
+                LocalColonyY = 0;
+                LocalAttachedToDeviceId = string.Empty;
+                placed.Add(localDeviceId);
+            }
+            else
+            {
+                var rootPeer = _peersById[LocalAttachedToDeviceId];
+                rootPeer.ColonyX = 0;
+                rootPeer.ColonyY = 0;
+                rootPeer.AttachedToDeviceId = string.Empty;
+                placed.Add(rootPeer.DeviceId);
+            }
+
+            var queue = new Queue<(string Id, double X, double Y, int W, int H)>();
+
+            if (placed.Contains(localDeviceId))
+            {
+                queue.Enqueue((localDeviceId, LocalColonyX, LocalColonyY, LocalWidth, LocalHeight));
+            }
+            foreach (var p in _peersById.Values)
+            {
+                if (placed.Contains(p.DeviceId))
+                {
+                    int pw = p.ScreenWidth > 0 ? p.ScreenWidth : 1920;
+                    int ph = p.ScreenHeight > 0 ? p.ScreenHeight : 1080;
+                    queue.Enqueue((p.DeviceId, p.ColonyX, p.ColonyY, pw, ph));
+                }
+            }
+
+            int safety = 0;
+            while (queue.Count > 0 && safety++ < 100)
+            {
+                var (currId, currX, currY, currW, currH) = queue.Dequeue();
+
+                if (!placed.Contains(localDeviceId) &&
+                    string.Equals(LocalAttachedToDeviceId, currId, StringComparison.OrdinalIgnoreCase))
+                {
+                    ComputeChildCoords(currX, currY, currW, currH, LocalWidth, LocalHeight,
+                        LocalAttachedEdge, LocalEdgeOffsetStart, out double lx, out double ly);
+                    LocalColonyX = lx;
+                    LocalColonyY = ly;
+                    placed.Add(localDeviceId);
+                    queue.Enqueue((localDeviceId, lx, ly, LocalWidth, LocalHeight));
+                }
+
+                foreach (var peer in _peersById.Values)
+                {
+                    if (placed.Contains(peer.DeviceId))
+                        continue;
+
+                    bool isAttached = string.Equals(peer.AttachedToDeviceId, currId, StringComparison.OrdinalIgnoreCase) ||
+                                      (string.IsNullOrEmpty(peer.AttachedToDeviceId) && string.Equals(currId, localDeviceId, StringComparison.OrdinalIgnoreCase));
+
+                    if (isAttached)
+                    {
+                        peer.AttachedToDeviceId = currId;
+                        int pw = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
+                        int ph = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
+
+                        ComputeChildCoords(currX, currY, currW, currH, pw, ph,
+                            peer.AssignedEdgeOnLocal, peer.EdgeOffsetStart, out double px, out double py);
+
+                        peer.ColonyX = px;
+                        peer.ColonyY = py;
+                        peer.CanvasX = px;
+                        peer.CanvasY = py;
+                        peer.HasCustomCanvasPosition = true;
+                        placed.Add(peer.DeviceId);
+                        queue.Enqueue((peer.DeviceId, px, py, pw, ph));
+                    }
+                }
+            }
+
+            double maxRight = placed.Contains(localDeviceId) ? LocalColonyX + LocalWidth : 1920;
+            foreach (var p in _peersById.Values)
+            {
+                if (placed.Contains(p.DeviceId))
+                {
+                    int pw = p.ScreenWidth > 0 ? p.ScreenWidth : 1920;
+                    if (p.ColonyX + pw > maxRight) maxRight = p.ColonyX + pw;
+                }
+            }
+
+            foreach (var peer in _peersById.Values)
+            {
+                if (!placed.Contains(peer.DeviceId))
+                {
+                    int pw = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
+                    int ph = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
+                    peer.AttachedToDeviceId = localDeviceId;
+                    peer.AssignedEdgeOnLocal = ScreenEdge.Right;
+                    peer.ColonyX = maxRight + 20;
+                    peer.ColonyY = 0;
+                    peer.CanvasX = peer.ColonyX;
+                    peer.CanvasY = peer.ColonyY;
+                    peer.HasCustomCanvasPosition = true;
+                    maxRight = peer.ColonyX + pw;
+                    placed.Add(peer.DeviceId);
+                }
+            }
+        }
+    }
+
+    private static void ComputeChildCoords(
+        double parentX, double parentY, int parentW, int parentH,
+        int childW, int childH, ScreenEdge edge, float offset,
+        out double childX, out double childY)
+    {
+        float off = Math.Clamp(offset, 0.0f, 0.95f);
+        switch (edge)
+        {
+            case ScreenEdge.Right:
+                childX = parentX + parentW;
+                childY = parentY + Math.Round(off * parentH);
+                break;
+            case ScreenEdge.Left:
+                childX = parentX - childW;
+                childY = parentY + Math.Round(off * parentH);
+                break;
+            case ScreenEdge.Top:
+                childX = parentX + Math.Round(off * parentW);
+                childY = parentY - childH;
+                break;
+            case ScreenEdge.Bottom:
+                childX = parentX + Math.Round(off * parentW);
+                childY = parentY + parentH;
+                break;
+            default:
+                childX = parentX + parentW;
+                childY = parentY;
+                break;
         }
     }
 
@@ -685,6 +895,8 @@ public sealed class SpatialTopologyEngine
         string localDeviceName,
         string localPlatform)
     {
+        RecomputeColonyWorldCoordinates(localDeviceId);
+
         var list = new List<ColonyNodeLayoutDescriptor>();
 
         // 1. Local machine node
@@ -695,12 +907,12 @@ public sealed class SpatialTopologyEngine
             Platform = localPlatform,
             ScreenWidth = LocalWidth,
             ScreenHeight = LocalHeight,
-            AttachedToDeviceId = string.Empty,
-            AttachedEdge = (int)ScreenEdge.None,
-            EdgeOffsetStart = 0.0,
-            EdgeOffsetEnd = 1.0,
-            ColonyX = 0,
-            ColonyY = 0,
+            AttachedToDeviceId = LocalAttachedToDeviceId,
+            AttachedEdge = (int)LocalAttachedEdge,
+            EdgeOffsetStart = LocalEdgeOffsetStart,
+            EdgeOffsetEnd = LocalEdgeOffsetEnd,
+            ColonyX = LocalColonyX,
+            ColonyY = LocalColonyY,
             CanvasWidth = 140,
             CanvasHeight = 90
         });
@@ -715,14 +927,14 @@ public sealed class SpatialTopologyEngine
                     DeviceId = peer.DeviceId,
                     DeviceName = peer.DeviceName,
                     Platform = peer.Platform,
-                    ScreenWidth = peer.ScreenWidth,
-                    ScreenHeight = peer.ScreenHeight,
+                    ScreenWidth = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920,
+                    ScreenHeight = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080,
                     AttachedToDeviceId = peer.AttachedToDeviceId,
                     AttachedEdge = (int)peer.AssignedEdgeOnLocal,
                     EdgeOffsetStart = peer.EdgeOffsetStart,
                     EdgeOffsetEnd = peer.EdgeOffsetEnd,
-                    ColonyX = peer.ColonyX != 0 ? peer.ColonyX : peer.CanvasX,
-                    ColonyY = peer.ColonyY != 0 ? peer.ColonyY : peer.CanvasY,
+                    ColonyX = peer.ColonyX,
+                    ColonyY = peer.ColonyY,
                     CanvasWidth = peer.CanvasWidth,
                     CanvasHeight = peer.CanvasHeight
                 });
@@ -747,6 +959,15 @@ public sealed class SpatialTopologyEngine
         lock (_sync)
         {
             var myDesc = descriptors.FirstOrDefault(d => string.Equals(d.DeviceId, localDeviceId, StringComparison.OrdinalIgnoreCase));
+            if (myDesc != null)
+            {
+                LocalColonyX = myDesc.ColonyX;
+                LocalColonyY = myDesc.ColonyY;
+                LocalAttachedToDeviceId = myDesc.AttachedToDeviceId;
+                LocalAttachedEdge = (ScreenEdge)myDesc.AttachedEdge;
+                LocalEdgeOffsetStart = (float)myDesc.EdgeOffsetStart;
+                LocalEdgeOffsetEnd = (float)myDesc.EdgeOffsetEnd;
+            }
 
             foreach (var desc in descriptors)
             {
@@ -757,8 +978,8 @@ public sealed class SpatialTopologyEngine
                 {
                     peer.DeviceName = desc.DeviceName;
                     peer.Platform = desc.Platform;
-                    peer.ScreenWidth = desc.ScreenWidth;
-                    peer.ScreenHeight = desc.ScreenHeight;
+                    peer.ScreenWidth = desc.ScreenWidth > 0 ? desc.ScreenWidth : 1920;
+                    peer.ScreenHeight = desc.ScreenHeight > 0 ? desc.ScreenHeight : 1080;
                     peer.CanvasWidth = desc.CanvasWidth;
                     peer.CanvasHeight = desc.CanvasHeight;
                     peer.ColonyX = desc.ColonyX;

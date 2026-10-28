@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private PeerDeviceNode? _draggingPeer;
     private Border? _draggingBorder;
     private Point _dragMouseOffset;
+    private List<(PhysicalMonitorDescriptor Monitor, double Left, double Top, double Width, double Height)> _lastRenderedLocalBoxes = new();
 
     public MainWindow()
     {
@@ -526,10 +527,9 @@ public partial class MainWindow : Window
     private List<CanvasAnchorBox> GetAllCanvasAnchorBoxes(PeerDeviceNode? excludePeer = null)
     {
         var list = new List<CanvasAnchorBox>();
-        var localBoxes = GetLocalMonitorBoxesOnCanvas();
-        foreach (var (mon, ml, mt, mw, mh) in localBoxes)
+        foreach (var (mon, ml, mt, mw, mh) in _lastRenderedLocalBoxes)
         {
-            list.Add(new CanvasAnchorBox(mon.MonitorId, mon.Name, true, ml, mt, mw, mh));
+            list.Add(new CanvasAnchorBox(_network.LocalDeviceId, $"Bu Bilgisayar ({mon.Name})", true, ml, mt, mw, mh));
         }
 
         var peers = _topology.GetConfiguredPeers();
@@ -555,13 +555,13 @@ public partial class MainWindow : Window
             int maxVy = peer.RemoteMonitors.Max(m => m.VirtualY + m.Height);
             double deskW = (maxVx - minVx) * scale;
             double deskH = (maxVy - minVy) * scale;
-            return (Math.Max(160, deskW + 28), Math.Max(95, deskH + 58));
+            return (Math.Max(120, deskW), Math.Max(70, deskH));
         }
 
         double rawW = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
         double rawH = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
-        double w = Math.Max(130, rawW * scale + 24);
-        double h = Math.Max(76, rawH * scale + 48);
+        double w = Math.Max(120, rawW * scale);
+        double h = Math.Max(70, rawH * scale);
         return (w, h);
     }
 
@@ -573,11 +573,55 @@ public partial class MainWindow : Window
         DisplayArrangementCanvas.Children.Clear();
         DrawCanvasGridLines(DisplayArrangementCanvas.ActualWidth, DisplayArrangementCanvas.ActualHeight);
 
-        var localBoxes = GetLocalMonitorBoxesOnCanvas();
+        _topology.RecomputeColonyWorldCoordinates(_network.LocalDeviceId);
 
-        // 1. Draw all Local Physical Monitors of this Computer
-        foreach (var (mon, mLeft, mTop, mW, mH) in localBoxes)
+        var allPeers = _topology.GetConfiguredPeers().ToList();
+
+        // 1. Calculate entire colony bounding box (Local Machine + All Peers)
+        double minX = _topology.LocalColonyX;
+        double minY = _topology.LocalColonyY;
+        double maxX = _topology.LocalColonyX + _topology.LocalWidth;
+        double maxY = _topology.LocalColonyY + _topology.LocalHeight;
+
+        foreach (var p in allPeers)
         {
+            int pw = p.ScreenWidth > 0 ? p.ScreenWidth : 1920;
+            int ph = p.ScreenHeight > 0 ? p.ScreenHeight : 1080;
+            if (p.ColonyX < minX) minX = p.ColonyX;
+            if (p.ColonyY < minY) minY = p.ColonyY;
+            if (p.ColonyX + pw > maxX) maxX = p.ColonyX + pw;
+            if (p.ColonyY + ph > maxY) maxY = p.ColonyY + ph;
+        }
+
+        double totalColonyW = Math.Max(800, maxX - minX);
+        double totalColonyH = Math.Max(600, maxY - minY);
+
+        double cw = Math.Max(420, DisplayArrangementCanvas.ActualWidth);
+        double ch = Math.Max(280, DisplayArrangementCanvas.ActualHeight);
+
+        double baseScale = Math.Min((cw - 140) / totalColonyW, (ch - 110) / totalColonyH);
+        baseScale = Math.Clamp(baseScale, 0.035, 0.16);
+        double scale = baseScale;
+
+        double drawColonyW = totalColonyW * scale;
+        double drawColonyH = totalColonyH * scale;
+        double offsetX = (cw - drawColonyW) / 2.0 - minX * scale;
+        double offsetY = (ch - drawColonyH) / 2.0 - minY * scale;
+
+        // 2. Draw all Local Physical Monitors of this Computer
+        var monitors = _topology.LocalMonitors;
+        int minVx = monitors.Count > 0 ? monitors.Min(m => m.VirtualX) : 0;
+        int minVy = monitors.Count > 0 ? monitors.Min(m => m.VirtualY) : 0;
+
+        _lastRenderedLocalBoxes.Clear();
+        foreach (var mon in monitors)
+        {
+            double mLeft = offsetX + (_topology.LocalColonyX + (mon.VirtualX - minVx)) * scale;
+            double mTop = offsetY + (_topology.LocalColonyY + (mon.VirtualY - minVy)) * scale;
+            double mW = Math.Max(70, mon.Width * scale);
+            double mH = Math.Max(50, mon.Height * scale);
+            _lastRenderedLocalBoxes.Add((mon, mLeft, mTop, mW, mH));
+
             var monBorder = new Border
             {
                 Width = mW,
@@ -604,7 +648,7 @@ public partial class MainWindow : Window
             {
                 Text = mon.IsPrimary ? $"🪟 {mon.MonitorId} (Ana)" : $"🖥️ {mon.MonitorId}",
                 FontWeight = FontWeights.Bold,
-                FontSize = localBoxes.Count > 1 ? 10.5 : 12,
+                FontSize = _lastRenderedLocalBoxes.Count > 1 ? 10.5 : 12,
                 Foreground = Brushes.White,
                 HorizontalAlignment = HorizontalAlignment.Center
             });
@@ -612,7 +656,7 @@ public partial class MainWindow : Window
             monStack.Children.Add(new TextBlock
             {
                 Text = $"{mon.Width}x{mon.Height}",
-                FontSize = localBoxes.Count > 1 ? 9.5 : 10.5,
+                FontSize = _lastRenderedLocalBoxes.Count > 1 ? 9.5 : 10.5,
                 Foreground = new SolidColorBrush(Color.FromRgb(147, 197, 253)),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 1, 0, 0)
@@ -640,12 +684,12 @@ public partial class MainWindow : Window
         }
 
         // Draw Internal Monitor Seam indicators between adjacent local physical monitors
-        for (int i = 0; i < localBoxes.Count; i++)
+        for (int i = 0; i < _lastRenderedLocalBoxes.Count; i++)
         {
-            for (int j = i + 1; j < localBoxes.Count; j++)
+            for (int j = i + 1; j < _lastRenderedLocalBoxes.Count; j++)
             {
-                var a = localBoxes[i];
-                var b = localBoxes[j];
+                var a = _lastRenderedLocalBoxes[i];
+                var b = _lastRenderedLocalBoxes[j];
                 if (Math.Abs((a.Left + a.Width) - b.Left) < 3.0 || Math.Abs((b.Left + b.Width) - a.Left) < 3.0)
                 {
                     double seamX = Math.Abs((a.Left + a.Width) - b.Left) < 3.0 ? b.Left : a.Left;
@@ -666,13 +710,18 @@ public partial class MainWindow : Window
             }
         }
 
-        // 2. Draw all Configured and Discovered Peer Display Boxes & Shared Portal Lines
-        var allPeers = _topology.GetConfiguredPeers().ToList();
-        double scale = GetCanvasMonitorScale();
-
+        // 3. Draw all Configured and Discovered Peer Display Boxes & Shared Portal Lines
         foreach (var peer in allPeers)
         {
-            var (boxW, boxH) = GetScaledPeerBoxSize(peer);
+            int pw = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
+            int ph = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
+            double pLeft = offsetX + peer.ColonyX * scale;
+            double pTop = offsetY + peer.ColonyY * scale;
+            double boxW = Math.Max(120, pw * scale);
+            double boxH = Math.Max(70, ph * scale);
+
+            peer.CanvasX = pLeft;
+            peer.CanvasY = pTop;
             peer.CanvasWidth = boxW;
             peer.CanvasHeight = boxH;
 
@@ -680,6 +729,7 @@ public partial class MainWindow : Window
             string anchorName;
 
             if (!string.IsNullOrEmpty(peer.AttachedToDeviceId) &&
+                !string.Equals(peer.AttachedToDeviceId, _network.LocalDeviceId, StringComparison.OrdinalIgnoreCase) &&
                 allPeers.FirstOrDefault(p => p.DeviceId == peer.AttachedToDeviceId) is { } parentPeer)
             {
                 anchorLeft = parentPeer.CanvasX;
@@ -690,32 +740,16 @@ public partial class MainWindow : Window
             }
             else
             {
-                var attachedMonBox = localBoxes.FirstOrDefault(b => b.Monitor.MonitorId == peer.AttachedLocalMonitorId);
-                if (attachedMonBox.Monitor == null)
+                var attachedMonBox = _lastRenderedLocalBoxes.FirstOrDefault(b => b.Monitor.MonitorId == peer.AttachedLocalMonitorId);
+                if (attachedMonBox.Monitor == null && _lastRenderedLocalBoxes.Count > 0)
                 {
-                    var outermost = _topology.GetOutermostMonitorForEdge(peer.AssignedEdgeOnLocal);
-                    attachedMonBox = localBoxes.FirstOrDefault(b => b.Monitor.MonitorId == outermost.MonitorId);
-                    if (attachedMonBox.Monitor == null)
-                        attachedMonBox = localBoxes[0];
-                    peer.AttachedLocalMonitorId = attachedMonBox.Monitor.MonitorId;
+                    attachedMonBox = _lastRenderedLocalBoxes[0];
                 }
                 anchorLeft = attachedMonBox.Left;
                 anchorTop = attachedMonBox.Top;
                 anchorW = attachedMonBox.Width;
                 anchorH = attachedMonBox.Height;
-                anchorName = attachedMonBox.Monitor.Name;
-            }
-
-            if (!peer.HasCustomCanvasPosition)
-            {
-                ComputeCanvasPosFromEdgeAndSegment(
-                    peer,
-                    anchorLeft,
-                    anchorTop,
-                    anchorW,
-                    anchorH,
-                    boxW,
-                    boxH);
+                anchorName = attachedMonBox.Monitor?.Name ?? "Bu Bilgisayar";
             }
 
             DrawSharedEdgePortalLine(
@@ -1111,6 +1145,17 @@ public partial class MainWindow : Window
                     _draggingBorder.Height,
                     anchors);
 
+            if (bestAnchor.IsLocal)
+            {
+                _draggingPeer.AttachedToDeviceId = _network.LocalDeviceId;
+                _draggingPeer.AttachedLocalMonitorId = bestAnchor.Id;
+            }
+            else
+            {
+                _draggingPeer.AttachedToDeviceId = bestAnchor.Id;
+                _draggingPeer.AttachedLocalMonitorId = string.Empty;
+            }
+
             Canvas.SetLeft(_draggingBorder, _draggingPeer.CanvasX);
             Canvas.SetTop(_draggingBorder, _draggingPeer.CanvasY);
 
@@ -1125,6 +1170,7 @@ public partial class MainWindow : Window
         if (_draggingBorder != null && _draggingPeer != null)
         {
             _draggingBorder.ReleaseMouseCapture();
+            _topology.RecomputeColonyWorldCoordinates(_network.LocalDeviceId);
             _network.SavePeerTopologyToTrustedStore(_draggingPeer);
             _network.SendEdgeConfigToPeer(_draggingPeer);
 
@@ -1164,7 +1210,7 @@ public partial class MainWindow : Window
         var oldEdge = _selectedPeer.AssignedEdgeOnLocal;
         var outermostMon = _topology.GetOutermostMonitorForEdge(edge);
         _selectedPeer.HasCustomCanvasPosition = false;
-        _selectedPeer.AttachedToDeviceId = string.Empty;
+        _selectedPeer.AttachedToDeviceId = _network.LocalDeviceId;
         _selectedPeer.AttachedLocalMonitorId = outermostMon.MonitorId;
         _topology.AssignPeerToEdgeSegment(_selectedPeer, edge, 0.0f, 1.0f, outermostMon.MonitorId);
         if (oldEdge != edge && oldEdge != ScreenEdge.None)
@@ -1172,6 +1218,7 @@ public partial class MainWindow : Window
             DistributePeersOnEdge(oldEdge);
         }
         DistributePeersOnEdge(edge);
+        _topology.RecomputeColonyWorldCoordinates(_network.LocalDeviceId);
         _network.SavePeerTopologyToTrustedStore(_selectedPeer);
         _network.SendEdgeConfigToPeer(_selectedPeer);
 
@@ -1194,7 +1241,7 @@ public partial class MainWindow : Window
         {
             var edge = edgesOrder[i % edgesOrder.Length];
             paired[i].AssignedEdgeOnLocal = edge;
-            paired[i].AttachedToDeviceId = string.Empty;
+            paired[i].AttachedToDeviceId = _network.LocalDeviceId;
             paired[i].AttachedLocalMonitorId = _topology.GetOutermostMonitorForEdge(edge).MonitorId;
         }
 
@@ -1202,6 +1249,8 @@ public partial class MainWindow : Window
         {
             DistributePeersOnEdge(edge);
         }
+
+        _topology.RecomputeColonyWorldCoordinates(_network.LocalDeviceId);
 
         foreach (var p in paired)
         {

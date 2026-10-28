@@ -1251,30 +1251,58 @@ class ConnectMeLinuxGui:
         if hasattr(self, "canvas_info_lbl"):
             self.canvas_info_lbl.config(text="📐 2D ekran yerleşimi sıfırlandı.")
 
+    def _get_colony_layout_metrics(self):
+        """Calculates colony bounding box, uniform scaling factor, and centering offsets."""
+        self.node.recompute_colony_world_coordinates()
+        cw = max(420, self.canvas.winfo_width())
+        ch = max(280, self.canvas.winfo_height())
+        min_vx, min_vy, total_w, total_h = self.node.topology.virtual_desktop_bounds()
+        all_peers = list(self.node.peers.values())
+
+        min_x = float(self.node.local_colony_x)
+        min_y = float(self.node.local_colony_y)
+        max_x = float(self.node.local_colony_x + total_w)
+        max_y = float(self.node.local_colony_y + total_h)
+
+        for p in all_peers:
+            pw = p.get("screenWidth", 1920) or 1920
+            ph = p.get("screenHeight", 1080) or 1080
+            cx = float(p.get("colonyX", 0.0))
+            cy = float(p.get("colonyY", 0.0))
+            if cx < min_x:
+                min_x = cx
+            if cy < min_y:
+                min_y = cy
+            if cx + pw > max_x:
+                max_x = cx + pw
+            if cy + ph > max_y:
+                max_y = cy + ph
+
+        span_w = max(800.0, max_x - min_x)
+        span_h = max(600.0, max_y - min_y)
+        base_scale = min((cw - 140.0) / span_w, (ch - 110.0) / span_h)
+        base_scale = max(0.035, min(0.16, base_scale))
+        scale = base_scale * getattr(self, "canvas_scale", 1.0)
+
+        draw_w = span_w * scale
+        draw_h = span_h * scale
+        offset_x = (cw - draw_w) / 2.0 - min_x * scale
+        offset_y = (ch - draw_h) / 2.0 - min_y * scale
+
+        return scale, offset_x, offset_y, min_vx, min_vy, total_w, total_h
+
     def _get_current_canvas_scale(self) -> float:
-        cw = max(400, self.canvas.winfo_width())
-        ch = max(300, self.canvas.winfo_height())
-        min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
-        base = min((cw - 180) / max(1, total_w * 1.35), (ch - 130) / max(1, total_h * 1.35), 0.13)
-        base = max(0.045, min(base, 0.12))
-        return base * getattr(self, "canvas_scale", 1.0)
+        scale, _, _, _, _, _, _ = self._get_colony_layout_metrics()
+        return scale
 
     def _get_canvas_local_mon_rects(self) -> list:
-        cw = max(400, self.canvas.winfo_width())
-        ch = max(300, self.canvas.winfo_height())
-        min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
-        scale = self._get_current_canvas_scale()
-        loc_w = total_w * scale
-        loc_h = total_h * scale
-        offset_x = max(20, (cw - loc_w) / 2.0)
-        offset_y = max(20, (ch - loc_h) / 2.0)
-
+        scale, offset_x, offset_y, min_vx, min_vy, _, _ = self._get_colony_layout_metrics()
         rects = []
         for m in self.node.topology.monitors:
-            mx1 = offset_x + (m.virtualX - min_x) * scale
-            my1 = offset_y + (m.virtualY - min_y) * scale
-            mx2 = mx1 + m.width * scale
-            my2 = my1 + m.height * scale
+            mx1 = offset_x + (self.node.local_colony_x + (m.virtualX - min_vx)) * scale
+            my1 = offset_y + (self.node.local_colony_y + (m.virtualY - min_vy)) * scale
+            mx2 = mx1 + max(70.0, m.width * scale)
+            my2 = my1 + max(50.0, m.height * scale)
             rects.append((m, mx1, my1, mx2, my2))
         return rects
 
@@ -1312,6 +1340,11 @@ class ConnectMeLinuxGui:
         """Automatically distributes all paired peers cleanly across screen edges."""
         self.peer_canvas_coords.clear()
         self.node.auto_arrange_peers()
+        for p in self.node.peers.values():
+            if p.get("isMutuallyPaired"):
+                p["attachedToDeviceId"] = self.node.device_id
+        self.node.recompute_colony_world_coordinates()
+        self.node.send_colony_topology_sync_to_all_peers()
         self._refresh_state()
         if hasattr(self, "edge_sentinels"):
             self.edge_sentinels.update_sentinels()
@@ -1376,6 +1409,7 @@ class ConnectMeLinuxGui:
 
         p["assignedEdge"] = edge
         p["attachedMonitorId"] = mon_id
+        p["attachedToDeviceId"] = self.node.device_id
         p["canvasX"] = None
         p["canvasY"] = None
         self.peer_canvas_coords.pop(pid, None)
@@ -1383,6 +1417,10 @@ class ConnectMeLinuxGui:
         if old_edge != edge:
             self.node.distribute_peers_on_edge(old_edge)
         self.node.distribute_peers_on_edge(edge)
+
+        self.node.recompute_colony_world_coordinates()
+        self.node.send_edge_config_to_peer(p)
+        self.node.send_colony_topology_sync_to_all_peers()
 
         self._refresh_state()
         if hasattr(self, "edge_sentinels"):
@@ -1445,10 +1483,16 @@ class ConnectMeLinuxGui:
 
     def _on_peer_drag_start(self, event, peer_id: str):
         self.selected_peer_id = peer_id
-        coords = self.peer_canvas_coords.get(peer_id, (event.x - 90, event.y - 45))
+        scale = self._get_current_canvas_scale()
+        p = self.node.peers.get(peer_id, {})
+        pw = p.get("screenWidth", 1920) or 1920
+        ph = p.get("screenHeight", 1080) or 1080
+        card_w = max(120.0, pw * scale)
+        card_h = max(70.0, ph * scale)
+        coords = self.peer_canvas_coords.get(peer_id, (event.x - card_w / 2.0, event.y - card_h / 2.0))
         self._drag_data["peer_id"] = peer_id
-        self._drag_data["last_x"] = event.x
-        self._drag_data["last_y"] = event.y
+        self._drag_data["start_x"] = event.x
+        self._drag_data["start_y"] = event.y
         self._drag_data["card_x"] = coords[0]
         self._drag_data["card_y"] = coords[1]
         try:
@@ -1464,8 +1508,10 @@ class ConnectMeLinuxGui:
             cur_edge = p.get("assignedEdge", EDGE_RIGHT)
             seg_s = int(float(p.get("edgeOffsetStart", 0.0)) * 100)
             seg_e = int(float(p.get("edgeOffsetEnd", 1.0)) * 100)
-            mon_id = p.get("attachedMonitorId") or "DISPLAY1"
-            msg = f"🎯 {dev_name} -> {mon_id} {edge_names.get(cur_edge, 'Sağ')} Kenar (%{seg_s} - %{seg_e} kesiti)"
+            target_desc = p.get("attachedToDeviceId") or p.get("attachedMonitorId") or "DISPLAY1"
+            if target_desc in self.node.peers:
+                target_desc = self.node.peers[target_desc].get("deviceName", target_desc)
+            msg = f"🎯 {dev_name} -> {target_desc} {edge_names.get(cur_edge, 'Sağ')} Kenar (%{seg_s} - %{seg_e} kesiti)"
             if hasattr(self, "canvas_info_lbl"):
                 self.canvas_info_lbl.config(text=msg)
 
@@ -1483,19 +1529,19 @@ class ConnectMeLinuxGui:
         self._drag_data["card_y"] += dy
 
         try:
-            self.canvas.move(f"peer_card_{pid}", dx, dy)
+            self.canvas.move(f"peer_{pid}", dx, dy)
         except Exception:
             pass
 
         peer = self.node.peers[pid]
-        p_w = peer.get("screenWidth", 1920)
-        p_h = peer.get("screenHeight", 1080)
+        p_w = peer.get("screenWidth", 1920) or 1920
+        p_h = peer.get("screenHeight", 1080) or 1080
         scale = self._get_current_canvas_scale()
-        card_w = max(200, min(260, int(p_w * scale + 24)))
-        card_h = max(115, min(140, int(p_h * scale + 30)))
+        card_w = max(120.0, p_w * scale)
+        card_h = max(70.0, p_h * scale)
         local_mon_rects = self._get_canvas_local_mon_rects()
 
-        snapped_edge, final_x, final_y, seg_start, seg_end, target_id, target_name, is_local = self._snap_peer_box_to_anchors_on_canvas(
+        snapped_edge, final_x, final_y, seg_start, seg_end, target_id, target_name, is_local, target_mon_id = self._snap_peer_box_to_anchors_on_canvas(
             pid, self._drag_data["card_x"], self._drag_data["card_y"], card_w, card_h, local_mon_rects
         )
 
@@ -1526,7 +1572,7 @@ class ConnectMeLinuxGui:
         """
         Snaps a dragged peer box to the nearest anchor on canvas
         (either a local monitor or another peer card in the colony mesh).
-        Returns: (snapped_edge, final_x, final_y, seg_start, seg_end, target_id, target_name, is_local)
+        Returns: (snapped_edge, final_x, final_y, seg_start, seg_end, target_id, target_name, is_local, target_mon_id)
         """
         scale = self._get_current_canvas_scale()
         anchors = []
@@ -1535,8 +1581,9 @@ class ConnectMeLinuxGui:
         for mon, mx1, my1, mx2, my2 in local_mon_rects:
             m_id = getattr(mon, "monitorId", "DISPLAY1")
             anchors.append({
-                "id": m_id,
-                "name": mon.name,
+                "id": self.node.device_id,
+                "monitor_id": m_id,
+                "name": f"{self.node.device_name} ({mon.name})",
                 "is_local": True,
                 "left": mx1,
                 "top": my1,
@@ -1550,26 +1597,31 @@ class ConnectMeLinuxGui:
         for opid, op in self.node.peers.items():
             if opid == dragging_pid:
                 continue
+            op_w = op.get("screenWidth", 1920) or 1920
+            op_h = op.get("screenHeight", 1080) or 1080
+            ow = max(120.0, op_w * scale)
+            oh = max(70.0, op_h * scale)
             if opid in self.peer_canvas_coords:
                 ox1, oy1 = self.peer_canvas_coords[opid]
-                op_w = op.get("screenWidth", 1920)
-                op_h = op.get("screenHeight", 1080)
-                ow = max(200, min(260, int(op_w * scale + 24)))
-                oh = max(115, min(140, int(op_h * scale + 30)))
-                anchors.append({
-                    "id": opid,
-                    "name": op.get("deviceName", opid),
-                    "is_local": False,
-                    "left": ox1,
-                    "top": oy1,
-                    "right": ox1 + ow,
-                    "bottom": oy1 + oh,
-                    "w": ow,
-                    "h": oh
-                })
+            else:
+                metrics = self._get_colony_layout_metrics()
+                ox1 = metrics[1] + float(op.get("colonyX", 0.0)) * scale
+                oy1 = metrics[2] + float(op.get("colonyY", 0.0)) * scale
+            anchors.append({
+                "id": opid,
+                "monitor_id": "",
+                "name": op.get("deviceName", opid),
+                "is_local": False,
+                "left": ox1,
+                "top": oy1,
+                "right": ox1 + ow,
+                "bottom": oy1 + oh,
+                "w": ow,
+                "h": oh
+            })
 
         if not anchors:
-            return EDGE_RIGHT, dragged_x, dragged_y, 0.0, 1.0, "", "Ana Ekran", True
+            return EDGE_RIGHT, dragged_x, dragged_y, 0.0, 1.0, self.node.device_id, "Ana Ekran", True, "DISPLAY1"
 
         peer_cx = dragged_x + card_w / 2.0
         peer_cy = dragged_y + card_h / 2.0
@@ -1618,7 +1670,7 @@ class ConnectMeLinuxGui:
             seg_start = max(0.0, min(0.95, (overlap_left - a_left) / a_w))
             seg_end = max(seg_start + 0.05, min(1.0, (overlap_right - a_left) / a_w))
 
-        return snapped_edge, final_x, final_y, seg_start, seg_end, best["id"], best["name"], best["is_local"]
+        return snapped_edge, final_x, final_y, seg_start, seg_end, best["id"], best["name"], best["is_local"], best.get("monitor_id", "")
 
     def _snap_peer_box_to_local_monitors_on_canvas(
         self,
@@ -1629,7 +1681,7 @@ class ConnectMeLinuxGui:
         local_mon_rects: list
     ):
         """Backward compatibility wrapper."""
-        edge, fx, fy, ss, se, tid, _, _ = self._snap_peer_box_to_anchors_on_canvas(
+        edge, fx, fy, ss, se, tid, _, _, _ = self._snap_peer_box_to_anchors_on_canvas(
             "", dragged_x, dragged_y, card_w, card_h, local_mon_rects
         )
         return edge, fx, fy, ss, se, tid
@@ -1644,35 +1696,31 @@ class ConnectMeLinuxGui:
         if not pid or pid not in self.node.peers:
             return
 
-        coords = self.peer_canvas_coords.get(pid)
-        if not coords:
-            return
-
-        px1, py1 = coords
-        peer = self.node.peers[pid]
-        p_w = peer.get("screenWidth", 1920)
-        p_h = peer.get("screenHeight", 1080)
         scale = self._get_current_canvas_scale()
-        card_w = max(200, min(260, int(p_w * scale + 24)))
-        card_h = max(115, min(140, int(p_h * scale + 30)))
+        peer = self.node.peers[pid]
+        p_w = peer.get("screenWidth", 1920) or 1920
+        p_h = peer.get("screenHeight", 1080) or 1080
+        card_w = max(120.0, p_w * scale)
+        card_h = max(70.0, p_h * scale)
         local_mon_rects = self._get_canvas_local_mon_rects()
 
-        snapped_edge, final_x, final_y, seg_start, seg_end, target_id, target_name, is_local = self._snap_peer_box_to_anchors_on_canvas(
-            pid, px1, py1, card_w, card_h, local_mon_rects
+        cur_x = self._drag_data.get("card_x", self.peer_canvas_coords.get(pid, (0, 0))[0])
+        cur_y = self._drag_data.get("card_y", self.peer_canvas_coords.get(pid, (0, 0))[1])
+
+        snapped_edge, final_x, final_y, seg_start, seg_end, target_id, target_name, is_local, target_mon_id = self._snap_peer_box_to_anchors_on_canvas(
+            pid, cur_x, cur_y, card_w, card_h, local_mon_rects
         )
 
         self.peer_canvas_coords[pid] = (final_x, final_y)
         peer["canvasX"] = final_x
         peer["canvasY"] = final_y
-        peer["colonyX"] = final_x
-        peer["colonyY"] = final_y
         peer["assignedEdge"] = snapped_edge
         peer["edgeOffsetStart"] = seg_start
         peer["edgeOffsetEnd"] = seg_end
 
         if is_local:
-            peer["attachedMonitorId"] = target_id
-            peer["attachedToDeviceId"] = ""
+            peer["attachedMonitorId"] = target_mon_id or "DISPLAY1"
+            peer["attachedToDeviceId"] = self.node.device_id
         else:
             peer["attachedMonitorId"] = ""
             peer["attachedToDeviceId"] = target_id
@@ -1688,6 +1736,7 @@ class ConnectMeLinuxGui:
             attached_monitor_id=peer.get("attachedMonitorId"),
             attached_to_device_id=peer.get("attachedToDeviceId")
         )
+        self.node.recompute_colony_world_coordinates()
         self.node.send_edge_config_to_peer(peer)
         self.node.send_colony_topology_sync_to_all_peers()
 
@@ -1848,20 +1897,14 @@ class ConnectMeLinuxGui:
 
     def _draw_2d_canvas(self):
         self.canvas.delete("all")
-        cw = max(400, self.canvas.winfo_width())
-        ch = max(300, self.canvas.winfo_height())
+        cw = max(420, self.canvas.winfo_width())
+        ch = max(280, self.canvas.winfo_height())
         if cw < 60 or ch < 60:
             return
 
-        min_x, min_y, total_w, total_h = self.node.topology.virtual_desktop_bounds()
-        all_peers = list(self.node.peers.values())
-
-        scale = self._get_current_canvas_scale()
+        scale, offset_x, offset_y, min_vx, min_vy, total_w, total_h = self._get_colony_layout_metrics()
         local_mon_rects = self._get_canvas_local_mon_rects()
-        loc_w = total_w * scale
-        loc_h = total_h * scale
-        offset_x = max(20, (cw - loc_w) / 2.0)
-        offset_y = max(20, (ch - loc_h) / 2.0)
+        all_peers = list(self.node.peers.values())
 
         # 1. Subtle Background Grid
         for gx in range(0, cw, 40):
@@ -1869,7 +1912,7 @@ class ConnectMeLinuxGui:
         for gy in range(0, ch, 40):
             self.canvas.create_line(0, gy, cw, gy, fill="#111C33", width=1)
 
-        # 2. Local Linux Monitors (True to scale)
+        # 2. Local Linux Monitors (True to scale in colony world)
         for m, x1, y1, x2, y2 in local_mon_rects:
             bg_color = "#172554" if m.isPrimary else "#0F172A"
             outline_color = "#38BDF8" if m.isPrimary else "#334155"
@@ -1898,8 +1941,8 @@ class ConnectMeLinuxGui:
         if all_peers:
             for idx, p in enumerate(all_peers):
                 pid = p["deviceId"]
-                p_w = p.get("screenWidth", 1920)
-                p_h = p.get("screenHeight", 1080)
+                p_w = p.get("screenWidth", 1920) or 1920
+                p_h = p.get("screenHeight", 1080) or 1080
                 p_monitors = p.get("monitors", [])
                 is_mut = p.get("isMutuallyPaired", False)
                 is_pending = p.get("in_ok", False) or p.get("out_ok", False)
@@ -1907,20 +1950,18 @@ class ConnectMeLinuxGui:
                 is_controlling = bool(self.node.controlling_remote_peer and (self.node.controlling_remote_peer.get("deviceId") == pid or self.node.controlling_remote_peer.get("ipAddress") == p.get("ipAddress")))
 
                 arr_edge = p.get("assignedEdge", EDGE_RIGHT)
-                card_w = max(200, min(260, int(p_w * scale + 24)))
-                card_h = max(110, min(135, int(p_h * scale + 28))) if is_mut else max(90, min(115, int(p_h * scale + 24)))
+                card_w = max(120.0, p_w * scale)
+                card_h = max(70.0, p_h * scale)
 
                 # Determine card position
-                if pid in self.peer_canvas_coords:
-                    px1, py1 = self.peer_canvas_coords[pid]
-                elif p.get("canvasX") is not None and p.get("canvasY") is not None:
-                    px1 = p["canvasX"]
-                    py1 = p["canvasY"]
-                    self.peer_canvas_coords[pid] = (px1, py1)
+                if self._drag_data.get("peer_id") == pid and self._drag_data.get("card_x") is not None:
+                    px1 = self._drag_data["card_x"]
+                    py1 = self._drag_data["card_y"]
                 else:
-                    px1, py1 = self._compute_canvas_pos_from_edge_and_segment(p, local_mon_rects, card_w, card_h)
-                    self.peer_canvas_coords[pid] = (px1, py1)
+                    px1 = offset_x + float(p.get("colonyX", 0.0)) * scale
+                    py1 = offset_y + float(p.get("colonyY", 0.0)) * scale
 
+                self.peer_canvas_coords[pid] = (px1, py1)
                 p["canvasX"] = px1
                 p["canvasY"] = py1
 
@@ -1963,15 +2004,19 @@ class ConnectMeLinuxGui:
                     line_col = "#38BDF8" if is_selected else "#10B981"
 
                 # Attached anchor portal bar (local monitor or parent peer)
-                if is_mut and (local_mon_rects or p.get("attachedToDeviceId")):
-                    attached_box = None
+                if is_mut:
                     att_dev_id = p.get("attachedToDeviceId")
+                    attached_box = None
 
-                    if att_dev_id and att_dev_id in self.node.peers and att_dev_id in self.peer_canvas_coords:
+                    if att_dev_id and att_dev_id != self.node.device_id and att_dev_id in self.node.peers:
                         parent_p = self.node.peers[att_dev_id]
-                        parent_x, parent_y = self.peer_canvas_coords[att_dev_id]
-                        parent_w = max(200, min(260, int(parent_p.get("screenWidth", 1920) * scale + 24)))
-                        parent_h = max(115, min(140, int(parent_p.get("screenHeight", 1080) * scale + 30)))
+                        parent_w = max(120.0, (parent_p.get("screenWidth", 1920) or 1920) * scale)
+                        parent_h = max(70.0, (parent_p.get("screenHeight", 1080) or 1080) * scale)
+                        if att_dev_id in self.peer_canvas_coords:
+                            parent_x, parent_y = self.peer_canvas_coords[att_dev_id]
+                        else:
+                            parent_x = offset_x + float(parent_p.get("colonyX", 0.0)) * scale
+                            parent_y = offset_y + float(parent_p.get("colonyY", 0.0)) * scale
                         amx1, amy1, amx2, amy2 = parent_x, parent_y, parent_x + parent_w, parent_y + parent_h
                     else:
                         att_id = p.get("attachedMonitorId")
@@ -1992,7 +2037,7 @@ class ConnectMeLinuxGui:
                         if attached_box:
                             _, amx1, amy1, amx2, amy2 = attached_box
                         else:
-                            amx1, amy1, amx2, amy2 = offset_x, offset_y, offset_x + loc_w, offset_y + loc_h
+                            amx1, amy1, amx2, amy2 = offset_x, offset_y, offset_x + max(100.0, total_w * scale), offset_y + max(100.0, total_h * scale)
 
                     am_w = max(1.0, amx2 - amx1)
                     am_h = max(1.0, amy2 - amy1)
@@ -2043,7 +2088,7 @@ class ConnectMeLinuxGui:
                 else:
                     # Find closest local monitor point to connect for unpaired/pending
                     connector_line_tag = f"peer_line_{pid}"
-                    best_mx, best_my, best_px, best_py = offset_x + loc_w, offset_y + loc_h / 2, px1, py1 + card_h / 2
+                    best_mx, best_my, best_px, best_py = offset_x + max(100.0, total_w * scale), offset_y + max(100.0, total_h * scale) / 2, px1, py1 + card_h / 2
                     min_dist = 999999.0
                     for _, mx1, my1, mx2, my2 in local_mon_rects:
                         if px1 >= mx2:
@@ -2166,7 +2211,7 @@ class ConnectMeLinuxGui:
                 self.canvas.tag_bind(card_tag, "<Enter>", lambda e: self.canvas.config(cursor="fleur"))
                 self.canvas.tag_bind(card_tag, "<Leave>", lambda e: self.canvas.config(cursor=""))
         else:
-            empty_x = offset_x + loc_w + 30
+            empty_x = offset_x + max(100.0, total_w * scale) + 30
             self.canvas.create_text(empty_x, ch / 2, anchor=tk.W,
                                     text="Ağda bağlı başka cihaz yok.\nWindows veya Android'de Connect Me'yi açın\nveya yukarıdaki '🌐 IP ile Cihaz Ekle' butonuna basın.",
                                     fill="#64748B", font=("Segoe UI", 9))

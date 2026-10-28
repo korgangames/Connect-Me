@@ -1711,6 +1711,12 @@ class ConnectMeLinuxNode:
         self.on_peer_updated: Optional[Callable[[dict], None]] = None
         self.on_topology_changed: Optional[Callable[[], None]] = None
         self.colony_topology: List[dict] = []
+        self.local_colony_x: float = 0.0
+        self.local_colony_y: float = 0.0
+        self.local_attached_to_device_id: str = ""
+        self.local_attached_edge: int = EDGE_NONE
+        self.local_edge_offset_start: float = 0.0
+        self.local_edge_offset_end: float = 1.0
         self._last_auto_connect_attempt: Dict[str, float] = {}
         self.suppressed_autoconnect: Set[str] = set()
 
@@ -1878,8 +1884,118 @@ class ConnectMeLinuxNode:
             except Exception:
                 pass
 
+    def recompute_colony_world_coordinates(self) -> None:
+        """Recomputes global world coordinates (colonyX, colonyY) for all nodes in the mesh."""
+        min_x, min_y, total_w, total_h = self.topology.virtual_desktop_bounds()
+        placed = set()
+
+        local_has_parent = bool(self.local_attached_to_device_id and self.local_attached_to_device_id in self.peers)
+        if not local_has_parent:
+            self.local_colony_x = 0.0
+            self.local_colony_y = 0.0
+            self.local_attached_to_device_id = ""
+            placed.add(self.device_id)
+        else:
+            root_peer = self.peers[self.local_attached_to_device_id]
+            root_peer["colonyX"] = 0.0
+            root_peer["colonyY"] = 0.0
+            root_peer["attachedToDeviceId"] = ""
+            placed.add(root_peer["deviceId"])
+
+        queue = []
+        if self.device_id in placed:
+            queue.append((self.device_id, self.local_colony_x, self.local_colony_y, total_w, total_h))
+        for p in self.peers.values():
+            if p["deviceId"] in placed:
+                pw = p.get("screenWidth", 1920)
+                ph = p.get("screenHeight", 1080)
+                queue.append((p["deviceId"], p.get("colonyX", 0.0), p.get("colonyY", 0.0), pw, ph))
+
+        safety = 0
+        while queue and safety < 100:
+            safety += 1
+            curr_id, curr_x, curr_y, curr_w, curr_h = queue.pop(0)
+
+            if self.device_id not in placed and self.local_attached_to_device_id == curr_id:
+                off = max(0.0, min(0.95, float(self.local_edge_offset_start)))
+                edge = self.local_attached_edge
+                if edge == EDGE_RIGHT:
+                    lx = curr_x + curr_w
+                    ly = curr_y + round(off * curr_h)
+                elif edge == EDGE_LEFT:
+                    lx = curr_x - total_w
+                    ly = curr_y + round(off * curr_h)
+                elif edge == EDGE_TOP:
+                    lx = curr_x + round(off * curr_w)
+                    ly = curr_y - total_h
+                elif edge == EDGE_BOTTOM:
+                    lx = curr_x + round(off * curr_w)
+                    ly = curr_y + curr_h
+                else:
+                    lx = curr_x + curr_w
+                    ly = curr_y
+                self.local_colony_x = float(lx)
+                self.local_colony_y = float(ly)
+                placed.add(self.device_id)
+                queue.append((self.device_id, lx, ly, total_w, total_h))
+
+            for p in self.peers.values():
+                pid = p["deviceId"]
+                if pid in placed:
+                    continue
+                att = p.get("attachedToDeviceId", "")
+                is_att = (att == curr_id) or (not att and curr_id == self.device_id)
+                if is_att:
+                    p["attachedToDeviceId"] = curr_id
+                    pw = p.get("screenWidth", 1920)
+                    ph = p.get("screenHeight", 1080)
+                    off = max(0.0, min(0.95, float(p.get("edgeOffsetStart", 0.0))))
+                    edge = p.get("assignedEdge", EDGE_RIGHT)
+                    if edge == EDGE_RIGHT:
+                        px = curr_x + curr_w
+                        py = curr_y + round(off * curr_h)
+                    elif edge == EDGE_LEFT:
+                        px = curr_x - pw
+                        py = curr_y + round(off * curr_h)
+                    elif edge == EDGE_TOP:
+                        px = curr_x + round(off * curr_w)
+                        py = curr_y - ph
+                    elif edge == EDGE_BOTTOM:
+                        px = curr_x + round(off * curr_w)
+                        py = curr_y + curr_h
+                    else:
+                        px = curr_x + curr_w
+                        py = curr_y
+                    p["colonyX"] = float(px)
+                    p["colonyY"] = float(py)
+                    p["canvasX"] = float(px)
+                    p["canvasY"] = float(py)
+                    placed.add(pid)
+                    queue.append((pid, px, py, pw, ph))
+
+        max_right = (self.local_colony_x + total_w) if self.device_id in placed else 1920.0
+        for p in self.peers.values():
+            if p["deviceId"] in placed:
+                pw = p.get("screenWidth", 1920)
+                if p.get("colonyX", 0.0) + pw > max_right:
+                    max_right = p.get("colonyX", 0.0) + pw
+
+        for p in self.peers.values():
+            if p["deviceId"] not in placed:
+                pw = p.get("screenWidth", 1920)
+                ph = p.get("screenHeight", 1080)
+                p["attachedToDeviceId"] = self.device_id
+                p["assignedEdge"] = EDGE_RIGHT
+                p["colonyX"] = float(max_right + 20)
+                p["colonyY"] = 0.0
+                p["canvasX"] = p["colonyX"]
+                p["canvasY"] = p["colonyY"]
+                max_right = p["colonyX"] + pw
+                placed.add(p["deviceId"])
+
     def build_colony_layout_descriptors(self) -> List[dict]:
         """Builds a synchronized list of ColonyNodeLayoutDescriptor dictionaries for all nodes in mesh."""
+        self.recompute_colony_world_coordinates()
         min_x, min_y, total_w, total_h = self.topology.virtual_desktop_bounds()
         descriptors = [
             {
@@ -1888,12 +2004,12 @@ class ConnectMeLinuxNode:
                 "platform": "linux",
                 "screenWidth": total_w,
                 "screenHeight": total_h,
-                "attachedToDeviceId": "",
-                "attachedEdge": EDGE_NONE,
-                "edgeOffsetStart": 0.0,
-                "edgeOffsetEnd": 1.0,
-                "colonyX": 0.0,
-                "colonyY": 0.0,
+                "attachedToDeviceId": self.local_attached_to_device_id,
+                "attachedEdge": self.local_attached_edge,
+                "edgeOffsetStart": float(self.local_edge_offset_start),
+                "edgeOffsetEnd": float(self.local_edge_offset_end),
+                "colonyX": float(self.local_colony_x),
+                "colonyY": float(self.local_colony_y),
                 "canvasWidth": 140.0,
                 "canvasHeight": 90.0
             }
@@ -1909,8 +2025,8 @@ class ConnectMeLinuxNode:
                 "attachedEdge": p.get("assignedEdge", EDGE_RIGHT),
                 "edgeOffsetStart": float(p.get("edgeOffsetStart", 0.0)),
                 "edgeOffsetEnd": float(p.get("edgeOffsetEnd", 1.0)),
-                "colonyX": float(p.get("colonyX", p.get("canvasX", 0.0) or 0.0)),
-                "colonyY": float(p.get("colonyY", p.get("canvasY", 0.0) or 0.0)),
+                "colonyX": float(p.get("colonyX", 0.0)),
+                "colonyY": float(p.get("colonyY", 0.0)),
                 "canvasWidth": float(p.get("canvasWidth", 140.0) or 140.0),
                 "canvasHeight": float(p.get("canvasHeight", 90.0) or 90.0)
             })
@@ -1919,6 +2035,14 @@ class ConnectMeLinuxNode:
     def apply_colony_topology(self, topology_list: List[dict], sender_id: str) -> None:
         """Applies received colony topology to local peers dict."""
         my_desc = next((d for d in topology_list if d.get("deviceId") == self.device_id), None)
+        if my_desc:
+            self.local_colony_x = float(my_desc.get("colonyX", 0.0))
+            self.local_colony_y = float(my_desc.get("colonyY", 0.0))
+            self.local_attached_to_device_id = my_desc.get("attachedToDeviceId", "")
+            self.local_attached_edge = my_desc.get("attachedEdge", EDGE_NONE)
+            self.local_edge_offset_start = float(my_desc.get("edgeOffsetStart", 0.0))
+            self.local_edge_offset_end = float(my_desc.get("edgeOffsetEnd", 1.0))
+
         for desc in topology_list:
             did = desc.get("deviceId")
             if did == self.device_id or not did:
@@ -1955,6 +2079,12 @@ class ConnectMeLinuxNode:
                     attached_monitor_id=p.get("attachedMonitorId"),
                     attached_to_device_id=p.get("attachedToDeviceId")
                 )
+
+        if self.on_topology_changed:
+            try:
+                self.on_topology_changed()
+            except Exception:
+                pass
 
     def send_colony_topology_sync_to_all_peers(self, descriptors: Optional[List[dict]] = None) -> None:
         """Broadcasts global colony relative topology layout to all mutually paired peers."""
@@ -2011,7 +2141,7 @@ class ConnectMeLinuxNode:
             if not p.get("isMutuallyPaired"):
                 continue
             att_dev = p.get("attachedToDeviceId", "")
-            if from_device_id == self.device_id and not att_dev and p.get("assignedEdge") == edge:
+            if from_device_id == self.device_id and (att_dev == self.device_id or not att_dev) and p.get("assignedEdge") == edge:
                 candidates.append(p)
             elif att_dev == from_device_id and p.get("assignedEdge") == edge:
                 candidates.append(p)
@@ -2024,12 +2154,52 @@ class ConnectMeLinuxNode:
                     return p
             return candidates[0]
 
+        opposite = {EDGE_LEFT: EDGE_RIGHT, EDGE_RIGHT: EDGE_LEFT, EDGE_TOP: EDGE_BOTTOM, EDGE_BOTTOM: EDGE_TOP}.get(edge, EDGE_LEFT)
+        if from_device_id == self.device_id and self.local_attached_to_device_id:
+            if self.local_attached_to_device_id in self.peers and self.local_attached_edge == opposite:
+                return self.peers[self.local_attached_to_device_id]
+
         if from_device_id in self.peers:
             parent_id = self.peers[from_device_id].get("attachedToDeviceId")
             if parent_id and parent_id in self.peers:
-                opposite = {EDGE_LEFT: EDGE_RIGHT, EDGE_RIGHT: EDGE_LEFT, EDGE_TOP: EDGE_BOTTOM, EDGE_BOTTOM: EDGE_TOP}.get(self.peers[from_device_id].get("assignedEdge", EDGE_RIGHT), EDGE_LEFT)
-                if opposite == edge:
+                p_edge = self.peers[from_device_id].get("assignedEdge", EDGE_RIGHT)
+                if p_edge == opposite:
                     return self.peers[parent_id]
+
+        # Geometric World Coordinate overlap fallback
+        min_x, min_y, total_w, total_h = self.topology.virtual_desktop_bounds()
+        if from_device_id == self.device_id:
+            fx, fy, fw, fh = self.local_colony_x, self.local_colony_y, total_w, total_h
+        elif from_device_id in self.peers:
+            fp = self.peers[from_device_id]
+            fx = fp.get("colonyX", 0.0)
+            fy = fp.get("colonyY", 0.0)
+            fw = fp.get("screenWidth", 1920)
+            fh = fp.get("screenHeight", 1080)
+        else:
+            return None
+
+        for p in self.peers.values():
+            if not p.get("isMutuallyPaired") or p.get("deviceId") == from_device_id:
+                continue
+            px = p.get("colonyX", 0.0)
+            py = p.get("colonyY", 0.0)
+            pw = p.get("screenWidth", 1920)
+            ph = p.get("screenHeight", 1080)
+
+            if edge == EDGE_RIGHT:
+                if abs(px - (fx + fw)) < 50 and (py + ph > fy and py < fy + fh):
+                    return p
+            elif edge == EDGE_LEFT:
+                if abs((px + pw) - fx) < 50 and (py + ph > fy and py < fy + fh):
+                    return p
+            elif edge == EDGE_TOP:
+                if abs((py + ph) - fy) < 50 and (px + pw > fx and px < fx + fw):
+                    return p
+            elif edge == EDGE_BOTTOM:
+                if abs(py - (fy + fh)) < 50 and (px + pw > fx and px < fx + fw):
+                    return p
+
         return None
 
     def send_edge_config_to_peer(self, peer: dict) -> None:
