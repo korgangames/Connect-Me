@@ -160,17 +160,19 @@ jobs:
             exit 1
           fi
 
-      - name: Read Version
+      - name: Read Version & Title
         id: get_ver
         run: |
           VER=$(tr -d '\r\n ' < VERSION)
           echo "version=$VER" >> $GITHUB_OUTPUT
+          TITLE=$(head -n 1 docs/RELEASE_NOTES.md | sed 's/^# //')
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.get_ver.outputs.version }}
-          name: "Connect Me v${{ steps.get_ver.outputs.version }} — Çoklu Cihaz Ses Matrisi & Android 14+ Güncellemesi"
+          name: ${{ steps.get_ver.outputs.title }}
           body_path: docs/RELEASE_NOTES.md
           draft: false
           prerelease: false
