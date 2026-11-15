@@ -104,7 +104,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     public string LocalDeviceName { get; }
     public string LocalPlatform { get; }
     public string PairingPin { get; private set; }
-    public string ShelfReceiveDirectory { get; }
+    public string ShelfReceiveDirectory { get; private set; }
 
     public int DiscoveryPort { get; private set; } = ProtocolConstants.DiscoveryUdpPort;
     public int InputUdpPort { get; private set; } = ProtocolConstants.FastInputUdpPort;
@@ -158,11 +158,99 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         PairingPin = fixedPin ?? RandomNumberGenerator.GetInt32(100000, 999999).ToString();
         TrustStore = trustStore ?? new TrustedDeviceStore();
 
-        ShelfReceiveDirectory = shelfDirectory ?? Path.Combine(
+        string defaultShelfDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             "Downloads",
             "ConnectMe-Shelf");
-        Directory.CreateDirectory(ShelfReceiveDirectory);
+        ShelfReceiveDirectory = shelfDirectory ?? LoadSavedShelfDirectory() ?? defaultShelfDir;
+        try
+        {
+            Directory.CreateDirectory(ShelfReceiveDirectory);
+        }
+        catch
+        {
+            ShelfReceiveDirectory = defaultShelfDir;
+            Directory.CreateDirectory(ShelfReceiveDirectory);
+        }
+    }
+
+    private static string GetSettingsFilePath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "ConnectMe",
+        "settings.json");
+
+    private static string? LoadSavedShelfDirectory()
+    {
+        try
+        {
+            string settingsPath = GetSettingsFilePath();
+            if (!File.Exists(settingsPath))
+                return null;
+
+            string json = File.ReadAllText(settingsPath);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("shelfDir", out var prop) && prop.ValueKind == JsonValueKind.String)
+            {
+                string? val = prop.GetString();
+                if (!string.IsNullOrWhiteSpace(val))
+                    return val.Trim();
+            }
+        }
+        catch
+        {
+        }
+        return null;
+    }
+
+    private static void SaveShelfDirectorySetting(string fullPath)
+    {
+        try
+        {
+            string settingsPath = GetSettingsFilePath();
+            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+            var dict = new Dictionary<string, string>();
+            if (File.Exists(settingsPath))
+            {
+                try
+                {
+                    var existing = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(settingsPath));
+                    if (existing != null)
+                        dict = existing;
+                }
+                catch
+                {
+                }
+            }
+            dict["shelfDir"] = fullPath;
+            File.WriteAllText(settingsPath, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch
+        {
+        }
+    }
+
+    public bool SetShelfReceiveDirectory(string newDirectory, bool persist = true)
+    {
+        if (string.IsNullOrWhiteSpace(newDirectory))
+            return false;
+
+        try
+        {
+            string fullPath = Path.GetFullPath(newDirectory.Trim());
+            Directory.CreateDirectory(fullPath);
+            ShelfReceiveDirectory = fullPath;
+            if (persist)
+            {
+                SaveShelfDirectorySetting(fullPath);
+            }
+            Log($"[Ortak Cep] 📂 İndirilenler / Ortak Cep klasörü güncellendi: {fullPath}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log($"[Ortak Cep Hata] Klasör değiştirilemedi ({newDirectory}): {ex.Message}");
+            return false;
+        }
     }
 
     public IReadOnlyCollection<PeerDeviceNode> DiscoveredPeers => _peers.Values.ToList();
@@ -2577,6 +2665,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 case "SHELF_FILE":
                     if (binLen >= 0 && !string.IsNullOrWhiteSpace(header.FileName))
                     {
+                        Directory.CreateDirectory(ShelfReceiveDirectory);
                         string safeName = Path.GetFileName(header.FileName);
                         string targetPath = GetUniqueFilePath(ShelfReceiveDirectory, safeName);
                         await using (var fs = File.Create(targetPath))

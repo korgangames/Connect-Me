@@ -1973,8 +1973,21 @@ class ConnectMeLinuxNode:
         self.hardware_grabber = LinuxHardwareInputGrabber(self)
         self.hardware_grabber.start_monitoring()
 
-        self.shelf_dir = Path.home() / "Downloads" / "ConnectMe-Shelf"
-        self.shelf_dir.mkdir(parents=True, exist_ok=True)
+        self.settings_file = Path.home() / ".config" / "connectme" / "settings.json"
+        self.settings_file.parent.mkdir(parents=True, exist_ok=True)
+        self.settings: Dict[str, Any] = self._load_settings()
+
+        custom_shelf = self.settings.get("shelfDir")
+        if custom_shelf and isinstance(custom_shelf, str) and custom_shelf.strip():
+            self.shelf_dir = Path(custom_shelf.strip()).expanduser()
+        else:
+            self.shelf_dir = Path.home() / "Downloads" / "ConnectMe-Shelf"
+        try:
+            self.shelf_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.shelf_dir = Path.home() / "Downloads" / "ConnectMe-Shelf"
+            self.shelf_dir.mkdir(parents=True, exist_ok=True)
+
         self.trust_file = Path.home() / ".config" / "connectme" / "trusted_devices.json"
         self.trust_file.parent.mkdir(parents=True, exist_ok=True)
         self.trusted_devices: Dict[str, dict] = self._load_trusted_devices()
@@ -2008,6 +2021,7 @@ class ConnectMeLinuxNode:
         self.on_peer_discovered: Optional[Callable[[dict], None]] = None
         self.on_peer_updated: Optional[Callable[[dict], None]] = None
         self.on_topology_changed: Optional[Callable[[], None]] = None
+        self.on_shelf_file_received: Optional[Callable[[Path, str], None]] = None
         self.colony_topology: List[dict] = []
         self.local_colony_x: float = 0.0
         self.local_colony_y: float = 0.0
@@ -2022,6 +2036,7 @@ class ConnectMeLinuxNode:
         self.last_copied_clipboard = ""
         self.last_copied_image_hash = ""
         self.last_copied_file_sig = ""
+        self.cached_tk_uri_blobs: List[str] = []
         self.udp_sock: Optional[socket.socket] = None
 
         # Audio streaming (Transmitter: Linux -> Windows)
@@ -2089,6 +2104,39 @@ class ConnectMeLinuxNode:
                 self.on_log(text)
             except Exception:
                 pass
+
+    def _load_settings(self) -> Dict[str, Any]:
+        if not self.settings_file.exists():
+            return {}
+        try:
+            with open(self.settings_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_settings(self) -> None:
+        try:
+            with open(self.settings_file, "w", encoding="utf-8") as f:
+                json.dump(self.settings, f, indent=2)
+        except Exception:
+            pass
+
+    def set_shelf_directory(self, new_dir: str) -> bool:
+        """Updates and persists the Ortak Cep (Downloads/Shelf) folder path."""
+        if not new_dir or not new_dir.strip():
+            return False
+        try:
+            p = Path(new_dir.strip()).expanduser().resolve()
+            p.mkdir(parents=True, exist_ok=True)
+            self.shelf_dir = p
+            self.settings["shelfDir"] = str(p)
+            self._save_settings()
+            self.log(f"[Ortak Cep] 📂 İndirilenler / Ortak Cep klasörü güncellendi: {p}")
+            return True
+        except Exception as e:
+            self.log(f"[Ortak Cep Hata] Klasör değiştirilemedi ({new_dir}): {e}")
+            return False
 
     def _load_trusted_devices(self) -> Dict[str, dict]:
         if not self.trust_file.exists():
@@ -2720,9 +2768,13 @@ class ConnectMeLinuxNode:
             peer_name = peer.get("deviceName", remote_ip)
             if is_dragging:
                 self.log(f"[Kenar Sürükle-Bırak] 🧲 Sürükleme ile '{peer_name}' ekranına geçildi — seçili/panodaki dosya aktarılıyor.")
+                def _drag_transfer_worker(pid: Optional[str] = peer.get("deviceId")) -> None:
+                    if not self._try_transfer_clipboard_files_to_peer(pid, force=True, include_primary=True):
+                        time.sleep(0.25)
+                        self._try_transfer_clipboard_files_to_peer(pid, force=True, include_primary=True)
+
                 threading.Thread(
-                    target=self._try_transfer_clipboard_files_to_peer,
-                    args=(peer.get("deviceId"), True),
+                    target=_drag_transfer_worker,
                     daemon=True,
                 ).start()
             self.log(f"[Host Modu] 🚀 Fare ve klavye kontrolü '{peer_name}' cihazına aktarıldı (Çıkış: {local_exit_edge}, Giriş: {target_entrance_edge}).")
@@ -3862,10 +3914,11 @@ class ConnectMeLinuxNode:
                 text = header.get("text", "")
                 if text:
                     self.last_copied_clipboard = text
+                    payload = text.encode("utf-8")
                     if shutil.which("wl-copy"):
-                        subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=False)
-                    elif shutil.which("xclip"):
-                        subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=False)
+                        self._write_clipboard_bytes(["wl-copy"], payload)
+                    if shutil.which("xclip"):
+                        self._write_clipboard_bytes(["xclip", "-selection", "clipboard", "-i"], payload)
                     self.log(f"[Evrensel Pano] '{header.get('senderName')}' cihazından metin kopyalandı ({len(text)} krk).")
 
             elif msg_type == "CLIPBOARD_IMAGE" and bin_len > 0:
@@ -3882,14 +3935,15 @@ class ConnectMeLinuxNode:
                     img_hash = header.get("contentHash") or hashlib.sha256(png_data).hexdigest()
                     self.last_copied_image_hash = img_hash
                     if shutil.which("wl-copy"):
-                        subprocess.run(["wl-copy", "--type", "image/png"], input=png_data, check=False)
-                    elif shutil.which("xclip"):
-                        subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-i"], input=png_data, check=False)
+                        self._write_clipboard_bytes(["wl-copy", "--type", "image/png"], png_data)
+                    if shutil.which("xclip"):
+                        self._write_clipboard_bytes(["xclip", "-selection", "clipboard", "-t", "image/png", "-i"], png_data)
                     sender_name = header.get("senderName", remote_ip)
                     self.log(f"[Evrensel Pano] 🖼️ '{sender_name}' cihazından görsel/ekran görüntüsü panoya kopyalandı ({max(1, len(png_data) // 1024)} KB).")
 
             elif msg_type == "SHELF_FILE" and bin_len >= 0:
                 fname = os.path.basename(header.get("fileName", "dosya.bin"))
+                self.shelf_dir.mkdir(parents=True, exist_ok=True)
                 dest = self.shelf_dir / fname
                 remaining = bin_len
                 with open(dest, "wb") as f:
@@ -3901,19 +3955,22 @@ class ConnectMeLinuxNode:
                         remaining -= len(chunk)
                 try:
                     resolved_dest = dest.resolve()
-                    st = resolved_dest.stat()
-                    self.last_copied_file_sig = f"{resolved_dest}:{st.st_size}:{int(st.st_mtime)}"
-                    file_uri = f"{resolved_dest.as_uri()}\r\n"
-                    self.last_copied_clipboard = resolved_dest.as_uri()
-                    if shutil.which("wl-copy"):
-                        subprocess.run(["wl-copy", "--type", "text/uri-list"], input=file_uri.encode("utf-8"), check=False)
-                    elif shutil.which("xclip"):
-                        subprocess.run(["xclip", "-selection", "clipboard", "-t", "text/uri-list", "-i"], input=file_uri.encode("utf-8"), check=False)
+                    self._set_linux_clipboard_file(resolved_dest)
                 except Exception:
                     pass
+                sender_name = header.get("senderName", remote_ip)
                 self.log(f"[Ortak Cep & Pano] 📥 '{fname}' ({bin_len} B) -> {dest} kaydedildi ve panoya (Ctrl+V) hazırlandı!")
+                if self.on_shelf_file_received:
+                    try:
+                        self.on_shelf_file_received(dest, sender_name)
+                    except Exception:
+                        pass
                 if shutil.which("notify-send"):
-                    subprocess.run(["notify-send", "Connect Me: Ortak Cep", f"Yeni dosya alındı (Ctrl+V ile yapıştırabilirsiniz):\n{fname}"], check=False)
+                    subprocess.Popen(
+                        ["notify-send", "Connect Me: Ortak Cep", f"Yeni dosya alındı (Ctrl+V ile yapıştırabilirsiniz):\n{fname}"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
 
             elif msg_type == "AUDIO_SINKS_ANNOUNCE":
                 sender_id = header.get("senderId", remote_ip)
@@ -4235,52 +4292,134 @@ class ConnectMeLinuxNode:
                 pass
         self.log(f"[Kenar Dönüşü] Yerel Linux masaüstüne dönüş yapıldı (Kenar: {edge}, %{int(norm_pos * 100)}).")
 
-    def _try_transfer_clipboard_files_to_peer(self, target_peer_id: Optional[str] = None, force: bool = False) -> bool:
-        """Checks if the local clipboard holds file:// URIs and transfers them to paired peers."""
-        uri_text = ""
-        if shutil.which("wl-paste"):
-            try:
-                res = subprocess.run(["wl-paste", "--type", "text/uri-list"], capture_output=True, text=True, timeout=0.6)
-                if res.returncode == 0 and res.stdout:
-                    uri_text = res.stdout
-            except Exception:
-                pass
-        elif shutil.which("xclip"):
-            try:
-                res = subprocess.run(["xclip", "-selection", "clipboard", "-t", "text/uri-list", "-o"], capture_output=True, text=True, timeout=0.6)
-                if res.returncode == 0 and res.stdout:
-                    uri_text = res.stdout
-            except Exception:
-                pass
+    def _write_clipboard_bytes(self, cmd: List[str], payload: bytes) -> None:
+        """Non-blocking clipboard writer for wl-copy / xclip (prevents daemon fork hangs)."""
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if proc.stdin:
+                proc.stdin.write(payload)
+                proc.stdin.close()
+        except Exception:
+            pass
 
-        if not uri_text:
+    def _set_linux_clipboard_file(self, resolved_dest: Path) -> None:
+        """Populates Linux Wayland & X11 clipboards with a local file URI so Ctrl+V pastes the file in Dolphin/Nautilus."""
+        try:
+            st = resolved_dest.stat()
+            self.last_copied_file_sig = f"{resolved_dest}:{st.st_size}:{int(st.st_mtime)}"
+            uri_str = resolved_dest.as_uri()
+            self.last_copied_clipboard = uri_str
+            uri_list_bytes = f"{uri_str}\r\n".encode("utf-8")
+            if shutil.which("wl-copy"):
+                self._write_clipboard_bytes(["wl-copy", "--type", "text/uri-list"], uri_list_bytes)
+            if shutil.which("xclip"):
+                self._write_clipboard_bytes(["xclip", "-selection", "clipboard", "-t", "text/uri-list", "-i"], uri_list_bytes)
+        except Exception:
+            pass
+
+    def _extract_clipboard_file_paths(self, include_primary: bool = False) -> List[Path]:
+        """Extracts existing local file paths from Wayland/X11 clipboard, XdndSelection drag atom, or Tk selection cache."""
+        raw_blobs: List[str] = list(getattr(self, "cached_tk_uri_blobs", []))
+        if shutil.which("wl-paste"):
+            cmds = [
+                ["wl-paste", "--type", "text/uri-list"],
+                ["wl-paste", "--type", "x-special/gnome-copied-files"],
+                ["wl-paste", "-n"],
+            ]
+            if include_primary:
+                cmds.extend([
+                    ["wl-paste", "--primary", "--type", "text/uri-list"],
+                    ["wl-paste", "--primary", "-n"],
+                ])
+            for cmd in cmds:
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=0.45)
+                    if res.returncode == 0 and res.stdout and res.stdout.strip():
+                        raw_blobs.append(res.stdout)
+                except Exception:
+                    pass
+
+        if shutil.which("xclip"):
+            x_cmds = [
+                ["xclip", "-selection", "clipboard", "-t", "text/uri-list", "-o"],
+                ["xclip", "-selection", "clipboard", "-t", "x-special/gnome-copied-files", "-o"],
+                ["xclip", "-selection", "clipboard", "-o"],
+            ]
+            if include_primary:
+                x_cmds.extend([
+                    ["xclip", "-selection", "XdndSelection", "-t", "text/uri-list", "-o"],
+                    ["xclip", "-selection", "XdndSelection", "-o"],
+                    ["xclip", "-selection", "primary", "-t", "text/uri-list", "-o"],
+                    ["xclip", "-selection", "primary", "-o"],
+                ])
+            for cmd in x_cmds:
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=0.45)
+                    if res.returncode == 0 and res.stdout and res.stdout.strip():
+                        raw_blobs.append(res.stdout)
+                except Exception:
+                    pass
+
+        found_files: List[Path] = []
+        seen_paths: Set[str] = set()
+        for blob in raw_blobs:
+            for raw_line in blob.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or line in ("copy", "cut"):
+                    continue
+                candidate: Optional[Path] = None
+                if line.startswith("file://"):
+                    parsed = urllib.parse.urlparse(line)
+                    local_path_str = urllib.parse.unquote(parsed.path)
+                    if local_path_str:
+                        candidate = Path(local_path_str)
+                elif line.startswith("/") and len(line) < 4096 and "\x00" not in line:
+                    candidate = Path(line)
+                if candidate is not None:
+                    try:
+                        if candidate.exists() and candidate.is_file():
+                            resolved = candidate.resolve()
+                            key = str(resolved)
+                            if key not in seen_paths:
+                                seen_paths.add(key)
+                                found_files.append(resolved)
+                    except Exception:
+                        pass
+        return found_files
+
+    def _try_transfer_clipboard_files_to_peer(
+        self,
+        target_peer_id: Optional[str] = None,
+        force: bool = False,
+        include_primary: bool = False,
+    ) -> bool:
+        """Checks if the local clipboard (or primary drag selection) holds local files and transfers them to paired peers."""
+        files = self._extract_clipboard_file_paths(include_primary=include_primary)
+        if not files:
             return False
 
         sent_any = False
-        for raw_line in uri_text.splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("file://"):
-                parsed = urllib.parse.urlparse(line)
-                local_path_str = urllib.parse.unquote(parsed.path)
-                fpath = Path(local_path_str)
-                if fpath.is_file():
-                    try:
-                        st = fpath.resolve().stat()
-                        if st.st_size <= 100 * 1024 * 1024:
-                            sig = f"{fpath.resolve()}:{st.st_size}:{int(st.st_mtime)}"
-                            if force or sig != self.last_copied_file_sig:
-                                self.last_copied_file_sig = sig
-                                self.last_copied_clipboard = line
-                                if self.send_file_to_peer(fpath, target_peer_id):
-                                    sent_any = True
-                    except Exception:
-                        pass
+        for fpath in files:
+            try:
+                st = fpath.stat()
+                if st.st_size <= 250 * 1024 * 1024:
+                    sig = f"{fpath}:{st.st_size}:{int(st.st_mtime)}"
+                    if force or sig != self.last_copied_file_sig:
+                        self.last_copied_file_sig = sig
+                        self.last_copied_clipboard = fpath.as_uri()
+                        if self.send_file_to_peer(fpath, target_peer_id):
+                            sent_any = True
+            except Exception:
+                pass
         return sent_any
 
     def _clipboard_monitor_loop(self) -> None:
-        """Polls local clipboard and broadcasts newly copied text, screenshots (image/png), or files to paired devices."""
+        """Polls local clipboard and broadcasts newly copied files, screenshots (image/png), or text to paired devices."""
         while self.running:
             time.sleep(0.6)
             if not any(p.get("isMutuallyPaired") for p in self.peers.values()):
@@ -4302,8 +4441,17 @@ class ConnectMeLinuxNode:
                 except Exception:
                     pass
 
-            # 1. Rich Image Clipboard (Screenshots / Copied Images)
-            if "image/png" in mime_types:
+            # 1. Copied File URI List / Dolphin / Nautilus Copied Files (HIGHEST PRIORITY)
+            has_file_mime = any(
+                ("uri-list" in m.lower()) or ("gnome-copied-files" in m.lower()) or ("kde-cutselection" in m.lower())
+                for m in mime_types
+            )
+            if has_file_mime:
+                if self._try_transfer_clipboard_files_to_peer():
+                    continue
+
+            # 2. Rich Image Clipboard (Screenshots / Copied Images, only when not a copied file)
+            if any(m.lower().startswith("image/png") for m in mime_types) and not has_file_mime:
                 png_bytes = b""
                 try:
                     if shutil.which("wl-paste"):
@@ -4324,12 +4472,7 @@ class ConnectMeLinuxNode:
                         self.broadcast_clipboard_image(png_bytes, img_hash)
                 continue
 
-            # 2. Copied File URI List (Ctrl+C on files in Dolphin / Nautilus)
-            if "text/uri-list" in mime_types:
-                if self._try_transfer_clipboard_files_to_peer():
-                    continue
-
-            # 3. Plain Text Clipboard
+            # 3. Plain Text Clipboard (or plain file:// / /home/... file path fallback)
             current_text = ""
             if shutil.which("wl-paste"):
                 try:
@@ -4347,7 +4490,11 @@ class ConnectMeLinuxNode:
                     pass
 
             if current_text and current_text != self.last_copied_clipboard and len(current_text) <= 500000:
-                if not current_text.strip().startswith("file://"):
+                stripped = current_text.strip()
+                if stripped.startswith("file://") or (stripped.startswith("/") and "\n" not in stripped and Path(stripped).is_file()):
+                    if self._try_transfer_clipboard_files_to_peer():
+                        continue
+                else:
                     self.last_copied_clipboard = current_text
                     self.broadcast_clipboard(current_text)
 

@@ -1223,6 +1223,21 @@ public static class Program
                    Math.Abs(receivedHandOffOnB.Value.NormalizedPosition - 0.72f) < 0.01f,
             "Kenar Sürükle-Bırak (EDGE_HANDOFF + IsDraggingShelfItem): Sol tık basılı kenar geçişinde sürükleme bayrağı karşı cihaza iletildi");
 
+        // 3. Test Configurable Shelf Directory (SetShelfReceiveDirectory) + File Transfer into Custom Folder
+        string customShelfB = Path.Combine(tempShelf, "CustomUserShelfFolder");
+        bool dirChanged = nodeB.SetShelfReceiveDirectory(customShelfB, persist: false);
+        AssertTrue(dirChanged && nodeB.ShelfReceiveDirectory == Path.GetFullPath(customShelfB),
+            "Özelleştirilebilir Ortak Cep Klasörü: SetShelfReceiveDirectory hedef klasörü dinamik olarak güncelledi");
+
+        string sampleFile = Path.Combine(tempShelf, "drag_paste_test.txt");
+        await File.WriteAllTextAsync(sampleFile, "Connect Me v1.8.28 Drag & Paste Test");
+        await nodeA.SendFileToPeerShelfAsync(pBOnA, sampleFile);
+        await Task.Delay(250);
+
+        string expectedReceivedPath = Path.Combine(customShelfB, "drag_paste_test.txt");
+        AssertTrue(File.Exists(expectedReceivedPath),
+            "Ortak Cep Dosya Aktarımı: Gönderilen dosya kullanıcının seçtiği yeni Ortak Cep klasörüne kaydedildi");
+
         try { Directory.Delete(tempShelf, true); } catch { }
     }
 }

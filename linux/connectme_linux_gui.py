@@ -272,6 +272,11 @@ class ScreenEdgeSentinels:
             return
 
         self.node.update_os_cursor(cur_x, cur_y, edge_sentinel_hit=edge, mon_id=mon.monitorId)
+        if self.gui and hasattr(self.gui, "_capture_tk_selections"):
+            try:
+                self.gui._capture_tk_selections(include_drag=True)
+            except Exception:
+                pass
         if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.can_grab():
             self.node.hardware_grabber.on_os_edge_sentinel_hit(mon, edge, cur_x, cur_y)
 
@@ -629,6 +634,7 @@ class ConnectMeLinuxGui:
         self.node.on_pin_request_received = self._on_pin_request_received
         self.node.on_peer_updated = lambda p: self.root.after(0, self._refresh_state)
         self.node.on_topology_changed = lambda: self.root.after(0, self._on_display_topology_updated)
+        self.node.on_shelf_file_received = lambda dest, sender: self.root.after(0, self._refresh_state)
         self.node.on_audio_sinks_updated = lambda: self.root.after(0, self._refresh_audio_sinks_dropdown)
         self.node.on_audio_route_changed = lambda r: self.root.after(0, lambda: self._on_audio_route_changed_gui(r))
         self.node.start()
@@ -646,6 +652,8 @@ class ConnectMeLinuxGui:
         self.root.bind_all("<Scroll_Lock>", lambda e: self._toggle_host_capture())
         self.root.bind_all("<Control-Alt-Right>", lambda e: self._switch_to_edge_peer(EDGE_RIGHT))
         self.root.bind_all("<Control-Alt-Left>", lambda e: self._switch_to_edge_peer(EDGE_LEFT))
+        self.root.bind_all("<Control-v>", self._on_ctrl_v_shortcut, add="+")
+        self.root.bind_all("<Control-V>", self._on_ctrl_v_shortcut, add="+")
         self.root.bind_all("<KeyPress-Prior>", self._on_emergency_pageup_press, add="+")
         self.root.bind_all("<KeyRelease-Prior>", self._on_emergency_pageup_release, add="+")
         self.root.bind_all("<KeyPress-Next>", self._on_emergency_pagedown_press, add="+")
@@ -700,6 +708,24 @@ class ConnectMeLinuxGui:
         self.root.option_add("*TCombobox*Listbox.selectBackground", "#0284C7")
         self.root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
         self.root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 10))
+
+        # Dosya Seçici (File Dialog) & Treeview Karanlık Tema Düzeltmesi (Beyaz üstüne beyaz yazı hatasını önler)
+        style.configure("Treeview", background="#1E293B", fieldbackground="#1E293B", foreground="#F8FAFC", bordercolor="#334155")
+        style.map("Treeview", background=[("selected", "#0284C7")], foreground=[("selected", "#FFFFFF")])
+        style.configure("Treeview.Heading", background="#0F172A", foreground="#38BDF8", font=("Segoe UI", 9, "bold"))
+        style.map("Treeview.Heading", background=[("active", "#1E293B")])
+        style.configure("TMenubutton", background="#1E293B", foreground="#F8FAFC")
+
+        self.root.option_add("*Listbox.background", "#1E293B")
+        self.root.option_add("*Listbox.foreground", "#F8FAFC")
+        self.root.option_add("*Listbox.selectBackground", "#0284C7")
+        self.root.option_add("*Listbox.selectForeground", "#FFFFFF")
+        self.root.option_add("*Entry.background", "#1E293B")
+        self.root.option_add("*Entry.foreground", "#F8FAFC")
+        self.root.option_add("*TkFDialog*background", "#0B1120")
+        self.root.option_add("*TkFDialog*foreground", "#F8FAFC")
+        self.root.option_add("*TkChooseDir*background", "#0B1120")
+        self.root.option_add("*TkChooseDir*foreground", "#F8FAFC")
 
     def _build_ui(self):
         # Üst Başlık Barı
@@ -984,22 +1010,66 @@ class ConnectMeLinuxGui:
         tab = ttk.Frame(self.notebook, padding=14)
         self.notebook.add(tab, text="📦 Ortak Cep (Drop Shelf)")
 
+        # Klasör Seçim Kartı
+        dir_card = ttk.Frame(tab, style="Card.TFrame", padding=10)
+        dir_card.pack(fill=tk.X, pady=(0, 8))
+
+        dir_top = ttk.Frame(dir_card, style="Card.TFrame")
+        dir_top.pack(fill=tk.X)
+
+        self.shelf_dir_lbl = ttk.Label(
+            dir_top,
+            text=f"📂 Ortak Cep (İndirilenler) Klasörü: {self.node.shelf_dir}",
+            font=("Segoe UI", 9, "bold"),
+            foreground="#38BDF8",
+            background="#1E293B",
+        )
+        self.shelf_dir_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        change_dir_btn = ttk.Button(
+            dir_top,
+            text="📁 Klasör Seç / Değiştir...",
+            style="Accent.TButton",
+            command=self._on_change_shelf_folder,
+        )
+        change_dir_btn.pack(side=tk.RIGHT, padx=4)
+
         bar = ttk.Frame(tab)
         bar.pack(fill=tk.X, pady=4)
 
         send_btn = ttk.Button(bar, text="📤 Dosya Gönder (Windows / Android)...", style="Success.TButton", command=self._on_send_file)
         send_btn.pack(side=tk.LEFT, padx=4)
 
-        open_folder_btn = ttk.Button(bar, text="📂 Ortak Cep Klasörünü Aç", command=self._open_shelf_folder)
+        paste_btn = ttk.Button(bar, text="📋 Yapıştır ve Gönder (Ctrl+V)", style="Accent.TButton", command=self._on_paste_and_send_shelf)
+        paste_btn.pack(side=tk.LEFT, padx=4)
+
+        open_folder_btn = ttk.Button(bar, text="📂 Klasörü Aç", command=self._open_shelf_folder)
         open_folder_btn.pack(side=tk.LEFT, padx=6)
 
-        clear_btn = ttk.Button(bar, text="Temizle", command=self._clear_shelf_folder)
+        clear_btn = ttk.Button(bar, text="🧹 Temizle", command=self._clear_shelf_folder)
         clear_btn.pack(side=tk.RIGHT, padx=4)
 
-        ttk.Label(tab, text="Ortak Cepteki Dosyalar (~/Downloads/ConnectMe-Shelf):", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(8, 4))
+        ttk.Label(
+            tab,
+            text="💡 İpucu: Dosya yöneticisinde (Dolphin vb.) bir dosyayı Ctrl+C ile kopyalayıp veya sol tıkla tutup ekran kenarından diğer cihaza sürükleyerek anında gönderebilirsiniz.",
+            font=("Segoe UI", 9),
+            foreground="#94A3B8",
+        ).pack(anchor=tk.W, pady=(4, 4))
+
+        self.shelf_header_lbl = ttk.Label(
+            tab,
+            text=f"Ortak Cepteki Dosyalar ({self.node.shelf_dir}):",
+            font=("Segoe UI", 10, "bold"),
+        )
+        self.shelf_header_lbl.pack(anchor=tk.W, pady=(6, 4))
         self.shelf_list = tk.Listbox(tab, bg="#1E293B", fg="#F8FAFC", selectbackground="#0284C7",
-                                     font=("Segoe UI", 10), height=12, bd=0, highlightthickness=1, highlightbackground="#334155")
+                                     font=("Segoe UI", 10), height=11, bd=0, highlightthickness=1, highlightbackground="#334155")
         self.shelf_list.pack(fill=tk.BOTH, expand=True, pady=4)
+        self._pending_xdnd_dragging = False
+        for w in (tab, dir_card, self.shelf_list):
+            w.bind("<Enter>", self._on_shelf_drag_motion, add="+")
+            w.bind("<Motion>", self._on_shelf_drag_motion, add="+")
+            w.bind("<ButtonRelease-1>", self._on_shelf_drop_release, add="+")
 
     def _build_tab_audio(self):
         tab = ttk.Frame(self.notebook, padding=16)
@@ -1384,12 +1454,21 @@ class ConnectMeLinuxGui:
                 self.trusted_list.insert(tk.END, f"  ⭐ {d.get('deviceName')} ({d.get('deviceId')}) — Otomatik Bağlantı: AÇIK")
 
         # 3. Ortak Cep Dosyaları
+        self._capture_tk_selections(include_drag=False)
+        if hasattr(self, "shelf_dir_lbl"):
+            self.shelf_dir_lbl.configure(text=f"📂 Ortak Cep (İndirilenler) Klasörü: {self.node.shelf_dir}")
+        if hasattr(self, "shelf_header_lbl"):
+            self.shelf_header_lbl.configure(text=f"Ortak Cepteki Dosyalar ({self.node.shelf_dir}):")
         self.shelf_list.delete(0, tk.END)
-        files = list(self.node.shelf_dir.glob("*"))
+        try:
+            self.node.shelf_dir.mkdir(parents=True, exist_ok=True)
+            files = [f for f in self.node.shelf_dir.glob("*") if f.is_file()]
+        except Exception:
+            files = []
         if not files:
             self.shelf_list.insert(tk.END, "  Ortak cepte henüz dosya yok. Bilgisayar veya Android'den dosya gönderebilirsiniz.")
         else:
-            for f in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)[:20]:
+            for f in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)[:30]:
                 size_kb = f.stat().st_size / 1024
                 self.shelf_list.insert(tk.END, f"  📥 {f.name} ({size_kb:.1f} KB)")
 
@@ -2901,12 +2980,134 @@ class ConnectMeLinuxGui:
             self.node.revoke_trust(target_id)
             messagebox.showinfo("Başarılı", "Cihaz güvenilirler listesinden çıkarıldı.")
 
-    def _on_send_file(self):
-        file_path = filedialog.askopenfilename(title="Ortak Cebe Gönderilecek Dosyayı Seçin")
-        if not file_path:
+    def _ask_open_filenames(self, title: str = "Ortak Cebe Gönderilecek Dosyayı Seçin") -> List[str]:
+        """Opens native KDE/GTK file picker (kdialog/zenity) if available, falling back to dark-themed Tk filedialog."""
+        if shutil.which("kdialog"):
+            try:
+                res = subprocess.run(
+                    ["kdialog", "--title", title, "--multiple", "--separate-output", "--getopenfilename", str(Path.home())],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if res.returncode == 0 and res.stdout:
+                    return [p.strip() for p in res.stdout.splitlines() if p.strip()]
+                return []
+            except Exception:
+                pass
+        elif shutil.which("zenity"):
+            try:
+                res = subprocess.run(
+                    ["zenity", "--file-selection", "--multiple", "--separator=\n", f"--title={title}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if res.returncode == 0 and res.stdout:
+                    return [p.strip() for p in res.stdout.splitlines() if p.strip()]
+                return []
+            except Exception:
+                pass
+        selected = filedialog.askopenfilenames(title=title, parent=self.root)
+        return list(selected) if selected else []
+
+    def _ask_directory(self, title: str = "Ortak Cep (İndirilenler) Klasörünü Seçin", initialdir: str = "") -> str:
+        """Opens native KDE/GTK directory picker (kdialog/zenity) if available, falling back to dark-themed Tk filedialog."""
+        start_dir = initialdir or str(self.node.shelf_dir)
+        if shutil.which("kdialog"):
+            try:
+                res = subprocess.run(
+                    ["kdialog", "--title", title, "--getexistingdirectory", start_dir],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+                return ""
+            except Exception:
+                pass
+        elif shutil.which("zenity"):
+            try:
+                res = subprocess.run(
+                    ["zenity", "--file-selection", "--directory", f"--title={title}", f"--filename={start_dir.rstrip('/')}/"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+                return ""
+            except Exception:
+                pass
+        selected = filedialog.askdirectory(title=title, initialdir=start_dir, parent=self.root)
+        return selected or ""
+
+    def _ask_save_filename(self, title: str, initialfile: str) -> str:
+        """Opens native KDE/GTK save file picker (kdialog/zenity) if available, falling back to dark-themed Tk filedialog."""
+        default_path = str(Path.home() / initialfile)
+        if shutil.which("kdialog"):
+            try:
+                res = subprocess.run(
+                    ["kdialog", "--title", title, "--getsavefilename", default_path],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+                return ""
+            except Exception:
+                pass
+        elif shutil.which("zenity"):
+            try:
+                res = subprocess.run(
+                    ["zenity", "--file-selection", "--save", "--confirm-overwrite", f"--title={title}", f"--filename={default_path}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+                return ""
+            except Exception:
+                pass
+        selected = filedialog.asksaveasfilename(
+            title=title,
+            initialfile=initialfile,
+            defaultextension=".txt",
+            filetypes=[("Metin Dosyaları", "*.txt;*.log"), ("Tüm Dosyalar", "*.*")],
+            parent=self.root,
+        )
+        return selected or ""
+
+    def _on_change_shelf_folder(self):
+        new_dir = self._ask_directory(
+            title="Ortak Cep (İndirilenler) Klasörünü Seçin",
+            initialdir=str(self.node.shelf_dir),
+        )
+        if not new_dir:
             return
-        p = Path(file_path)
-        threading.Thread(target=self._send_file_async, args=(p,), daemon=True).start()
+        if self.node.set_shelf_directory(new_dir):
+            self._refresh_state()
+            messagebox.showinfo(
+                "Klasör Güncellendi",
+                f"📂 Ortak Cep (İndirilenler) klasörü başarıyla güncellendi:\n{self.node.shelf_dir}",
+                parent=self.root,
+            )
+
+    def _on_send_file(self):
+        file_paths = self._ask_open_filenames(title="Ortak Cebe Gönderilecek Dosyaları Seçin")
+        if not file_paths:
+            return
+        paths = [Path(fp) for fp in file_paths if Path(fp).is_file()]
+        if not paths:
+            return
+        threading.Thread(target=self._send_files_async, args=(paths,), daemon=True).start()
+
+    def _send_files_async(self, paths: List[Path]):
+        for p in paths:
+            self._send_file_async(p)
 
     def _send_file_async(self, p: Path):
         self._log(f"📤 '{p.name}' ({p.stat().st_size / 1024:.1f} KB) bağlı cihazlara aktarılıyor...")
@@ -2915,6 +3116,83 @@ class ConnectMeLinuxGui:
             self._log(f"✅ '{p.name}' başarıyla gönderildi!")
         else:
             self._log(f"⚠️ Dosya gönderilemedi. Cihazların bağlı ve onaylı olduğundan emin olun.")
+
+    def _capture_tk_selections(self, include_drag: bool = False) -> List[str]:
+        """Reads X11/Wayland selections (CLIPBOARD, XdndSelection, PRIMARY) directly via Tk's C selection bridge."""
+        blobs: List[str] = []
+        selections = ["XdndSelection", "CLIPBOARD", "PRIMARY"] if include_drag else ["CLIPBOARD"]
+        for sel in selections:
+            for tgt in ("text/uri-list", "x-special/gnome-copied-files", "UTF8_STRING", "STRING"):
+                try:
+                    val = self.root.selection_get(selection=sel, type=tgt)
+                    if val and isinstance(val, str) and ("file://" in val or val.strip().startswith("/")):
+                        blobs.append(val)
+                        break
+                except Exception:
+                    pass
+        if blobs or not include_drag:
+            self.node.cached_tk_uri_blobs = blobs
+        return blobs
+
+    def _on_shelf_drag_motion(self, event=None):
+        """Detects when user drags a file from Dolphin/Nautilus over the Ortak Cep tab using XdndSelection."""
+        btn1_held = bool(event is not None and (getattr(event, "state", 0) & 0x0100)) or bool(
+            getattr(self.node.hardware_grabber, "_left_btn_down", False)
+        )
+        if btn1_held:
+            blobs = self._capture_tk_selections(include_drag=True)
+            if blobs:
+                self._pending_xdnd_dragging = True
+                try:
+                    self.shelf_list.configure(highlightbackground="#38BDF8", highlightthickness=2)
+                except Exception:
+                    pass
+        elif getattr(self, "_pending_xdnd_dragging", False):
+            self._on_shelf_drop_release(event)
+
+    def _on_shelf_drop_release(self, event=None):
+        """Transfers files dropped onto the Ortak Cep tab."""
+        if not getattr(self, "_pending_xdnd_dragging", False):
+            self._capture_tk_selections(include_drag=True)
+        self._pending_xdnd_dragging = False
+        try:
+            self.shelf_list.configure(highlightbackground="#334155", highlightthickness=1)
+        except Exception:
+            pass
+        if getattr(self.node, "cached_tk_uri_blobs", None):
+            threading.Thread(
+                target=lambda: self.node._try_transfer_clipboard_files_to_peer(force=True, include_primary=True),
+                daemon=True,
+            ).start()
+
+    def _on_paste_and_send_shelf(self):
+        """Extracts copied/selected files from clipboard and immediately transfers them to paired peers."""
+        self._capture_tk_selections(include_drag=True)
+        def _worker():
+            ok = self.node._try_transfer_clipboard_files_to_peer(force=True, include_primary=True)
+            if not ok:
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Panoda Dosya Bulunamadı",
+                        "Panoda kopyalanmış bir dosya bulunamadı.\n\n"
+                        "Dosya yöneticisinde (Dolphin vb.) bir dosyayı seçip Ctrl+C'ye basın veya '📤 Dosya Gönder' düğmesini kullanın.",
+                        parent=self.root,
+                    ),
+                )
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_ctrl_v_shortcut(self, event=None):
+        """Handles Ctrl+V inside the Connect Me window when focus is not in a text entry."""
+        if event is not None and event.widget is not None:
+            w_class = str(event.widget.winfo_class())
+            if w_class in ("Entry", "TEntry", "Text"):
+                return
+        self._capture_tk_selections(include_drag=True)
+        threading.Thread(
+            target=lambda: self.node._try_transfer_clipboard_files_to_peer(force=True, include_primary=True),
+            daemon=True,
+        ).start()
 
     def _open_shelf_folder(self):
         try:
@@ -3012,11 +3290,9 @@ X-GNOME-Autostart-enabled=true
     def _export_logs(self):
         content = self._get_full_logs()
         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        target = filedialog.asksaveasfilename(
+        target = self._ask_save_filename(
             title="Connect Me Linux Tanılama Günlüğünü Dışa Aktar",
             initialfile=f"ConnectMe-Linux-Logs-{timestamp}.txt",
-            defaultextension=".txt",
-            filetypes=[("Metin Dosyaları", "*.txt;*.log"), ("Tüm Dosyalar", "*.*")]
         )
         if not target:
             return

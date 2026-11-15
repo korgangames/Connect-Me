@@ -107,6 +107,12 @@ public partial class MainWindow : Window
         var mainWindowHwnd = new WindowInteropHelper(this).Handle;
         _inputEngine.AttachToWindow(mainWindowHwnd);
         _clipboardService.AttachToWindow(this);
+        EnableNativeWin32FileDragDrop(mainWindowHwnd);
+
+        if (ShelfDirectoryPathText != null)
+        {
+            ShelfDirectoryPathText.Text = $"📂 Aktif Ortak Cep Klasörü: {_network.ShelfReceiveDirectory}";
+        }
 
         // Discover and announce local audio sinks across mesh
         var localSinks = WindowsAudioPlaybackEngine.EnumerateLocalAudioSinks(_network.LocalDeviceId, _network.LocalDeviceName);
@@ -1996,6 +2002,195 @@ public partial class MainWindow : Window
         }
     }
 
+    private const uint WM_DROPFILES = 0x0233;
+    private const uint WM_COPYDATA = 0x004A;
+    private const uint WM_COPYGLOBALDATA = 0x0049;
+    private const uint MSGFLT_ALLOW = 1;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ChangeWindowMessageFilterEx(IntPtr hWnd, uint msg, uint action, IntPtr pChangeFilterStruct);
+
+    [DllImport("shell32.dll")]
+    private static extern void DragAcceptFiles(IntPtr hWnd, [MarshalAs(UnmanagedType.Bool)] bool fAccept);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint DragQueryFileW(IntPtr hDrop, uint iFile, System.Text.StringBuilder? lpszFile, uint cch);
+
+    [DllImport("shell32.dll")]
+    private static extern void DragFinish(IntPtr hDrop);
+
+    private void EnableNativeWin32FileDragDrop(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        try
+        {
+            // Allow WM_DROPFILES even when Connect Me runs elevated (bypass UIPI filter for file drops)
+            ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, MSGFLT_ALLOW, IntPtr.Zero);
+            ChangeWindowMessageFilterEx(hwnd, WM_COPYDATA, MSGFLT_ALLOW, IntPtr.Zero);
+            ChangeWindowMessageFilterEx(hwnd, WM_COPYGLOBALDATA, MSGFLT_ALLOW, IntPtr.Zero);
+            DragAcceptFiles(hwnd, true);
+            HwndSource.FromHwnd(hwnd)?.AddHook(OnDropFilesWndProc);
+        }
+        catch
+        {
+        }
+    }
+
+    private IntPtr OnDropFilesWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if ((uint)msg == WM_DROPFILES && wParam != IntPtr.Zero)
+        {
+            try
+            {
+                uint count = DragQueryFileW(wParam, 0xFFFFFFFF, null, 0);
+                var droppedFiles = new List<string>();
+                for (uint i = 0; i < count; i++)
+                {
+                    uint len = DragQueryFileW(wParam, i, null, 0);
+                    if (len > 0)
+                    {
+                        var sb = new System.Text.StringBuilder((int)len + 2);
+                        if (DragQueryFileW(wParam, i, sb, len + 1) > 0)
+                        {
+                            string path = sb.ToString();
+                            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                            {
+                                droppedFiles.Add(path);
+                            }
+                        }
+                    }
+                }
+                DragFinish(wParam);
+                handled = true;
+
+                if (droppedFiles.Count > 0)
+                {
+                    _ = SendFilesToPairedPeersAsync(droppedFiles);
+                }
+            }
+            catch
+            {
+            }
+        }
+        return IntPtr.Zero;
+    }
+
+    private void ChangeShelfFolderBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Ortak Cep (İndirilenler) Klasörünü Seçin",
+                InitialDirectory = Directory.Exists(_network.ShelfReceiveDirectory)
+                    ? _network.ShelfReceiveDirectory
+                    : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            };
+
+            if (dlg.ShowDialog(this) == true && !string.IsNullOrWhiteSpace(dlg.FolderName))
+            {
+                if (_network.SetShelfReceiveDirectory(dlg.FolderName, persist: true))
+                {
+                    if (ShelfDirectoryPathText != null)
+                    {
+                        ShelfDirectoryPathText.Text = $"📂 Aktif Ortak Cep Klasörü: {_network.ShelfReceiveDirectory}";
+                    }
+                    MessageBox.Show(
+                        this,
+                        $"Ortak Cep (İndirilenler) klasörü başarıyla güncellendi:\n{_network.ShelfReceiveDirectory}",
+                        "Klasör Güncellendi",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Hata] Klasör seçilemedi: {ex.Message}");
+        }
+    }
+
+    private async void PasteSendShelfBtn_Click(object sender, RoutedEventArgs e)
+    {
+        await PasteAndSendClipboardContentAsync();
+    }
+
+    private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+        {
+            if (Keyboard.FocusedElement is TextBox)
+                return;
+
+            e.Handled = true;
+            await PasteAndSendClipboardContentAsync();
+        }
+    }
+
+    private async Task PasteAndSendClipboardContentAsync()
+    {
+        try
+        {
+            if (Clipboard.ContainsFileDropList())
+            {
+                var dropList = Clipboard.GetFileDropList();
+                if (dropList != null && dropList.Count > 0)
+                {
+                    var files = dropList.Cast<string>().Where(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f)).ToList();
+                    if (files.Count > 0)
+                    {
+                        await SendFilesToPairedPeersAsync(files);
+                        AppendLog($"[Ortak Cep & Pano] 📦 Yapıştırılan {files.Count} dosya bağlı cihazlara gönderildi.");
+                        return;
+                    }
+                }
+            }
+
+            var explorerSelected = WindowsClipboardService.GetSelectedFilesFromExplorer(onlyForegroundExplorer: false);
+            if (explorerSelected.Count > 0)
+            {
+                await SendFilesToPairedPeersAsync(explorerSelected);
+                AppendLog($"[Ortak Cep & Pano] 📦 Dosya Gezgini'ndeki {explorerSelected.Count} dosya bağlı cihazlara gönderildi.");
+                return;
+            }
+
+            if (Clipboard.ContainsImage())
+            {
+                var img = Clipboard.GetImage();
+                if (img != null)
+                {
+                    byte[] pngBytes = WindowsClipboardService.EncodeBitmapSourceToPng(img);
+                    if (pngBytes.Length > 0)
+                    {
+                        await _network.BroadcastClipboardImageAsync(pngBytes);
+                        AppendLog($"[Evrensel Pano] 🖼️ Panodaki görsel ({Math.Max(1, pngBytes.Length / 1024)} KB) bağlı cihazlara gönderildi.");
+                        return;
+                    }
+                }
+            }
+
+            if (Clipboard.ContainsText())
+            {
+                string txt = Clipboard.GetText();
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    await _network.BroadcastClipboardTextAsync(txt);
+                    AppendLog($"[Evrensel Pano] 📋 Panodaki metin ({txt.Length} krk) bağlı cihazlara gönderildi.");
+                    return;
+                }
+            }
+
+            AppendLog("[Ortak Cep & Pano] Panoda gönderilecek kopyalanmış dosya, görsel veya metin bulunamadı.");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Pano Uyarı] {ex.Message}");
+        }
+    }
+
     private void OpenShelfFolderBtn_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -2082,7 +2277,7 @@ public partial class MainWindow : Window
     private void OnCrossEdgeDragStarted(PeerDeviceNode peer)
     {
         AppendLog($"[Kenar Sürükle-Bırak] 🧲 Sürükleme ile '{peer.DeviceName}' ekranına geçildi — seçili/panodaki dosya aktarılıyor.");
-        _ = _clipboardService.TransferClipboardFilesToPeerAsync(peer);
+        _ = _clipboardService.TransferClipboardFilesToPeerAsync(peer, includeExplorerSelection: true);
     }
 
     private void AutoClipboardCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -2095,53 +2290,7 @@ public partial class MainWindow : Window
 
     private async void PushClipboardNowBtn_Click(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            if (Clipboard.ContainsImage())
-            {
-                var img = Clipboard.GetImage();
-                if (img != null)
-                {
-                    byte[] pngBytes = WindowsClipboardService.EncodeBitmapSourceToPng(img);
-                    if (pngBytes.Length > 0)
-                    {
-                        await _network.BroadcastClipboardImageAsync(pngBytes);
-                        AppendLog($"[Evrensel Pano] 🖼️ Pano ekran görüntüsü/görseli ({Math.Max(1, pngBytes.Length / 1024)} KB) tüm onaylı cihazlara gönderildi.");
-                        return;
-                    }
-                }
-            }
-
-            if (Clipboard.ContainsFileDropList())
-            {
-                var dropList = Clipboard.GetFileDropList();
-                if (dropList != null && dropList.Count > 0)
-                {
-                    var files = dropList.Cast<string>().Where(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f)).ToList();
-                    if (files.Count > 0)
-                    {
-                        await SendFilesToPairedPeersAsync(files);
-                        AppendLog($"[Evrensel Pano] 📦 Panodaki {files.Count} dosya tüm onaylı cihazlara gönderildi.");
-                        return;
-                    }
-                }
-            }
-
-            if (Clipboard.ContainsText())
-            {
-                string txt = Clipboard.GetText();
-                await _network.BroadcastClipboardTextAsync(txt);
-                AppendLog($"[Evrensel Pano] 📋 Pano metni ({txt.Length} krk) tüm onaylı cihazlara gönderildi.");
-            }
-            else
-            {
-                AppendLog("[Evrensel Pano] Panoda gönderilecek metin, görsel veya dosya bulunamadı.");
-            }
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"[Pano Uyarı] {ex.Message}");
-        }
+        await PasteAndSendClipboardContentAsync();
     }
 
     private static readonly object _logLock = new();

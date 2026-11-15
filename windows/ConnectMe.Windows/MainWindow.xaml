@@ -10,7 +10,8 @@
         Foreground="{StaticResource TextPrimaryBrush}"
         AllowDrop="True"
         Drop="Window_Drop"
-        DragOver="Window_DragOver">
+        DragOver="Window_DragOver"
+        PreviewKeyDown="Window_PreviewKeyDown">
 
     <Window.Resources>
         <Style TargetType="TabItem">
@@ -565,19 +566,28 @@
                                 Drop="Window_Drop"
                                 DragOver="Window_DragOver">
                             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                                <TextBlock Text="📂 Dosya, Fotoğraf veya Metni Pencerenin Herhangi Bir Yerine Sürükleyip Bırakın"
+                                <TextBlock Text="📂 Dosya, Fotoğraf veya Metni Pencereye Sürükleyin veya Ctrl+V ile Yapıştırın"
                                            FontWeight="Bold" FontSize="14" Foreground="#38BDF8" HorizontalAlignment="Center"/>
-                                <TextBlock Text="Seçili cihaza veya çift taraflı onaylanmış tüm cihazlara yüksek hızla gönderilir"
-                                           FontSize="11.5" Foreground="#8B949E" HorizontalAlignment="Center" Margin="0,4,0,10"/>
+                                <TextBlock x:Name="ShelfDirectoryPathText"
+                                           Text="📂 Aktif Ortak Cep Klasörü: ~/Downloads/ConnectMe-Shelf"
+                                           FontSize="11" Foreground="#A7F3D0" HorizontalAlignment="Center" Margin="0,3,0,8" FontFamily="Consolas"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                                     <Button x:Name="PickFileToSendBtn"
                                             Click="PickFileToSendBtn_Click"
-                                            Background="#0284C7" Foreground="White" BorderThickness="0" Padding="14,6" Margin="0,0,8,0" Cursor="Hand"
+                                            Background="#0284C7" Foreground="White" BorderThickness="0" Padding="12,6" Margin="0,0,6,0" Cursor="Hand"
                                             Content="📤 Dosya Seç ve Gönder"/>
+                                    <Button x:Name="PasteSendShelfBtn"
+                                            Click="PasteSendShelfBtn_Click"
+                                            Background="#059669" Foreground="White" BorderThickness="0" Padding="12,6" Margin="0,0,6,0" Cursor="Hand"
+                                            Content="📋 Yapıştır ve Gönder (Ctrl+V)"/>
+                                    <Button x:Name="ChangeShelfFolderBtn"
+                                            Click="ChangeShelfFolderBtn_Click"
+                                            Background="#1D4ED8" Foreground="White" BorderThickness="0" Padding="12,6" Margin="0,0,6,0" Cursor="Hand"
+                                            Content="📁 Klasör Seç / Değiştir..."/>
                                     <Button x:Name="OpenShelfFolderBtn"
                                             Click="OpenShelfFolderBtn_Click"
-                                            Background="#1F2937" Foreground="#E5E7EB" BorderBrush="#374151" Padding="14,6" Cursor="Hand"
-                                            Content="📁 İndirilen Cep Klasörünü Aç"/>
+                                            Background="#1F2937" Foreground="#E5E7EB" BorderBrush="#374151" Padding="12,6" Cursor="Hand"
+                                            Content="📂 Klasörü Aç"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>

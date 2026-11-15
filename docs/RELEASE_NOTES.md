@@ -1,3 +1,24 @@
+# Connect Me v1.8.28 — Ortak Cep Klasör Seçimi, Linux Dosya Seçici Karanlık Tema ve Sürükle-Bırak / Yapıştır (Ctrl+V) Dosya Aktarımı Düzeltmesi
+
+Bu sürüm; Linux arayüzünde "Dosya Gönder" penceresindeki beyaz üstüne beyaz yazı okunabilirlik sorununu giderir, her cihazda (Windows ve Linux) Ortak Cep (İndirilenler) klasörünü seçilebilir hale getirir ve dosya sürükle-bırak ile yapıştırarak (`Ctrl+V`) dosya gönderme sistemini tam uyumlu hale getirir:
+
+1. **Linux "Dosya Gönder" Arayüzü Okunabilirlik Düzeltmesi ve Yerel Masaüstü Dosya Seçicisi (`kdialog` / `zenity` + Karanlık Tema):**
+   - Linux sürümünde "Ortak Cep" sekmesinde `📤 Dosya Gönder` veya `📁 Klasör Seç / Değiştir...` tıklandığında artık öncelikle KDE Plasma (`kdialog`) veya GNOME/GTK (`zenity`) yerel sistem dosya/klasör seçicisi açılır.
+   - Ayrıca yedek Tk dosya/klasör diyaloğundaki `Treeview`, `Listbox` ve `TkFDialog` bileşenlerine koyu arka plan (`#1E293B`) ve açık metin (`#F8FAFC`) renkleri tanımlanarak beyaz arka plan üstüne beyaz yazı hatası tamamen ortadan kaldırıldı.
+
+2. **Her Cihazda Seçilebilir ve Kalıcı Ortak Cep (İndirilenler) Klasörü:**
+   - Hem Windows (`%AppData%\ConnectMe\settings.json`) hem de Linux (`~/.config/connectme/settings.json`) sürümlerinde `📁 Klasör Seç / Değiştir...` düğmesi eklendi.
+   - Her cihazda gelen dosyaların kaydedileceği Ortak Cep / İndirilenler klasörü kullanıcı tarafından serbestçe seçilebilir ve uygulama yeniden başlatıldığında korunur.
+
+3. **Dosya Kopyala-Yapıştır (`Ctrl+C` / `Ctrl+V`) ve Sürükle-Bırak İyileştirmeleri:**
+   - **Dosya Öncelik Sırası (Windows & Linux):** Bir dosya `Ctrl+C` ile kopyalandığında dosya yöneticilerinin panoya eklediği ikon/küçük resim (`image/png`) nedeniyle dosyanın görsel sanılarak atlanması sorunu giderildi; her iki işletim sisteminde de dosya listesi (`FileDropList`, `text/uri-list`, `x-special/gnome-copied-files`, `file://` yolları) en yüksek öncelikle kontrol edilir.
+   - **Uygulama İçinde `Ctrl+V` ve `📋 Yapıştır ve Gönder (Ctrl+V)`:** Hem Windows hem Linux arayüzünde Ortak Cep sekmesine `📋 Yapıştır ve Gönder (Ctrl+V)` düğmesi ve pencere genelinde `Ctrl+V` kısayolu eklendi.
+   - **`Ctrl+C` Yapmadan Doğrudan Sürükle-Bırak:**
+     - **Windows:** Yönetici (Administrator) yetkisiyle çalışırken bile Windows Gezgini'nden pencere üzerine dosya sürüklenebilmesi için Win32 `ChangeWindowMessageFilterEx` (`WM_DROPFILES` / `WM_COPYGLOBALDATA`) ve `DragAcceptFiles` köprüsü eklendi; ayrıca dosya ekran kenarından karşı cihaza sürüklenirken `Shell.Application` COM arayüzü üzerinden aktif Gezgin penceresinde sürüklenen dosya otomatik algılanıp karşı cihaza aktarılır.
+     - **Linux:** X11/XWayland `XdndSelection` sürükleme atomu ve Tk `selection_get` köprüsü eklenerek Dolphin/Nautilus üzerinden hem pencereye hem de ekran kenarından diğer cihaza sürüklenen dosyaların `Ctrl+C` gerektirmeden aktarılması sağlandı.
+
+---
+
 # Connect Me v1.8.27 — Faz 2 Yol Haritası: Zengin Evrensel Pano (Görsel & Dosya Ctrl+C/Ctrl+V), Kenar Sürükle-Bırak ve Otomatik Başlatma
 
 Bu sürüm; Faz 2 yol haritası kapsamındaki zengin evrensel pano (ekran görüntüsü/görsel ve dosya kopyala-yapıştır), ekran kenarından sürükle-bırak dosya aktarımı ve sistem başlangıcında otomatik çalıştırma özelliklerini Windows ve Linux arasında eksiksiz devreye alır:
