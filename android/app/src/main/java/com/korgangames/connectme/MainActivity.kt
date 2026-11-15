@@ -771,6 +771,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         pcCard.addView(connectBtn)
+
+        val emergencyReturnBtn = createStyledButton("🎯 Fareyi Ana Makineye Gönder (Donma / Kilit Aç)", "#DC2626") {
+            CursorAccessibilityService.instance?.deactivateCursor()
+            ConnectMeService.instance?.sendEdgeHandOffBackToPeer(ProtocolConstants.EDGE_LEFT, 0.5f)
+            Toast.makeText(this, "🎯 İmleç ve klavye kontrolü ana makineye geri gönderildi!", Toast.LENGTH_SHORT).show()
+        }
+        pcCard.addView(emergencyReturnBtn)
         root.addView(pcCard)
 
         // 🎧 Çoklu Cihaz Ses Matrisi (Audio Matrix) Card
@@ -830,10 +837,10 @@ class MainActivity : AppCompatActivity() {
         }
         shelfCard.addView(sendClipBtn)
 
-        val returnPcBtn = createStyledButton("⬅️ Fare / Klavye Kontrolünü Bilgisayara Geri Ver", "#374151") {
+        val returnPcBtn = createStyledButton("🎯 Fareyi Ana Makineye Gönder", "#DC2626") {
             CursorAccessibilityService.instance?.deactivateCursor()
             ConnectMeService.instance?.sendEdgeHandOffBackToPeer(ProtocolConstants.EDGE_LEFT, 0.5f)
-            Toast.makeText(this, "İmleç kontrolü bilgisayara devredildi", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "🎯 İmleç ve klavye kontrolü ana makineye geri gönderildi!", Toast.LENGTH_SHORT).show()
         }
         shelfCard.addView(returnPcBtn)
 

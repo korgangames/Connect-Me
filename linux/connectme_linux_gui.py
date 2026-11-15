@@ -759,6 +759,21 @@ class ConnectMeLinuxGui:
 
         status_box = ttk.Frame(header_frame)
         status_box.pack(side=tk.RIGHT)
+        self.emergency_return_btn = tk.Button(
+            status_box,
+            text="🎯 Fareyi Ana Makineye Gönder",
+            bg="#DC2626",
+            fg="#FFFFFF",
+            activebackground="#B91C1C",
+            activeforeground="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            command=self._on_emergency_return_to_host
+        )
+        self.emergency_return_btn.pack(side=tk.RIGHT, padx=6)
         self.update_badge_btn = ttk.Button(status_box, text="🔄 Güncelleme Denetle", command=lambda: threading.Thread(target=self._check_for_updates, args=(True,), daemon=True).start())
         self.update_badge_btn.pack(side=tk.RIGHT, padx=4)
         self.injector_badge = ttk.Label(status_box, text=f" Girdi: {self.node.injector.mode.upper()} ", style="Badge.TLabel")
@@ -859,6 +874,22 @@ class ConnectMeLinuxGui:
         # Sağ taraf: Hızlı aksiyon butonları
         right_ctrl = ttk.Frame(ctrl_bar)
         right_ctrl.pack(side=tk.RIGHT)
+
+        self.canvas_return_btn = tk.Button(
+            right_ctrl,
+            text="🎯 Fareyi Ana Makineye Gönder",
+            bg="#DC2626",
+            fg="#FFFFFF",
+            activebackground="#B91C1C",
+            activeforeground="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=8,
+            pady=3,
+            cursor="hand2",
+            command=self._on_emergency_return_to_host
+        )
+        self.canvas_return_btn.pack(side=tk.RIGHT, padx=4)
 
         self.switch_peer_btn = ttk.Button(right_ctrl, text="🚀 Seçili Ekrana Şimdi Geç", style="Accent.TButton", command=self._switch_to_selected_peer)
         self.switch_peer_btn.pack(side=tk.RIGHT, padx=4)
@@ -2745,11 +2776,24 @@ class ConnectMeLinuxGui:
         if self._pageup_down and self._pagedown_down:
             self._pageup_down = False
             self._pagedown_down = False
-            self._log("[Acil Durum] ⬅️ [PageUp + PageDown] basıldı, fare ve klavye kontrolü anında Linux'a geri alınıyor.")
-            if self.host_capture_overlay and self.host_capture_overlay.is_active:
-                self.host_capture_overlay.deactivate(notify_peer=True)
-            if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.is_active:
-                self.node.hardware_grabber.deactivate(notify_peer=True)
+            self._log("[Acil Durum] ⬅️ [PageUp + PageDown] basıldı, fare ve klavye kontrolü anında ana makineye döndürülüyor.")
+            self._on_emergency_return_to_host()
+
+    def _on_emergency_return_to_host(self):
+        """Forces immediate mouse release and returns cursor control back to host machine."""
+        self._log("[Acil Durum] 🎯 'Fareyi Ana Makineye Gönder' tuşuna basıldı; imleç kontrolü ana makineye aktarılıyor...")
+        if self.host_capture_overlay and self.host_capture_overlay.is_active:
+            self.host_capture_overlay.deactivate(notify_peer=True)
+
+        res = self.node.force_return_mouse_to_host()
+        if res:
+            self._log("[Acil Durum] ✅ Ana makineye EDGE_RETURN dönüş sinyali başarıyla iletildi.")
+        else:
+            self._log("[Acil Durum] ⚠️ Yerel kilitler ve imleç serbest bırakıldı.")
+
+        if hasattr(self, "edge_sentinels"):
+            self.edge_sentinels.show_with_cooldown(1.0)
+        self._refresh_state()
 
     def _on_display_topology_updated(self):
         self._refresh_monitors()

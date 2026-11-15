@@ -11,8 +11,8 @@ android {
         applicationId = "com.korgangames.connectme"
         minSdk = 26
         targetSdk = 34
-        versionCode = 211
-        versionName = "1.8.30"
+        versionCode = 212
+        versionName = "1.8.31"
     }
 
     signingConfigs {

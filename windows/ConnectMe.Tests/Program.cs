@@ -795,6 +795,18 @@ public static class Program
             Math.Abs(returnPkt.Value.NormalizedPosition - 0.75f) < 0.01f,
             "Kenar Dönüşü (EDGE_RETURN): İkincil Windows bilgisayar imleç dönüş paketini ana bilgisayara başarıyla aktardı");
 
+        // 5. Test Emergency Return ('Fareyi Ana Makineye Gönder') with ScreenEdge.None
+        EdgeHandOffPacket? emergencyReturnPkt = null;
+        nodeA.RemoteEdgeHandOffReceived += (pkt, _) => emergencyReturnPkt = pkt;
+
+        nodeB.SendEdgeReturnToPeer(peerAOnB, ScreenEdge.None, 0.5f);
+        await Task.Delay(200);
+
+        AssertTrue(
+            emergencyReturnPkt != null &&
+            emergencyReturnPkt.Value.TargetEntranceEdge == ScreenEdge.None,
+            "Acil Durum (Fareyi Ana Makineye Gönder): İkincil cihaz tek tuşla ana makineye anında dönüş sinyali iletti");
+
         try { Directory.Delete(tempShelf, true); } catch { }
     }
 

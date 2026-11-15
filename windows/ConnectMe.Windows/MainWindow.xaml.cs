@@ -1823,6 +1823,12 @@ public partial class MainWindow : Window
         }
     }
 
+    private void EmergencyReclaimButton_Click(object sender, RoutedEventArgs e)
+    {
+        _inputEngine.EmergencyReclaimOrReturnToHost();
+        AppendLog("[Acil Durum] 🎯 'Fareyi Ana Makineye Gönder' tuşuna basıldı; imleç kontrolü ana makineye geri aktarıldı.");
+    }
+
     private async void ScanDevicesBtn_Click(object sender, RoutedEventArgs e)
     {
         AppendLog("[Keşif] Yerel ağdaki tüm bilgisayar ve Android cihazlara keşif sinyali gönderiliyor...");

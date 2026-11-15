@@ -53,7 +53,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.30"
+    return "1.8.31"
 
 VERSION = _resolve_app_version()
 
@@ -2853,6 +2853,36 @@ class ConnectMeLinuxNode:
                     self.on_host_control_returned()
                 except Exception:
                     pass
+
+    def force_return_mouse_to_host(self) -> bool:
+        """Forces immediate release of all grabs/locks and sends EDGE_RETURN to host or returns control locally."""
+        with self._host_control_lock:
+            # Case 1: Linux was controlling remote peer -> reclaim control back to local Linux
+            if self.controlling_remote_peer is not None:
+                self.return_host_control_to_local(notify_peer=True)
+                return True
+
+            # Case 2: Linux was being controlled by remote peer (Client Mode) -> return cursor back to host
+            if self.active_remote_peer is not None:
+                p = self.active_remote_peer
+                self.return_control_to_peer(p, return_edge=EDGE_LEFT, norm_pos=0.5)
+                self.return_control_to_local(edge=EDGE_LEFT, norm_pos=0.5)
+                return True
+
+            # Case 3: Desynced or idle state -> broadcast return to any mutually paired peer
+            sent_any = False
+            for p in self.peers.values():
+                if p.get("isMutuallyPaired"):
+                    self.return_control_to_peer(p, return_edge=EDGE_LEFT, norm_pos=0.5)
+                    sent_any = True
+
+            if hasattr(self, "hardware_grabber") and self.hardware_grabber.is_active:
+                self.hardware_grabber.deactivate(notify_peer=False)
+
+            self.active_remote_peer = None
+            self.controlling_remote_peer = None
+            self.last_host_control_return_time = time.time()
+            return sent_any
 
     def send_edge_handoff(self, peer: dict, target_entrance_edge: int, normalized_pos: float = 0.5, is_dragging: bool = False) -> None:
         try:

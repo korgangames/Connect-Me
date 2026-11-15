@@ -61,6 +61,7 @@ public sealed class Win32InputEngine : IDisposable
 
     private IntPtr _mouseHookId = IntPtr.Zero;
     private IntPtr _keyboardHookId = IntPtr.Zero;
+    private readonly object _lock = new();
 
     private int _lastCursorX;
     private int _lastCursorY;
@@ -370,6 +371,41 @@ public sealed class Win32InputEngine : IDisposable
         SetCursorPos(safeEntryX, safeEntryY);
 
         ActiveTargetChanged?.Invoke(null, effectiveEdge, effectiveNorm);
+    }
+
+    /// <summary>
+    /// Forces immediate mouse release and returns cursor control back to host machine or local desktop.
+    /// Used by the 'Fareyi Ana Makineye Gönder' emergency button and hotkeys.
+    /// </summary>
+    public void EmergencyReclaimOrReturnToHost()
+    {
+        lock (_lock)
+        {
+            ReleaseHeldModifiers();
+            if (ActiveRemotePeer != null)
+            {
+                ReturnControlToLocal(ScreenEdge.None, 0.5f, notifyPeer: true);
+                return;
+            }
+
+            if (_controllingRemotePeer != null)
+            {
+                var host = _controllingRemotePeer;
+                _controllingRemotePeer = null;
+                _incomingEntryEdge = ScreenEdge.None;
+                _incomingPushAccum = 0;
+                ClipCursor(IntPtr.Zero);
+                _network.SendEdgeReturnToPeer(host, ScreenEdge.None, 0.5f);
+                return;
+            }
+
+            // Fallback for desynced state: broadcast return to all paired peers and unclip
+            foreach (var peer in _network.MutuallyPairedPeers)
+            {
+                _network.SendEdgeReturnToPeer(peer, ScreenEdge.None, 0.5f);
+            }
+            ClipCursor(IntPtr.Zero);
+        }
     }
 
     private void OnRemoteEdgeHandOffReceived(EdgeHandOffPacket packet, System.Net.IPEndPoint sender)
@@ -1034,6 +1070,10 @@ public sealed class Win32InputEngine : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ClipCursor(IntPtr lpRect);
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);

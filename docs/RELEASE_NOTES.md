@@ -1,3 +1,23 @@
+# Connect Me v1.8.31 — İstemci Cihazlar İçin Acil Durum "Fareyi Ana Makineye Gönder" Düğmesi (Linux, Windows, Android)
+
+Bu sürüm; KVM fare paylaşımı sırasında istemci / ikincil cihazlarda (Linux, Windows veya Android) oluşabilecek fare donmaları, ağ kopmaları veya imlecin istemci ekranda kilitli kalması durumlarına karşı tek tıklamayla kontrolü ana bilgisayara iade eden acil durum butonlarını tüm platformlara ekler:
+
+1. **Linux GUI & Daemon Acil Durum Dönüş Desteği:**
+   - `linux/connectme_linux_gui.py`: Hem üst başlık durum çubuğuna (`status_box`) hem de 2D Ekran Yerleşimi Tuvali araç çubuğuna dikkat çekici kırmızı `"🎯 Fareyi Ana Makineye Gönder"` butonu eklendi.
+   - `linux/connectme_linux_daemon.py`: `force_return_mouse_to_host()` metodu eklendi. Tıklandığında yerel `evdev` donanım yakalamasını derhal serbest bırakır (`hardware_grabber.deactivate()`), şeffaf yakalama katmanını kapatır ve ana makineye hızlı UDP + güvenilir TCP `EDGE_RETURN` paketi ileterek imlecin anında ana bilgisayara dönmesini sağlar.
+
+2. **Windows GUI & Win32 Input Engine Entegrasyonu:**
+   - `windows/ConnectMe.Windows/Win32/Win32InputEngine.cs`: `EmergencyReclaimOrReturnToHost()` yordamı eklendi. `ClipCursor(IntPtr.Zero)` çağrısıyla tüm imleç sınırlamalarını iptal eder, Windows istemci modundaysa ana makineye `EDGE_RETURN` iletir; Windows ana makine modundaysa imleci uzaktaki istemciden yerel ekrana geri devralır ve takılı kalmış klavye değiştirici tuşlarını (`Ctrl`, `Alt`, `Shift`) serbest bırakır.
+   - `windows/ConnectMe.Windows/MainWindow.xaml`: Üst başlık çubuğuna belirgin kırmızı `"🎯 Fareyi Ana Makineye Gönder"` butonu eklendi ve arka uç motoruna bağlandı.
+
+3. **Android Mobil Uygulama Desteği:**
+   - `android/app/src/main/java/com/korgangames/connectme/MainActivity.kt`: Hem Bağlantı/Eşleşen Cihaz kartına hem de Ortak Cep kartına kırmızı `"🎯 Fareyi Ana Makineye Gönder (Donma / Kilit Aç)"` butonları eklendi. Tıklandığında Android sanal imleç servisini kapatır ve ana bilgisayara `EDGE_RETURN` gönderir.
+
+4. **Otomatik Birim Testleri:**
+   - `windows/ConnectMe.Tests/Program.cs`: `Test Emergency Return ('Fareyi Ana Makineye Gönder') with ScreenEdge.None` birim testi eklenerek acil durum geri dönüş protokolünün ve sınır hesaplamalarının doğruluğu güvenceye alındı (79/79 test başarılı).
+
+---
+
 # Connect Me v1.8.30 — Ses Aktarımı Statik Gürültü Düzeltmesi (32-bit Float -> 16-bit PCM) ve Aktarım Sırasında Yerel Hoparlörü Sessize Alma (Windows & Linux)
 
 Bu sürüm; cihazlar arası gerçek zamanlı ses aktarımındaki statik beyaz gürültü (white noise) sorununu tamamen ortadan kaldırır ve ses aktarımı başlatıldığında sesi gönderen cihazın kendi hoparlörünü otomatik olarak sessize alır:

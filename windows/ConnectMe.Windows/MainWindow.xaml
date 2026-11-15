@@ -201,6 +201,7 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <WrapPanel Grid.Column="0" VerticalAlignment="Center">
@@ -249,6 +250,19 @@
                         FontWeight="SemiBold"
                         Cursor="Hand"
                         Content="🔒 Kilitle / Aç"/>
+
+                <Button Grid.Column="3"
+                        x:Name="EmergencyReclaimButton"
+                        Click="EmergencyReclaimButton_Click"
+                        Background="#DC2626"
+                        Foreground="White"
+                        BorderThickness="0"
+                        Padding="12,6"
+                        Margin="6,0,0,0"
+                        FontWeight="Bold"
+                        Cursor="Hand"
+                        ToolTip="Fare donması veya takılma durumunda imleci hemen ana makineye döndürür / serbest bırakır (PageUp+PageDown veya ScrollLock)"
+                        Content="🎯 Fareyi Ana Makineye Gönder"/>
             </Grid>
         </Border>
 
