@@ -86,6 +86,20 @@ public partial class MainWindow : Window
 
         _inputEngine.ActiveTargetChanged += OnActiveTargetChanged;
         _inputEngine.ScreenLockToggled += OnScreenLockToggled;
+        _inputEngine.CrossEdgeDragStarted += OnCrossEdgeDragStarted;
+
+        _isUpdatingAutostartUi = true;
+        try
+        {
+            if (WindowsAutostartCheckBox != null)
+            {
+                WindowsAutostartCheckBox.IsChecked = IsWindowsAutostartEnabled();
+            }
+        }
+        finally
+        {
+            _isUpdatingAutostartUi = false;
+        }
 
         _network.Start();
         WindowsFirewallHelper.EnsureFirewallRules();
@@ -2016,6 +2030,61 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool _isUpdatingAutostartUi;
+
+    private static bool IsWindowsAutostartEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", writable: false);
+            string? val = key?.GetValue("ConnectMe") as string;
+            return !string.IsNullOrWhiteSpace(val);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void WindowsAutostartCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isUpdatingAutostartUi || WindowsAutostartCheckBox == null)
+            return;
+
+        bool enable = WindowsAutostartCheckBox.IsChecked == true;
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
+            if (key == null)
+                return;
+
+            if (enable)
+            {
+                string exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (!string.IsNullOrWhiteSpace(exePath))
+                {
+                    key.SetValue("ConnectMe", $"\"{exePath}\"");
+                    AppendLog("[Sistem] 🚀 Windows açılışında otomatik başlatma (Autostart) etkinleştirildi.");
+                }
+            }
+            else
+            {
+                key.DeleteValue("ConnectMe", throwOnMissingValue: false);
+                AppendLog("[Sistem] ⚪ Windows açılışında otomatik başlatma (Autostart) devre dışı bırakıldı.");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Sistem Uyarı] Otomatik başlatma ayarı güncellenemedi: {ex.Message}");
+        }
+    }
+
+    private void OnCrossEdgeDragStarted(PeerDeviceNode peer)
+    {
+        AppendLog($"[Kenar Sürükle-Bırak] 🧲 Sürükleme ile '{peer.DeviceName}' ekranına geçildi — seçili/panodaki dosya aktarılıyor.");
+        _ = _clipboardService.TransferClipboardFilesToPeerAsync(peer);
+    }
+
     private void AutoClipboardCheckBox_Changed(object sender, RoutedEventArgs e)
     {
         if (_clipboardService != null && AutoClipboardCheckBox != null)
@@ -2028,15 +2097,45 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (Clipboard.ContainsImage())
+            {
+                var img = Clipboard.GetImage();
+                if (img != null)
+                {
+                    byte[] pngBytes = WindowsClipboardService.EncodeBitmapSourceToPng(img);
+                    if (pngBytes.Length > 0)
+                    {
+                        await _network.BroadcastClipboardImageAsync(pngBytes);
+                        AppendLog($"[Evrensel Pano] 🖼️ Pano ekran görüntüsü/görseli ({Math.Max(1, pngBytes.Length / 1024)} KB) tüm onaylı cihazlara gönderildi.");
+                        return;
+                    }
+                }
+            }
+
+            if (Clipboard.ContainsFileDropList())
+            {
+                var dropList = Clipboard.GetFileDropList();
+                if (dropList != null && dropList.Count > 0)
+                {
+                    var files = dropList.Cast<string>().Where(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f)).ToList();
+                    if (files.Count > 0)
+                    {
+                        await SendFilesToPairedPeersAsync(files);
+                        AppendLog($"[Evrensel Pano] 📦 Panodaki {files.Count} dosya tüm onaylı cihazlara gönderildi.");
+                        return;
+                    }
+                }
+            }
+
             if (Clipboard.ContainsText())
             {
                 string txt = Clipboard.GetText();
                 await _network.BroadcastClipboardTextAsync(txt);
-                AppendLog($"[Evrensel Pano] Pano metni ({txt.Length} krk) tüm onaylı cihazlara gönderildi.");
+                AppendLog($"[Evrensel Pano] 📋 Pano metni ({txt.Length} krk) tüm onaylı cihazlara gönderildi.");
             }
             else
             {
-                AppendLog("[Evrensel Pano] Panoda gönderilecek metin bulunamadı.");
+                AppendLog("[Evrensel Pano] Panoda gönderilecek metin, görsel veya dosya bulunamadı.");
             }
         }
         catch (Exception ex)

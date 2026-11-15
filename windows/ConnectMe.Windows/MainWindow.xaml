@@ -602,20 +602,28 @@
                                 BorderThickness="1"
                                 CornerRadius="8"
                                 Padding="12,10">
-                            <DockPanel>
-                                <CheckBox x:Name="AutoClipboardCheckBox"
-                                          IsChecked="True"
-                                          Checked="AutoClipboardCheckBox_Changed"
-                                          Unchecked="AutoClipboardCheckBox_Changed"
-                                          Foreground="White"
-                                          VerticalAlignment="Center"
-                                          Content="📋 Evrensel Pano Otomatik Senkronizasyon (Metin &amp; Ekran Görüntüsü)"/>
-                                <Button x:Name="PushClipboardNowBtn"
-                                        Click="PushClipboardNowBtn_Click"
-                                        HorizontalAlignment="Right"
-                                        Background="#1F2937" Foreground="#38BDF8" BorderBrush="#30363D" Padding="12,5" Cursor="Hand"
-                                        Content="📋 Manuel Tekrarla (Otomatik Aktif)"/>
-                            </DockPanel>
+                            <StackPanel>
+                                <DockPanel>
+                                    <CheckBox x:Name="AutoClipboardCheckBox"
+                                              IsChecked="True"
+                                              Checked="AutoClipboardCheckBox_Changed"
+                                              Unchecked="AutoClipboardCheckBox_Changed"
+                                              Foreground="White"
+                                              VerticalAlignment="Center"
+                                              Content="📋 Zengin Evrensel Pano Otomatik Senkronizasyon (Metin, Ekran Görüntüsü &amp; Dosya Ctrl+C/Ctrl+V)"/>
+                                    <Button x:Name="PushClipboardNowBtn"
+                                            Click="PushClipboardNowBtn_Click"
+                                            HorizontalAlignment="Right"
+                                            Background="#1F2937" Foreground="#38BDF8" BorderBrush="#30363D" Padding="12,5" Cursor="Hand"
+                                            Content="📋 Manuel Tekrarla (Otomatik Aktif)"/>
+                                </DockPanel>
+                                <CheckBox x:Name="WindowsAutostartCheckBox"
+                                          Margin="0,6,0,0"
+                                          Checked="WindowsAutostartCheckBox_Changed"
+                                          Unchecked="WindowsAutostartCheckBox_Changed"
+                                          Foreground="#94A3B8"
+                                          Content="🚀 Windows Açılışında Connect Me'yi Otomatik Başlat (Autostart)"/>
+                            </StackPanel>
                         </Border>
                     </Grid>
                 </TabItem>

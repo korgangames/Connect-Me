@@ -1186,8 +1186,10 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 SenderId = LocalDeviceId,
                 SenderName = LocalDeviceName,
                 SenderPlatform = LocalPlatform,
+                SenderUdpPort = InputUdpPort,
                 ReturnEdge = (int)targetEntranceEdge,
-                NormalizedPosition = normalizedPosition
+                NormalizedPosition = normalizedPosition,
+                IsDraggingShelfItem = isDraggingShelfItem
             };
             await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
         });
@@ -2333,8 +2335,9 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 {
                     var edge = (ScreenEdge)(header.ReturnEdge ?? 0);
                     float norm = (float)(header.NormalizedPosition ?? 0.5);
+                    bool isDragging = header.IsDraggingShelfItem == true;
                     var remoteEp = client.Client.RemoteEndPoint as IPEndPoint ?? new IPEndPoint(IPAddress.Parse(remoteIp), header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort);
-                    RemoteEdgeHandOffReceived?.Invoke(new EdgeHandOffPacket(edge, false, norm), remoteEp);
+                    RemoteEdgeHandOffReceived?.Invoke(new EdgeHandOffPacket(edge, isDragging, norm), remoteEp);
                     Log($"[Kenar Geçişi TCP] '{header.SenderName}' imleç kenar geçişini TCP üzerinden doğruladı ({edge}, %{(int)(norm * 100)}).");
                     break;
                 }
@@ -2490,9 +2493,10 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 {
                     var returnEdge = (ScreenEdge)(header.ReturnEdge ?? 0);
                     float returnPos = (float)(header.NormalizedPosition ?? 0.5);
+                    bool isDragging = header.IsDraggingShelfItem == true;
                     Log($"[Kenar Dönüşü] '{header.SenderName}' ({remoteIp}) TCP sinyaliyle yerel masaüstüne dönüş yaptı ({returnEdge}, %{(int)(returnPos * 100)}).");
                     RemoteEdgeHandOffReceived?.Invoke(
-                        new EdgeHandOffPacket(returnEdge, false, returnPos),
+                        new EdgeHandOffPacket(returnEdge, isDragging, returnPos),
                         new IPEndPoint(IPAddress.Parse(remoteIp), header.SenderUdpPort ?? InputUdpPort));
                     break;
                 }

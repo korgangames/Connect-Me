@@ -1,3 +1,23 @@
+# Connect Me v1.8.27 — Faz 2 Yol Haritası: Zengin Evrensel Pano (Görsel & Dosya Ctrl+C/Ctrl+V), Kenar Sürükle-Bırak ve Otomatik Başlatma
+
+Bu sürüm; Faz 2 yol haritası kapsamındaki zengin evrensel pano (ekran görüntüsü/görsel ve dosya kopyala-yapıştır), ekran kenarından sürükle-bırak dosya aktarımı ve sistem başlangıcında otomatik çalıştırma özelliklerini Windows ve Linux arasında eksiksiz devreye alır:
+
+1. **Zengin Evrensel Pano (`CLIPBOARD_IMAGE` — Ekran Görüntüsü & Görsel Kopyala-Yapıştır):**
+   - Windows (`Win+Shift+S` / `PrintScreen`) veya Linux (`Spectacle` / `wl-copy` / `xclip`) üzerinde panoya kopyalanan ekran görüntüleri ve görseller (`image/png`), SHA-256 içerik özeti doğrulamasıyla TCP 42851 kanalı üzerinden bağlı tüm cihazların panosuna anında aktarılır.
+   - Bir bilgisayarda aldığınız ekran görüntüsünü diğer bilgisayarda doğrudan `Ctrl+V` ile herhangi bir uygulamaya yapıştırabilirsiniz.
+
+2. **Doğrudan Dosya Kopyala-Yapıştır (`Ctrl+C` -> Karşı Bilgisayarda `Ctrl+V`):**
+   - Windows Gezgini (`FileDropList`) veya Linux dosya yöneticisinde (`text/uri-list` — Dolphin / Nautilus) bir dosyayı `Ctrl+C` ile kopyaladığınızda dosya otomatik olarak karşı cihazın `ConnectMe-Shelf` klasörüne aktarılır ve karşı cihazın işletim sistemi dosya panosuna yerleştirilir.
+   - Böylece bir bilgisayarda `Ctrl+C` yaptığınız dosyayı diğer bilgisayarın masaüstüne veya herhangi bir klasörüne doğrudan `Ctrl+V` ile yapıştırabilirsiniz.
+
+3. **Ekran Kenarından Sürükle-Bırak (`EDGE_HANDOFF` + `IsDraggingShelfItem`):**
+   - Fare sol tuşu basılı tutularak (dosya sürüklenirken) ekran sınırından karşı cihaza geçildiğinde hem hızlı UDP `EDGE_HANDOFF` hem de güvenilir TCP `EDGE_HANDOFF` çerçevesinde `isDraggingShelfItem = true` bayrağı korunur ve seçili/panodaki dosyalar hedef cihaza otomatik transfer edilir.
+
+4. **Windows & Linux Açılışta Otomatik Başlatma (Autostart):**
+   - Windows arayüzündeki `🧲 Ortak Cep & Pano` sekmesine `🚀 Windows Açılışında Connect Me'yi Otomatik Başlat (Autostart)` seçeneği (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) eklendi (Linux arayüzündeki `~/.config/autostart/connectme.desktop` ile tam simetrik).
+
+---
+
 # Connect Me v1.8.26 — Linux %25 Erken Kenar Atlama Onarımı: Kompozitör Nöbetçi Doğrulaması ve Libinput İvme Senkronizasyonu
 
 Bu sürüm; Linux çoklu monitör kurulumlarında imlecin ekran sınırına henüz %25 kadar mesafe varken bazen diğer ekrana (Windows'a) erken geçmesi sorununu kökten çözer:

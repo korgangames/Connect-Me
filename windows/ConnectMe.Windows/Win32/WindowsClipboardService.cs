@@ -1,15 +1,17 @@
+using System.Collections.Specialized;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using ConnectMe.Core.Network;
+using ConnectMe.Core.Topology;
 
 namespace ConnectMe.Windows.Win32;
 
 /// <summary>
 /// Monitors Windows Clipboard changes via Win32 AddClipboardFormatListener
-/// and synchronizes text & images bidirectionally with Android and Linux peers.
+/// and synchronizes text, screenshots/images, and copied files bidirectionally with Android and Linux peers.
 /// </summary>
 public sealed class WindowsClipboardService : IDisposable
 {
@@ -18,6 +20,7 @@ public sealed class WindowsClipboardService : IDisposable
     private readonly ConnectMeNetworkNode _network;
     private HwndSource? _hwndSource;
     private bool _suppressNextLocalEvent;
+    private string _lastBroadcastedFileSignature = string.Empty;
 
     public bool IsAutoSyncEnabled { get; set; } = true;
 
@@ -26,6 +29,7 @@ public sealed class WindowsClipboardService : IDisposable
         _network = network;
         _network.RemoteClipboardTextReceived += OnRemoteClipboardTextReceived;
         _network.RemoteClipboardImageReceived += OnRemoteClipboardImageReceived;
+        _network.ShelfItemReceived += OnRemoteShelfFileReceived;
     }
 
     public void AttachToWindow(Window window)
@@ -59,15 +63,7 @@ public sealed class WindowsClipboardService : IDisposable
     {
         try
         {
-            if (System.Windows.Clipboard.ContainsText())
-            {
-                string text = System.Windows.Clipboard.GetText();
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    await _network.BroadcastClipboardTextAsync(text).ConfigureAwait(false);
-                }
-            }
-            else if (System.Windows.Clipboard.ContainsImage())
+            if (System.Windows.Clipboard.ContainsImage())
             {
                 var img = System.Windows.Clipboard.GetImage();
                 if (img != null)
@@ -79,11 +75,122 @@ public sealed class WindowsClipboardService : IDisposable
                     }
                 }
             }
+            else if (System.Windows.Clipboard.ContainsFileDropList())
+            {
+                var fileList = System.Windows.Clipboard.GetFileDropList();
+                if (fileList != null && fileList.Count > 0)
+                {
+                    var validFiles = new List<string>();
+                    foreach (string? f in fileList)
+                    {
+                        if (!string.IsNullOrWhiteSpace(f) && File.Exists(f))
+                        {
+                            var fi = new FileInfo(f);
+                            if (fi.Length <= 100L * 1024 * 1024)
+                            {
+                                validFiles.Add(fi.FullName);
+                            }
+                        }
+                    }
+
+                    if (validFiles.Count > 0)
+                    {
+                        string sig = string.Join("|", validFiles.Select(p =>
+                        {
+                            var fi = new FileInfo(p);
+                            return $"{fi.FullName}:{fi.Length}:{fi.LastWriteTimeUtc.Ticks}";
+                        }));
+
+                        if (sig != _lastBroadcastedFileSignature)
+                        {
+                            _lastBroadcastedFileSignature = sig;
+                            var peers = _network.MutuallyPairedPeers;
+                            foreach (string filePath in validFiles)
+                            {
+                                foreach (var peer in peers)
+                                {
+                                    await _network.SendFileToPeerShelfAsync(peer, filePath).ConfigureAwait(false);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            else if (System.Windows.Clipboard.ContainsText())
+            {
+                string text = System.Windows.Clipboard.GetText();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    await _network.BroadcastClipboardTextAsync(text).ConfigureAwait(false);
+                }
+            }
         }
         catch
         {
             // Clipboard may be temporarily locked by another process
         }
+    }
+
+    public async Task TransferClipboardFilesToPeerAsync(PeerDeviceNode peer)
+    {
+        try
+        {
+            List<string>? filesToTransfer = null;
+            if (System.Windows.Application.Current?.Dispatcher is { } dispatcher)
+            {
+                await dispatcher.InvokeAsync(() =>
+                {
+                    if (System.Windows.Clipboard.ContainsFileDropList())
+                    {
+                        var dropList = System.Windows.Clipboard.GetFileDropList();
+                        if (dropList != null && dropList.Count > 0)
+                        {
+                            filesToTransfer = new List<string>();
+                            foreach (string? f in dropList)
+                            {
+                                if (!string.IsNullOrWhiteSpace(f) && File.Exists(f))
+                                {
+                                    filesToTransfer.Add(f);
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            if (filesToTransfer != null && filesToTransfer.Count > 0)
+            {
+                foreach (string path in filesToTransfer)
+                {
+                    await _network.SendFileToPeerShelfAsync(peer, path).ConfigureAwait(false);
+                }
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private void OnRemoteShelfFileReceived(ShelfItemEntry item)
+    {
+        if (!IsAutoSyncEnabled || item.IsOutgoing || string.IsNullOrWhiteSpace(item.LocalFilePath) || !File.Exists(item.LocalFilePath))
+            return;
+
+        System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
+        {
+            try
+            {
+                var fi = new FileInfo(item.LocalFilePath);
+                _lastBroadcastedFileSignature = $"{fi.FullName}:{fi.Length}:{fi.LastWriteTimeUtc.Ticks}";
+                _suppressNextLocalEvent = true;
+                var collection = new StringCollection { fi.FullName };
+                System.Windows.Clipboard.SetFileDropList(collection);
+            }
+            catch
+            {
+                _suppressNextLocalEvent = false;
+            }
+        });
     }
 
     private void OnRemoteClipboardTextReceived(string text, string senderName)
@@ -132,7 +239,7 @@ public sealed class WindowsClipboardService : IDisposable
         });
     }
 
-    private static byte[] EncodeBitmapSourceToPng(BitmapSource source)
+    public static byte[] EncodeBitmapSourceToPng(BitmapSource source)
     {
         using var ms = new MemoryStream();
         var encoder = new PngBitmapEncoder();

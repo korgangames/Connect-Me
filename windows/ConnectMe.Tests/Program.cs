@@ -40,6 +40,7 @@ public static class Program
         TestWasapiAudioLoopback();
         await TestAudioMatrixAndRoutingAsync();
         await TestRelativeSpatialTopologyAndMultiDeviceColonySyncAsync();
+        await TestRichClipboardImageAndCrossEdgeDragAsync();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -1170,6 +1171,57 @@ public static class Program
         bool isTr = freshStore.IsDeviceTrusted("node-c", out var loadedRec);
         AssertTrue(isTr && loadedRec?.AttachedToDeviceId == "node-b" && Math.Abs(loadedRec.ColonyX - 360) < 0.1,
             "TrustedDeviceStore: Göreceli kenetlenme (AttachedToDeviceId) ve koloni koordinatları başarıyla diske kaydedilip okundu");
+
+        try { Directory.Delete(tempShelf, true); } catch { }
+    }
+
+    private static async Task TestRichClipboardImageAndCrossEdgeDragAsync()
+    {
+        string tempShelf = Path.Combine(Path.GetTempPath(), $"connectme-clipimg-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempShelf);
+
+        await using var nodeA = new ConnectMeNetworkNode("clip-a", "Host A", "windows", tempShelf, fixedPin: "222333");
+        await using var nodeB = new ConnectMeNetworkNode("clip-b", "Linux B", "linux-nobara", tempShelf, fixedPin: "444555");
+
+        nodeA.Start(discoveryPort: 43380, inputUdpPort: 43381, controlTcpPort: 43382);
+        nodeB.Start(discoveryPort: 43390, inputUdpPort: 43391, controlTcpPort: 43392);
+
+        var pBOnA = nodeA.RegisterManualPeer("127.0.0.1", "Linux B", "linux-nobara", udpPort: 43391, tcpPort: 43392, customDeviceId: "clip-b");
+        var pAOnB = nodeB.RegisterManualPeer("127.0.0.1", "Host A", "windows", udpPort: 43381, tcpPort: 43382, customDeviceId: "clip-a");
+
+        await nodeA.SubmitRemotePinForPairingAsync(pBOnA, "444555", rememberDevice: false);
+        await nodeB.SubmitRemotePinForPairingAsync(pAOnB, "222333", rememberDevice: false);
+        await Task.Delay(200);
+
+        // 1. Test CLIPBOARD_IMAGE binary PNG transfer + SHA-256 deduplication
+        byte[]? receivedPngOnB = null;
+        string? receivedSenderOnB = null;
+        nodeB.RemoteClipboardImageReceived += (bytes, sender) =>
+        {
+            receivedPngOnB = bytes;
+            receivedSenderOnB = sender;
+        };
+
+        // Synthetic PNG header + payload
+        byte[] samplePng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03, 0x04, 0xAA, 0xBB, 0xCC, 0xDD };
+        await nodeA.BroadcastClipboardImageAsync(samplePng);
+        await Task.Delay(250);
+
+        AssertTrue(receivedPngOnB != null && receivedPngOnB.SequenceEqual(samplePng) && receivedSenderOnB == "Host A",
+            "Zengin Evrensel Pano (CLIPBOARD_IMAGE): Ekran görüntüsü/PNG ikili verisi TCP üzerinden eksiksiz iletildi");
+
+        // 2. Test Cross-Edge Drag & Drop UDP Handoff with IsDraggingShelfItem = true
+        EdgeHandOffPacket? receivedHandOffOnB = null;
+        nodeB.RemoteEdgeHandOffReceived += (pkt, ep) => receivedHandOffOnB = pkt;
+
+        nodeA.SendEdgeHandOff(pBOnA, ScreenEdge.Left, 0.72f, isDraggingShelfItem: true);
+        await Task.Delay(150);
+
+        AssertTrue(receivedHandOffOnB != null &&
+                   receivedHandOffOnB.Value.TargetEntranceEdge == ScreenEdge.Left &&
+                   receivedHandOffOnB.Value.IsDraggingShelfItem &&
+                   Math.Abs(receivedHandOffOnB.Value.NormalizedPosition - 0.72f) < 0.01f,
+            "Kenar Sürükle-Bırak (EDGE_HANDOFF + IsDraggingShelfItem): Sol tık basılı kenar geçişinde sürükleme bayrağı karşı cihaza iletildi");
 
         try { Directory.Delete(tempShelf, true); } catch { }
     }

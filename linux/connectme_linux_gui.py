@@ -1243,10 +1243,10 @@ class ConnectMeLinuxGui:
 
         card3 = ttk.Frame(tab, style="Card.TFrame", padding=14)
         card3.pack(fill=tk.X, pady=6)
-        ttk.Label(card3, text="📋 Evrensel Pano (Universal Clipboard)", font=("Segoe UI", 11, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
+        ttk.Label(card3, text="📋 Zengin Evrensel Pano & Kenar Sürükle-Bırak (Rich Universal Clipboard)", font=("Segoe UI", 11, "bold"), foreground="#38BDF8").pack(anchor=tk.W)
         clip_backend = "wl-clipboard (Wayland)" if shutil.which("wl-copy") else ("xclip (X11)" if shutil.which("xclip") else "Standart Python Pano Köprüsü")
         ttk.Label(card3, text=f"Pano Arka Ucu: {clip_backend}", foreground="#4ADE80").pack(anchor=tk.W, pady=2)
-        ttk.Label(card3, text="Çift yönlü pano senkronizasyonu aktiftir. Metin kopyaladığınızda tüm onaylı Windows ve Android cihazlara anında iletilir.", foreground="#94A3B8").pack(anchor=tk.W)
+        ttk.Label(card3, text="Çift yönlü zengin pano aktiftir: Metin, ekran görüntüsü/görsel (PNG) ve dosya (Ctrl+C / Ctrl+V veya sol tık basılı tutarak ekran kenarından sürükle-bırak) tüm onaylı cihazlara anında iletilir.", foreground="#94A3B8").pack(anchor=tk.W)
 
     def _build_tab_logs(self):
         tab = ttk.Frame(self.notebook, padding=12)

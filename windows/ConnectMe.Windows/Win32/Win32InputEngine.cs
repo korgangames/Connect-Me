@@ -75,6 +75,7 @@ public sealed class Win32InputEngine : IDisposable
     private bool _winDown;
     private bool _pageUpDown;
     private bool _pageDownDown;
+    private bool _leftButtonDown;
 
     private PeerDeviceNode? _controllingRemotePeer;
     private ScreenEdge _incomingEntryEdge = ScreenEdge.None;
@@ -94,6 +95,7 @@ public sealed class Win32InputEngine : IDisposable
 
     public event Action<PeerDeviceNode?, ScreenEdge, float>? ActiveTargetChanged;
     public event Action<bool>? ScreenLockToggled;
+    public event Action<PeerDeviceNode>? CrossEdgeDragStarted;
 
     public Win32InputEngine(SpatialTopologyEngine topology, ConnectMeNetworkNode network)
     {
@@ -287,7 +289,12 @@ public sealed class Win32InputEngine : IDisposable
             _ => peer.ScreenHeight / 2
         };
 
-        _network.SendEdgeHandOff(peer, targetEntranceEdge, normalizedPosition);
+        bool isDragging = _leftButtonDown;
+        _network.SendEdgeHandOff(peer, targetEntranceEdge, normalizedPosition, isDraggingShelfItem: isDragging);
+        if (isDragging)
+        {
+            CrossEdgeDragStarted?.Invoke(peer);
+        }
         ActiveTargetChanged?.Invoke(peer, localExitEdge, normalizedPosition);
     }
 
@@ -621,6 +628,15 @@ public sealed class Win32InputEngine : IDisposable
 
                 if (remote == null)
                 {
+                    if (msg == WM_LBUTTONDOWN)
+                    {
+                        _leftButtonDown = true;
+                    }
+                    else if (msg == WM_LBUTTONUP)
+                    {
+                        _leftButtonDown = false;
+                    }
+
                     // If we just returned from remote control, Windows message queue might still contain
                     // stale hardware mouse move events that were generated while the cursor was pinned at the screen center (_anchorX, _anchorY).
                     // Suppress those stale anchor-centered mouse events so they don't snap the cursor back to screen center!
@@ -701,9 +717,11 @@ public sealed class Win32InputEngine : IDisposable
                         }
 
                         case WM_LBUTTONDOWN:
+                            _leftButtonDown = true;
                             _network.SendMouseButton(remote, MouseButtonCode.Left, true);
                             return (IntPtr)1;
                         case WM_LBUTTONUP:
+                            _leftButtonDown = false;
                             _network.SendMouseButton(remote, MouseButtonCode.Left, false);
                             return (IntPtr)1;
 

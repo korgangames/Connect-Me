@@ -549,6 +549,9 @@ public sealed class TcpControlHeader
     [JsonPropertyName("normalizedPosition")]
     public double? NormalizedPosition { get; set; }
 
+    [JsonPropertyName("isDraggingShelfItem")]
+    public bool? IsDraggingShelfItem { get; set; }
+
     [JsonPropertyName("edgeOffsetStart")]
     public double? EdgeOffsetStart { get; set; }
 
