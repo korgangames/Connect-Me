@@ -2693,7 +2693,10 @@ public partial class MainWindow : Window
     {
         if (_audioCapture != null && AudioMuteLocalSpeakersCheckBox != null)
         {
-            _audioCapture.MuteLocalWhileStreaming = AudioMuteLocalSpeakersCheckBox.IsChecked == true;
+            // The checkbox is "🔊 Her iki cihazda da çal (PC hoparlörü + Hedef cihaz kulaklık/hoparlör)"
+            // When checked -> do NOT mute local speakers (MuteLocalWhileStreaming = false)
+            // When unchecked (default) -> mute local speakers (MuteLocalWhileStreaming = true)
+            _audioCapture.MuteLocalWhileStreaming = AudioMuteLocalSpeakersCheckBox.IsChecked != true;
         }
     }
 
@@ -2739,7 +2742,11 @@ public partial class MainWindow : Window
             else
             {
                 _audioPlayback.IsEnabled = false;
-                _audioCapture.Start(route.TargetIp, route.TargetUdpPort);
+                if (_audioCapture != null)
+                {
+                    _audioCapture.MuteLocalWhileStreaming = AudioMuteLocalSpeakersCheckBox?.IsChecked != true;
+                    _audioCapture.Start(route.TargetIp, route.TargetUdpPort);
+                }
 
                 AudioHubBadge.Background = new SolidColorBrush(Color.FromRgb(58, 45, 20));
                 AudioHubBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(245, 158, 11));

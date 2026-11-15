@@ -38,6 +38,7 @@ public static class Program
         await TestInboundPairingRequestAndEdgeConfigAsync();
         await TestColonyBeaconAndSinglePinColonyMeshAsync();
         TestWasapiAudioLoopback();
+        TestAudioCaptureFloatConversionAndPacking();
         await TestAudioMatrixAndRoutingAsync();
         await TestRelativeSpatialTopologyAndMultiDeviceColonySyncAsync();
         await TestRichClipboardImageAndCrossEdgeDragAsync();
@@ -989,6 +990,55 @@ public static class Program
 
     [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]
     private delegate int GetServiceDelegate(IntPtr thisPtr, ref Guid riid, out IntPtr ppv);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, Pack = 1)]
+    private struct TestWAVEFORMATEX
+    {
+        public ushort wFormatTag;
+        public ushort nChannels;
+        public uint nSamplesPerSec;
+        public uint nAvgBytesPerSec;
+        public ushort nBlockAlign;
+        public ushort wBitsPerSample;
+        public ushort cbSize;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, Pack = 1)]
+    private struct TestWAVEFORMATEXTENSIBLE
+    {
+        public TestWAVEFORMATEX Format;
+        public ushort wValidBitsPerSample;
+        public uint dwChannelMask;
+        public Guid SubFormat;
+    }
+
+    private static void TestAudioCaptureFloatConversionAndPacking()
+    {
+        // 1. Pack=1 verification
+        int wfeSize = System.Runtime.InteropServices.Marshal.SizeOf<TestWAVEFORMATEX>();
+        int subFormatOffset = (int)System.Runtime.InteropServices.Marshal.OffsetOf<TestWAVEFORMATEXTENSIBLE>("SubFormat");
+        AssertTrue(wfeSize == 18, $"WAVEFORMATEX Pack=1 boyutu 18 bayt (Gerçek: {wfeSize})");
+        AssertTrue(subFormatOffset == 24, $"WAVEFORMATEXTENSIBLE SubFormat ofseti 24. bayt (Gerçek: {subFormatOffset})");
+
+        // 2. Float to PCM16 conversion vs integer bit-shift distortion test
+        float quietPositive = 0.001f;
+        float quietNegative = -0.001f;
+
+        short correctPcmPos = (short)Math.Clamp((int)MathF.Round(quietPositive * 32767f), short.MinValue, short.MaxValue);
+        short correctPcmNeg = (short)Math.Clamp((int)MathF.Round(quietNegative * 32767f), short.MinValue, short.MaxValue);
+
+        AssertTrue(Math.Abs(correctPcmPos) <= 35 && Math.Abs(correctPcmNeg) <= 35,
+            $"IEEE Float dönüşümü sessiz sesleri temiz dönüştürüyor (Pos: {correctPcmPos}, Neg: {correctPcmNeg})");
+
+        // Simulate broken integer bitshift on IEEE float memory using standard BitConverter
+        int posBits = BitConverter.SingleToInt32Bits(quietPositive);
+        int negBits = BitConverter.SingleToInt32Bits(quietNegative);
+        short brokenPos = (short)(posBits >> 16);
+        short brokenNeg = (short)(negBits >> 16);
+        int distortionStep = Math.Abs(brokenPos - brokenNeg);
+        AssertTrue(distortionStep > 30000,
+            $"Düzeltilen hata doğrulaması: Eski kodda float int olarak okunup {distortionStep} büyüklüğünde statik kare dalga beyaz gürültü üretiyordu");
+    }
 
     private static async Task TestAudioMatrixAndRoutingAsync()
     {

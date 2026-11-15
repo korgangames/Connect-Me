@@ -53,7 +53,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.27"
+    return "1.8.30"
 
 VERSION = _resolve_app_version()
 
@@ -2039,12 +2039,16 @@ class ConnectMeLinuxNode:
         self.cached_tk_uri_blobs: List[str] = []
         self.udp_sock: Optional[socket.socket] = None
 
-        # Audio streaming (Transmitter: Linux -> Windows)
+        # Audio streaming (Transmitter: Linux -> Windows/Android)
         self.audio_streaming = False
         self.audio_target_ip: Optional[str] = None
         self.audio_proc: Optional[subprocess.Popen] = None
         self.audio_thread: Optional[threading.Thread] = None
         self.audio_seq = 0
+        self.mute_local_while_streaming: bool = True
+        self._null_sink_module_id: Optional[str] = None
+        self._saved_default_sink: Optional[str] = None
+        self._cleanup_lingering_null_sinks()
 
         # Audio Receiver (Sink: Android/Windows -> Linux Headphones/Speakers)
         self.audio_rx_sock: Optional[socket.socket] = None
@@ -4646,6 +4650,8 @@ class ConnectMeLinuxNode:
                             if not desc:
                                 desc = name
                             if name:
+                                if name == "connectme_silent_sink":
+                                    continue
                                 sinks.append({
                                     "deviceId": self.device_id,
                                     "deviceName": self.device_name,
@@ -4665,6 +4671,8 @@ class ConnectMeLinuxNode:
                             parts = line.split()
                             if len(parts) >= 2:
                                 s_id = parts[1]
+                                if s_id == "connectme_silent_sink":
+                                    continue
                                 sinks.append({
                                     "deviceId": self.device_id,
                                     "deviceName": self.device_name,
@@ -4677,6 +4685,20 @@ class ConnectMeLinuxNode:
                     pass
 
         return sinks
+
+    def _cleanup_lingering_null_sinks(self) -> None:
+        """Unloads any leftover connectme_silent_sink module if daemon exited abnormally."""
+        if not shutil.which("pactl"):
+            return
+        try:
+            res = subprocess.run(["pactl", "list", "short", "modules"], capture_output=True, text=True, timeout=1.5)
+            if res.returncode == 0 and res.stdout.strip():
+                for line in res.stdout.strip().splitlines():
+                    if "module-null-sink" in line and "connectme_silent_sink" in line:
+                        mod_id = line.split()[0]
+                        subprocess.run(["pactl", "unload-module", mod_id], capture_output=True, timeout=1.0)
+        except Exception:
+            pass
 
     def broadcast_local_audio_sinks(self) -> None:
         """Broadcasts this machine's audio output devices to all paired peers."""
@@ -4761,31 +4783,67 @@ class ConnectMeLinuxNode:
             self.send_tcp_control_to_peer(peer, hdr_route)
 
     def start_audio_streaming(self, target_ip: str) -> bool:
-        """Starts real-time PipeWire / PulseAudio recording and streams 48kHz S16LE stereo PCM to target Windows PC."""
+        """Starts real-time PipeWire / PulseAudio recording and streams 48kHz S16LE stereo PCM to target Windows/Android/Linux."""
         if self.audio_streaming:
             self.stop_audio_streaming()
 
         rec_cmd = None
-        def_sink = ""
-        if shutil.which("pactl"):
-            try:
-                res = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True, timeout=1.0)
-                if res.returncode == 0:
-                    def_sink = res.stdout.strip()
-            except Exception:
-                pass
+        monitor_device = ""
 
-        monitor_device = f"{def_sink}.monitor" if def_sink else "@DEFAULT_MONITOR@"
+        # 1. Local speaker muting via Virtual Null Sink redirection (keeps monitor recording 100% unmuted and crystal-clear)
+        if self.mute_local_while_streaming and shutil.which("pactl"):
+            try:
+                res_cur = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True, timeout=1.0)
+                if res_cur.returncode == 0:
+                    orig_sink = res_cur.stdout.strip()
+                    if orig_sink and orig_sink != "connectme_silent_sink":
+                        self._saved_default_sink = orig_sink
+
+                # Clean up any leftover module first
+                self._cleanup_lingering_null_sinks()
+
+                # Load module-null-sink
+                res_mod = subprocess.run([
+                    "pactl", "load-module", "module-null-sink",
+                    "sink_name=connectme_silent_sink",
+                    'sink_properties=device.description="ConnectMe_Sessiz_Ses_Aktarimi"'
+                ], capture_output=True, text=True, timeout=2.0)
+                if res_mod.returncode == 0 and res_mod.stdout.strip().isdigit():
+                    self._null_sink_module_id = res_mod.stdout.strip()
+
+                # Set default sink to connectme_silent_sink so all new application audio streams route silently
+                subprocess.run(["pactl", "set-default-sink", "connectme_silent_sink"], capture_output=True, timeout=1.0)
+
+                # Move active sink-inputs to connectme_silent_sink so existing music/video instantly mutes on physical speakers
+                res_inputs = subprocess.run(["pactl", "list", "short", "sink-inputs"], capture_output=True, text=True, timeout=1.0)
+                if res_inputs.returncode == 0 and res_inputs.stdout.strip():
+                    for line in res_inputs.stdout.strip().splitlines():
+                        parts = line.split()
+                        if parts and parts[0].isdigit():
+                            subprocess.run(["pactl", "move-sink-input", parts[0], "connectme_silent_sink"], capture_output=True, timeout=0.5)
+
+                monitor_device = "connectme_silent_sink.monitor"
+                self.log(f"[Ses Matrisi] 🔇 Yerel Linux hoparlörü sessize alındı (Ses sanal Null-Sink üzerinden aktarılıyor).")
+            except Exception as e:
+                self.log(f"[Ses Uyarı] Null sink oluşturulamadı: {e}")
+                monitor_device = f"{self._saved_default_sink}.monitor" if self._saved_default_sink else "@DEFAULT_MONITOR@"
+        else:
+            def_sink = ""
+            if shutil.which("pactl"):
+                try:
+                    res = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True, timeout=1.0)
+                    if res.returncode == 0:
+                        def_sink = res.stdout.strip()
+                except Exception:
+                    pass
+            monitor_device = f"{def_sink}.monitor" if def_sink else "@DEFAULT_MONITOR@"
 
         if shutil.which("parec"):
-            rec_cmd = ["parec", "-d", monitor_device, "--format=s16le", "--rate=48000", "--channels=2"]
+            rec_cmd = ["parec", "--raw", "-d", monitor_device, "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=15"]
         elif shutil.which("pw-record"):
-            if def_sink:
-                rec_cmd = ["pw-record", "--raw", f"--target={def_sink}.monitor", "--format=s16", "--rate=48000", "--channels=2", "-"]
-            else:
-                rec_cmd = ["pw-record", "--raw", "--format=s16", "--rate=48000", "--channels=2", "-"]
+            rec_cmd = ["pw-record", "--raw", f"--target={monitor_device}", "--format=s16", "--rate=48000", "--channels=2", "-"]
         elif shutil.which("ffmpeg"):
-            rec_cmd = ["ffmpeg", "-loglevel", "quiet", "-f", "pulse", "-i", "default", "-f", "s16le", "-ar", "48000", "-ac", "2", "-"]
+            rec_cmd = ["ffmpeg", "-loglevel", "quiet", "-f", "pulse", "-i", monitor_device, "-f", "s16le", "-ar", "48000", "-ac", "2", "-"]
 
         if not rec_cmd:
             self.log("[Ses Hatası] ❌ pw-record veya parec bulunamadı (PipeWire/PulseAudio gereklidir).")
@@ -4800,16 +4858,17 @@ class ConnectMeLinuxNode:
             )
             time.sleep(0.05)
             if self.audio_proc.poll() is not None:
+                # Fallback to default monitor, NEVER to microphone!
                 if shutil.which("parec"):
                     self.audio_proc = subprocess.Popen(
-                        ["parec", "--format=s16le", "--rate=48000", "--channels=2"],
+                        ["parec", "--raw", "-d", "@DEFAULT_MONITOR@", "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=15"],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
                         bufsize=3840,
                     )
                 elif shutil.which("pw-record"):
                     self.audio_proc = subprocess.Popen(
-                        ["pw-record", "--raw", "--format=s16", "--rate=48000", "--channels=2", "-"],
+                        ["pw-record", "--raw", "--target=@DEFAULT_MONITOR@", "--format=s16", "--rate=48000", "--channels=2", "-"],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
                         bufsize=3840,
@@ -4821,14 +4880,14 @@ class ConnectMeLinuxNode:
                 target=self._audio_streaming_worker, args=(target_ip,), daemon=True
             )
             self.audio_thread.start()
-            self.log(f"[Ses Akışı] 🎧 Ses yakalama başlatıldı -> {target_ip}:{AUDIO_STREAM_UDP_PORT} (48kHz Stereo S16LE)")
+            self.log(f"[Ses Akışı] 🎧 Ses yakalama başlatıldı -> {target_ip}:{AUDIO_STREAM_UDP_PORT} (48kHz Stereo S16LE, Kaynak: {monitor_device})")
             return True
         except Exception as ex:
             self.log(f"[Ses Hatası] ❌ Ses akışı başlatılamadı: {ex}")
             return False
 
     def stop_audio_streaming(self) -> None:
-        """Stops the audio recording subprocess and UDP transmission."""
+        """Stops the audio recording subprocess, UDP transmission, and restores Linux physical audio outputs."""
         self.audio_streaming = False
         if self.audio_proc:
             try:
@@ -4837,20 +4896,62 @@ class ConnectMeLinuxNode:
             except Exception:
                 pass
             self.audio_proc = None
-        self.log("[Ses Akışı] ⏹️ Ses akışı durduruldu.")
+
+        if shutil.which("pactl"):
+            target_restore = self._saved_default_sink
+            if not target_restore or target_restore == "connectme_silent_sink":
+                try:
+                    res_s = subprocess.run(["pactl", "list", "short", "sinks"], capture_output=True, text=True, timeout=1.0)
+                    if res_s.returncode == 0 and res_s.stdout.strip():
+                        for l in res_s.stdout.strip().splitlines():
+                            parts = l.split()
+                            if len(parts) >= 2 and parts[1] != "connectme_silent_sink":
+                                target_restore = parts[1]
+                                break
+                except Exception:
+                    pass
+
+            if target_restore:
+                try:
+                    subprocess.run(["pactl", "set-default-sink", target_restore], capture_output=True, timeout=1.0)
+                    res_inputs = subprocess.run(["pactl", "list", "short", "sink-inputs"], capture_output=True, text=True, timeout=1.0)
+                    if res_inputs.returncode == 0 and res_inputs.stdout.strip():
+                        for line in res_inputs.stdout.strip().splitlines():
+                            parts = line.split()
+                            if parts and parts[0].isdigit():
+                                subprocess.run(["pactl", "move-sink-input", parts[0], target_restore], capture_output=True, timeout=0.5)
+                except Exception:
+                    pass
+
+            if self._null_sink_module_id:
+                try:
+                    subprocess.run(["pactl", "unload-module", str(self._null_sink_module_id)], capture_output=True, timeout=1.0)
+                except Exception:
+                    pass
+                self._null_sink_module_id = None
+            else:
+                self._cleanup_lingering_null_sinks()
+
+        self._saved_default_sink = None
+        self.log("[Ses Akışı] ⏹️ Ses akışı durduruldu ve yerel ses çıkışları geri yüklendi.")
 
     def _audio_streaming_worker(self, target_ip: str) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        chunk_size = 960  # 240 samples * 2 ch * 2 bytes = 5ms @ 48kHz (MTU-safe 974B UDP packet)
+        chunk_size = 960  # 240 samples * 2 ch * 2 bytes = 5ms @ 48kHz (Strict 4-byte frame aligned)
+        buf = bytearray()
         while self.audio_streaming and self.audio_proc and self.audio_proc.stdout:
             try:
                 raw = self.audio_proc.stdout.read(chunk_size)
                 if not raw:
                     break
-                self.audio_seq = (self.audio_seq + 1) & 0xFFFF
-                # MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, channels(1B), sample_rate(4B), bits_per_sample(1B), seq(2B), pcm_len(2B)
-                hdr = struct.pack("<BBBBBIBHH", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, 2, 48000, 16, self.audio_seq, len(raw))
-                sock.sendto(hdr + raw, (target_ip, AUDIO_STREAM_UDP_PORT))
+                buf.extend(raw)
+                while len(buf) >= chunk_size:
+                    chunk = bytes(buf[:chunk_size])
+                    del buf[:chunk_size]
+                    self.audio_seq = (self.audio_seq + 1) & 0xFFFF
+                    # MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, channels(1B), sample_rate(4B), bits_per_sample(1B), seq(2B), pcm_len(2B)
+                    hdr = struct.pack("<BBBBBIBHH", MAGIC_0, MAGIC_1, PROTO_VER, PACKET_AUDIO_CHUNK, 2, 48000, 16, self.audio_seq, chunk_size)
+                    sock.sendto(hdr + chunk, (target_ip, AUDIO_STREAM_UDP_PORT))
             except Exception:
                 break
         sock.close()
@@ -4945,17 +5046,17 @@ class ConnectMeLinuxNode:
                     candidates = []
                     if shutil.which("pacat"):
                         if target_sink and target_sink != "default":
-                            candidates.append(("pacat (özel çıkış)", ["pacat", "--playback", "-d", str(target_sink), f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=50"]))
-                        candidates.append(("pacat (varsayılan)", ["pacat", "--playback", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=50"]))
+                            candidates.append(("pacat (özel çıkış)", ["pacat", "--playback", "--raw", "-d", str(target_sink), f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=50"]))
+                        candidates.append(("pacat (varsayılan)", ["pacat", "--playback", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=50"]))
 
                     if shutil.which("pw-cat"):
                         if target_sink and target_sink != "default":
-                            candidates.append(("pw-cat (özel çıkış)", ["pw-cat", "-p", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "-"]))
-                        candidates.append(("pw-cat (varsayılan)", ["pw-cat", "-p", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "-"]))
+                            candidates.append(("pw-cat (özel çıkış)", ["pw-cat", "-p", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
+                        candidates.append(("pw-cat (varsayılan)", ["pw-cat", "-p", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
                     elif shutil.which("pw-play"):
                         if target_sink and target_sink != "default":
-                            candidates.append(("pw-play (özel çıkış)", ["pw-play", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "-"]))
-                        candidates.append(("pw-play (varsayılan)", ["pw-play", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "-"]))
+                            candidates.append(("pw-play (özel çıkış)", ["pw-play", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
+                        candidates.append(("pw-play (varsayılan)", ["pw-play", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
 
                     if shutil.which("paplay"):
                         if target_sink and target_sink != "default":
@@ -5000,9 +5101,10 @@ class ConnectMeLinuxNode:
                         last_failure_time = time.time()
                         active_playback_proc = None
 
-                if active_playback_proc and active_playback_proc.stdin:
+                aligned_len = len(pcm_data) - (len(pcm_data) % 4)
+                if active_playback_proc and active_playback_proc.stdin and aligned_len > 0:
                     try:
-                        active_playback_proc.stdin.write(pcm_data)
+                        active_playback_proc.stdin.write(pcm_data[:aligned_len])
                         active_playback_proc.stdin.flush()
                     except BrokenPipeError:
                         active_playback_proc = None

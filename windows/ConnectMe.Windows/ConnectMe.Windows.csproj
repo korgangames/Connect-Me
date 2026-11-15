@@ -11,10 +11,10 @@
     <ApplicationIcon>Assets\connectme.ico</ApplicationIcon>
     <RootNamespace>ConnectMe.Windows</RootNamespace>
     <AssemblyName>ConnectMe.Windows</AssemblyName>
-    <Version>1.8.29</Version>
-    <AssemblyVersion>1.8.29</AssemblyVersion>
-    <FileVersion>1.8.29</FileVersion>
-    <InformationalVersion>1.8.29 (v1-8-29)</InformationalVersion>
+    <Version>1.8.30</Version>
+    <AssemblyVersion>1.8.30</AssemblyVersion>
+    <FileVersion>1.8.30</FileVersion>
+    <InformationalVersion>1.8.30 (v1-8-30)</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

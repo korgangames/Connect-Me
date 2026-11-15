@@ -1126,6 +1126,23 @@ class ConnectMeLinuxGui:
         self.audio_refresh_sinks_btn = ttk.Button(btn_row, text="🔍 Çıkışları Yenile", command=self._refresh_audio_sinks_click)
         self.audio_refresh_sinks_btn.pack(side=tk.LEFT, padx=6)
 
+        # Mute local speakers toggle (default: false -> local speakers muted while streaming)
+        self.both_speakers_var = tk.BooleanVar(value=not getattr(self.node, "mute_local_while_streaming", True))
+        def _on_both_speakers_toggle():
+            self.node.mute_local_while_streaming = not self.both_speakers_var.get()
+            self._log(f"[Ses Ayarı] Yerel hoparlör: {'Açık (Her iki cihaz)' if self.both_speakers_var.get() else 'Sessiz (Yalnızca hedef cihaz)'}")
+
+        self.both_speakers_chk = tk.Checkbutton(
+            matrix_card,
+            text="🔊 Her iki cihazda da çal (Yerel Linux hoparlörü + Hedef cihaz kulaklık/hoparlör)",
+            variable=self.both_speakers_var,
+            command=_on_both_speakers_toggle,
+            bg="#0F172A", fg="#94A3B8", selectcolor="#0B1120",
+            activebackground="#0F172A", activeforeground="#F8FAFC",
+            font=("Segoe UI", 9)
+        )
+        self.both_speakers_chk.pack(anchor=tk.W, pady=(6, 2))
+
         # Status badge / indicator
         self.audio_matrix_status_lbl = ttk.Label(matrix_card, text="Durum: ⚪ Boşta (Her cihaz kendi yerel sesini çalıyor)", font=("Segoe UI", 10, "bold"), foreground="#A5B4FC")
         self.audio_matrix_status_lbl.pack(anchor=tk.W, pady=(8, 2))

@@ -505,7 +505,7 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     // Win32 Native Interop (winmm.dll)
     // =========================================================================
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct WAVEFORMATEX
     {
         public ushort wFormatTag;

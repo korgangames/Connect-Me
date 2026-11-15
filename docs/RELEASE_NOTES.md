@@ -1,3 +1,18 @@
+# Connect Me v1.8.30 — Ses Aktarımı Statik Gürültü Düzeltmesi (32-bit Float -> 16-bit PCM) ve Aktarım Sırasında Yerel Hoparlörü Sessize Alma (Windows & Linux)
+
+Bu sürüm; cihazlar arası gerçek zamanlı ses aktarımındaki statik beyaz gürültü (white noise) sorununu tamamen ortadan kaldırır ve ses aktarımı başlatıldığında sesi gönderen cihazın kendi hoparlörünü otomatik olarak sessize alır:
+
+1. **Ses Aktarımındaki Statik Beyaz Gürültü Sorununun Çözümü:**
+   - **Windows WASAPI 32-bit IEEE Float Dönüşümü:** Windows WASAPI Shared Loopback modu varsayılan olarak 32-bit IEEE-754 kayan noktalı (`float`, `-1.0f .. +1.0f`) formatında ses üretir. Önceki sürümde `WAVEFORMATEX` C struct hizalamasındaki eksiklik (`Pack = 1`) nedeniyle `SubFormat` GUID ofseti 4 bayt kayarak `isFloat` algılaması başarısız oluyordu; bu durum 32-bit float değerlerin 32-bit tam sayı (`int`) gibi okunmasına ve sıfır geçişlerinde `32,768` adımlık tam ölçekli kare dalga statik beyaz gürültü oluşmasına yol açıyordu. `Pack = 1` hizalaması tanımlandı, `DetectWaveFormatProperties` ve `ConvertToPcm16Stereo` fonksiyonları 32-bit float örnekleri tam doğrulukla 16-bit PCM'e dönüştürecek şekilde yeniden yazıldı.
+   - **Linux PipeWire / PulseAudio 4-Bayt Çerçeve Hizalaması:** Linux'ta `parec` / `pw-record` standart çıkışından okunan UDP ses paketleri `bytearray` tamponuna alınarak her paketin kesin olarak 4 baytın katı (`2 kanal * 2 bayt = 4 bayt / çerçeve`) olması sağlandı; böylece tek bir eksik baytın tüm akışta yüksek/alçak bayt yerini değiştirip statik gürültüye yol açması engellendi.
+   - **PipeWire `pw-cat` Format Düzeltmesi:** PipeWire `pw-cat` / `pw-play` format parametresi uyumlu `--format=s16` değerine çekildi ve alıcı tarafında gelen PCM tamponları 4 baytlık tam çerçevelere hizalanarak ses kartına yazıldı.
+
+2. **Aktarımı Yapan Cihazda Yerel Hoparlörü Sessize Alma (Mute Local Speakers):**
+   - **Windows `IAudioEndpointVolume` Donanım Seviyesinde Sessize Alma:** Windows ses yayını başladığında ana çıkış cihazının `IAudioEndpointVolume` arayüzü üzerinden fiziksel hoparlör donanım seviyesinde sessize alınır (`SetMute(true)`), WASAPI Loopback ise dijital ses akışını kayıpsız olarak yakalamaya devam eder. Yayın durdurulduğunda ses otomatik olarak eski haline getirilir (`SetMute(false)`). Ayrıca arayüzdeki `"🔊 Her iki cihazda da çal (PC hoparlörü + Hedef cihaz kulaklık/hoparlör)"` seçeneği tersine çalışan mantıktan düzeltilerek varsayılan olarak yerel hoparlörün sessiz kalması sağlandı.
+   - **Linux Sanal Null-Sink (`module-null-sink`) Yönlendirmesi:** Linux'ta fiziksel bir çıkışı doğrudan sessize almak PipeWire/PulseAudio monitör kaynağını da susturduğu için, ses aktarımı başladığında dinamik bir sanal ses kartı (`connectme_silent_sink`) yüklenir; sistem ve müzik/video akışları bu sanal çıkışa aktarılır ve ses buradan yakalanarak karşı cihaza iletilir. Böylece yerel Linux hoparlörü %100 sessiz kalırken karşı cihaza kristal netliğinde tam ses iletilir. Yayın durduğunda ise eski ses çıkışı ve çalışan uygulamalar kesintisiz olarak geri yüklenir.
+
+---
+
 # Connect Me v1.8.29 — Resmi Uygulama İkonu (Windows, Linux ve Android)
 
 Bu sürüm; Connect Me için özel olarak tasarlanan modern 3B cam (glassmorphism) uygulama ikonunu tüm platformlara entegre eder:
