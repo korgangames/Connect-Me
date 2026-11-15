@@ -1,3 +1,16 @@
+# Connect Me v1.8.29 — Resmi Uygulama İkonu (Windows, Linux ve Android)
+
+Bu sürüm; Connect Me için özel olarak tasarlanan modern 3B cam (glassmorphism) uygulama ikonunu tüm platformlara entegre eder:
+
+1. **Windows (`.ico` & Görev Çubuğu / Pencere İkonu):**
+   - Çoklu çözünürlüklü (`16x16`–`256x256`) `Assets/connectme.ico` ve `Assets/connectme.png` dosyaları `ConnectMe.Windows.exe` yürütülebilir dosyasına (`ApplicationIcon`) ve ana pencere başlık çubuğuna (`MainWindow.xaml`) eklendi.
+2. **Linux (`connectme_icon.png` & KDE/GNOME Başlat Menüsü):**
+   - `linux/connectme_icon.png` oluşturuldu; Tkinter pencere/görev çubuğu ikonu (`iconphoto`) ve `ConnectMe.desktop` başlat menüsü kısayolu otomatik olarak yeni ikonu kullanacak şekilde güncellendi.
+3. **Android (`mipmap-*` & Yuvarlak / Kare Başlatıcı İkonu):**
+   - Tüm ekran yoğunlukları (`mdpi`, `hdpi`, `xhdpi`, `xxhdpi`, `xxxhdpi`) için `ic_launcher.png` ve `ic_launcher_round.png` üretilerek `AndroidManifest.xml` içerisine tanımlandı.
+
+---
+
 # Connect Me v1.8.28 — Ortak Cep Klasör Seçimi, Linux Dosya Seçici Karanlık Tema ve Sürükle-Bırak / Yapıştır (Ctrl+V) Dosya Aktarımı Düzeltmesi
 
 Bu sürüm; Linux arayüzünde "Dosya Gönder" penceresindeki beyaz üstüne beyaz yazı okunabilirlik sorununu giderir, her cihazda (Windows ve Linux) Ortak Cep (İndirilenler) klasörünü seçilebilir hale getirir ve dosya sürükle-bırak ile yapıştırarak (`Ctrl+V`) dosya gönderme sistemini tam uyumlu hale getirir:

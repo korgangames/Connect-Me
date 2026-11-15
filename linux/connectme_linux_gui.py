@@ -622,6 +622,26 @@ class ConnectMeLinuxGui:
         self.root.minsize(860, 620)
         self.root.configure(bg="#0B1120")
 
+        # Uygulama İkonunu Yükle (Pencere, Görev Çubuğu ve .desktop Kısayolu)
+        try:
+            icon_file = Path(__file__).resolve().parent / "connectme_icon.png"
+            if icon_file.exists():
+                self._app_icon_img = tk.PhotoImage(file=str(icon_file))
+                self.root.iconphoto(True, self._app_icon_img)
+                for d_path in (
+                    Path.home() / ".local" / "share" / "applications" / "ConnectMe.desktop",
+                    Path.home() / ".config" / "autostart" / "ConnectMe.desktop",
+                ):
+                    if d_path.exists():
+                        try:
+                            txt = d_path.read_text(encoding="utf-8")
+                            if "Icon=preferences-desktop-display" in txt:
+                                d_path.write_text(txt.replace("Icon=preferences-desktop-display", f"Icon={icon_file}"), encoding="utf-8")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         self.selected_peer_id: str = ""
         self.peer_canvas_coords = {}
         self._drag_data = {"peer_id": None, "start_x": 0, "start_y": 0, "orig_x": 0, "orig_y": 0}
@@ -3235,6 +3255,8 @@ class ConnectMeLinuxGui:
 
         if self.autostart_var.get():
             curr_dir = Path(__file__).resolve().parent
+            icon_path = curr_dir / "connectme_icon.png"
+            icon_val = str(icon_path) if icon_path.exists() else "preferences-desktop-display"
             content = f"""[Desktop Entry]
 Version=1.0
 Type=Application
@@ -3242,7 +3264,7 @@ Name=Connect Me
 GenericName=Çapraz Cihaz KVM ve Pano Paylaşımı
 Exec=python3 "{curr_dir}/connectme_linux_gui.py"
 Path={curr_dir}
-Icon=preferences-desktop-display
+Icon={icon_val}
 Terminal=false
 Categories=Utility;Network;
 StartupNotify=false

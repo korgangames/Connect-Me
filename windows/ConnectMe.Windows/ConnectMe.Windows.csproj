@@ -8,13 +8,19 @@
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\connectme.ico</ApplicationIcon>
     <RootNamespace>ConnectMe.Windows</RootNamespace>
     <AssemblyName>ConnectMe.Windows</AssemblyName>
-    <Version>1.8.28</Version>
-    <AssemblyVersion>1.8.28</AssemblyVersion>
-    <FileVersion>1.8.28</FileVersion>
-    <InformationalVersion>1.8.28 (v1-8-28)</InformationalVersion>
+    <Version>1.8.29</Version>
+    <AssemblyVersion>1.8.29</AssemblyVersion>
+    <FileVersion>1.8.29</FileVersion>
+    <InformationalVersion>1.8.29 (v1-8-29)</InformationalVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\connectme.ico" />
+    <Resource Include="Assets\connectme.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ConnectMe.Core\ConnectMe.Core.csproj" />
