@@ -1,3 +1,23 @@
+# Connect Me v1.8.26 — Linux %25 Erken Kenar Atlama Onarımı: Kompozitör Nöbetçi Doğrulaması ve Libinput İvme Senkronizasyonu
+
+Bu sürüm; Linux çoklu monitör kurulumlarında imlecin ekran sınırına henüz %25 kadar mesafe varken bazen diğer ekrana (Windows'a) erken geçmesi sorununu kökten çözer:
+
+1. **2px Görünmez Dış Kenar Nöbetçisi ve Gerçek Kompozitör Kenar Doğrulaması (`_is_os_edge_confirmed`):**
+   - **Kök Neden:**
+     a) `v1.8.25` sürümünde XWayland koordinat donmasını engellemek için `ScreenEdgeSentinels._do_check()` devre dışı bırakıldığından, `LinuxHardwareInputGrabber` yalnızca ham `evdev` fare darbelerini (`self.cur_x += dx`) toplayarak açık döngü (dead-reckoning) konum tahmini yapıyordu.
+     b) Kullanıcı fareyi sola doğru hızlıca çektiğinde KDE Plasma / `libinput` adaptif ivme eğrisi görünür işletim sistemi imlecini ~1.4x–1.5x oranında sola taşırken, doğrusal `evdev` sayacı 1.0x oranında hareket ediyor; ardından fare normal hızda sağa hareket ettirildiğinde `self.cur_x` görünür imlecin ~450–500 piksel (1920px ekranın ~%25'i) önünde giderek ekranın %75'inde (`max_x`) sınır değerine ulaşıp erken geçiş tetikliyordu.
+   - **Çözüm:**
+     - `ScreenEdgeSentinels` içerisine yalnızca fiziksel monitörlerin dış sınırlarında (iç monitör dikişlerine dokunmayan) 2 piksellik tamamen görünmez (`-alpha 0.01`, `bg="#000000"`, `-topmost True`) XWayland nöbetçi şeritleri ve değişim duyarlı (`(cur_x, cur_y) != (_last_raw_x, _last_raw_y)`) canlı koordinat kalibrasyonu eklendi.
+     - Görünür işletim sistemi imleci ekranın %75'indeyken (yerel bir Wayland penceresi üzerinde olsa dahi) henüz dış kenardaki 2px nöbetçi şeridine değmediği için `_is_os_edge_confirmed` `False` döner ve `evdev` sayacı sınıra erken ulaşsa bile imlecin %25 erken atlaması fiziksel olarak engellenir.
+     - Görünür imleç gerçek fiziksel dış sınıra değdiği milisaniyede Wayland kompozitörü (`kwin_wayland`) 2px nöbetçi şeridine gerçek ekran koordinatını iletir, `_is_os_edge_confirmed` `True` olur ve geçiş sıfır gecikmeyle tam ekran sınırında gerçekleşir.
+
+2. **Simetrik `libinput` Hız Eğrisi ve Dönüş Koordinatı Hizalaması:**
+   - `LinuxHardwareInputGrabber._process_local_mouse_move` ve `_udp_input_loop` içerisine `libinput` adaptif hız profiliyle uyumlu kayan noktalı (`_cur_x_f`, `_cur_y_f`) hız ölçeklemesi eklendi; hızlı sola çekişler ile yavaş/normal sağa hareketler arasındaki ivme farkından kaynaklanan kayma giderildi.
+   - Cihaz atanmamış dikey dış ekran sınırlarına (ör. 1. monitörün en sol kenarı `x = 0`) 1 piksellik otomatik kalibrasyon şeridi eklenerek imleç sol sınıra çarptığında olası tüm sapmaların anında sıfırlanması sağlandı.
+   - Windows'tan Linux'a dönüşte (`sync_cursor_at_edge`) hem yatay hem dikey (`dy_adjust`) eksende gerçek imleç hizalaması yapılarak dönüş sonrası konum kayması önlendi.
+
+---
+
 # Connect Me v1.8.25 — Linux Çoklu Monitör Kenar Geçiş Kararlılığı ve Windows Çift Yönlü İmleç Dönüşü Onarımı
 
 Bu sürüm; çoklu monitör kullanan Linux sistemlerinde Windows'a geçerken imlecin ikinci ekranın ortasından ve değişen bir sütun üzerinden erken atlaması sorununu ve Windows'a geçen imlecin Windows'tan geri dönememe / tekrar Windows'a geçememe kilitlenmesini kökten çözer:

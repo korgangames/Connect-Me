@@ -51,7 +51,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.18"
+    return "1.8.26"
 
 VERSION = _resolve_app_version()
 
@@ -1173,6 +1173,17 @@ class LinuxHardwareInputGrabber:
         self._coord_lock = threading.Lock()
         self.cur_x = 960
         self.cur_y = 540
+        self._cur_x_f = 960.0
+        self._cur_y_f = 540.0
+        self._os_x = 960
+        self._os_y = 540
+        self._os_update_time = 0.0
+        self._sentinel_hovered_edge = EDGE_NONE
+        self._sentinel_hovered_mon_id: Optional[str] = None
+        self._sentinel_touch_time = 0.0
+        self._recent_dx = 0.0
+        self._recent_dy = 0.0
+        self._last_evdev_move_time = 0.0
         self._accum_push = 0.0
         self._push_edge = EDGE_NONE
         self._edge_cooldown_until = 0.0
@@ -1202,14 +1213,138 @@ class LinuxHardwareInputGrabber:
         except Exception:
             self.cur_x = 960
             self.cur_y = 540
+        self._cur_x_f = float(self.cur_x)
+        self._cur_y_f = float(self.cur_y)
+        self._os_x = self.cur_x
+        self._os_y = self.cur_y
 
-    def sync_cursor(self, x: int, y: int) -> None:
+    def sync_cursor(
+        self,
+        x: int,
+        y: int,
+        from_os: bool = False,
+        edge_sentinel_hit: int = EDGE_NONE,
+        mon_id: Optional[str] = None,
+    ) -> None:
         """Called by GUI or sentinels to calibrate absolute pointer coordinates."""
         if self.is_active:
             return
+        now = time.time()
         with self._coord_lock:
             self.cur_x = int(x)
             self.cur_y = int(y)
+            self._cur_x_f = float(x)
+            self._cur_y_f = float(y)
+            if from_os:
+                self._os_x = int(x)
+                self._os_y = int(y)
+                self._os_update_time = now
+                if edge_sentinel_hit != EDGE_NONE:
+                    self._sentinel_hovered_edge = edge_sentinel_hit
+                    self._sentinel_hovered_mon_id = mon_id
+                    self._sentinel_touch_time = now
+
+    def clear_sentinel_hover(self, edge: int = EDGE_NONE) -> None:
+        """Clears edge sentinel hover state when the OS pointer leaves the sentinel strip."""
+        with self._coord_lock:
+            if edge == EDGE_NONE or self._sentinel_hovered_edge == edge:
+                self._sentinel_hovered_edge = EDGE_NONE
+                self._sentinel_hovered_mon_id = None
+                self._sentinel_touch_time = 0.0
+
+    def _is_os_edge_confirmed(self, mon: PhysicalMonitor, edge: int) -> bool:
+        """Verifies that the visible OS cursor has physically reached the monitor's outer edge."""
+        if not getattr(self.node, "gui_active", False):
+            return True
+        now = time.time()
+        with self._coord_lock:
+            if self._sentinel_hovered_edge == edge and (now - self._sentinel_touch_time < 0.6):
+                if not self._sentinel_hovered_mon_id or self._sentinel_hovered_mon_id == mon.monitorId:
+                    return True
+            if now - self._os_update_time < 0.25:
+                ox, oy = self._os_x, self._os_y
+                if (mon.virtualX - 4 <= ox <= mon.virtualX + mon.width + 4 and
+                        mon.virtualY - 4 <= oy <= mon.virtualY + mon.height + 4):
+                    if edge == EDGE_RIGHT and ox >= mon.virtualX + mon.width - 10:
+                        return True
+                    if edge == EDGE_LEFT and ox <= mon.virtualX + 9:
+                        return True
+                    if edge == EDGE_TOP and oy <= mon.virtualY + 9:
+                        return True
+                    if edge == EDGE_BOTTOM and oy >= mon.virtualY + mon.height - 10:
+                        return True
+        return False
+
+    def on_os_edge_sentinel_hit(self, mon: PhysicalMonitor, edge: int, cur_x: int, cur_y: int) -> None:
+        """Invoked immediately when the physical OS cursor enters the 2px outer-edge sentinel window."""
+        self.sync_cursor(cur_x, cur_y, from_os=True, edge_sentinel_hit=edge, mon_id=mon.monitorId)
+        now = time.time()
+        if self.is_active or now < self._edge_cooldown_until:
+            return
+        if self.node.controlling_remote_peer is not None:
+            return
+        if not any(p.get("isMutuallyPaired") for p in self.node.peers.values()):
+            return
+
+        with self._coord_lock:
+            recent_active = (now - self._last_evdev_move_time) < 0.15
+            rdx = self._recent_dx
+            rdy = self._recent_dy
+            accum = self._accum_push if self._push_edge == edge else 0.0
+
+        moving_into_edge = False
+        if recent_active:
+            if edge == EDGE_RIGHT and rdx >= 0.5:
+                moving_into_edge = True
+            elif edge == EDGE_LEFT and rdx <= -0.5:
+                moving_into_edge = True
+            elif edge == EDGE_TOP and rdy <= -0.5:
+                moving_into_edge = True
+            elif edge == EDGE_BOTTOM and rdy >= 0.5:
+                moving_into_edge = True
+        if accum >= 3.0:
+            moving_into_edge = True
+
+        if not moving_into_edge:
+            return
+
+        rel_x = cur_x - mon.virtualX
+        rel_y = cur_y - mon.virtualY
+        dead_zone = 14
+        if edge in (EDGE_LEFT, EDGE_RIGHT) and (rel_y < dead_zone or rel_y > mon.height - dead_zone):
+            return
+        if edge in (EDGE_TOP, EDGE_BOTTOM) and (rel_x < dead_zone or rel_x > mon.width - dead_zone):
+            return
+        if self.node.topology.is_internal_seam(mon, edge, cur_x, cur_y):
+            return
+
+        if edge in (EDGE_LEFT, EDGE_RIGHT):
+            norm_pos = max(0.02, min(0.98, rel_y / float(max(1, mon.height))))
+        else:
+            norm_pos = max(0.02, min(0.98, rel_x / float(max(1, mon.width))))
+
+        target_peer = self.node.find_adjacent_peer_in_colony(self.node.device_id, edge, norm_pos, mon.monitorId)
+        if not target_peer:
+            target_peer = self.node.resolve_peer_for_edge_and_norm(edge, norm_pos, mon.monitorId)
+        if not target_peer:
+            return
+
+        with self._coord_lock:
+            self._accum_push = 0.0
+            self._push_edge = EDGE_NONE
+            self._recent_dx = 0.0
+            self._recent_dy = 0.0
+            self._sentinel_hovered_edge = EDGE_NONE
+            self._edge_cooldown_until = now + 0.45
+
+        peer_name = target_peer.get("deviceName", "Cihaz")
+        self.node.log(f"[Otomatik Kenar Geçişi] 🎯 İmleç {edge}. dış kenar sınırından '{peer_name}' cihazına anında aktarılıyor (norm={norm_pos:.2f}).")
+
+        threading.Thread(
+            target=self.node.switch_control_to_peer,
+            args=(target_peer, edge, norm_pos),
+            daemon=True
+        ).start()
 
     def sync_cursor_at_edge(self, edge: int, norm_pos: float = 0.5, peer: Optional[dict] = None) -> None:
         """Sets cursor coordinates just inside the returned edge upon handoff back to Linux."""
@@ -1232,6 +1367,8 @@ class LinuxHardwareInputGrabber:
 
         inset = 60
         with self._coord_lock:
+            prev_x = self.cur_x
+            prev_y = self.cur_y
             if target_mon:
                 if edge == EDGE_RIGHT:
                     self.cur_x = target_mon.virtualX + target_mon.width - inset
@@ -1252,18 +1389,33 @@ class LinuxHardwareInputGrabber:
                 min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
                 self.cur_x = min_x + vw // 2
                 self.cur_y = min_y + vh // 2
-        self._edge_cooldown_until = time.time() + 0.4
+
+            self._cur_x_f = float(self.cur_x)
+            self._cur_y_f = float(self.cur_y)
+            self._os_x = self.cur_x
+            self._os_y = self.cur_y
+            self._sentinel_hovered_edge = EDGE_NONE
+            self._sentinel_hovered_mon_id = None
+            self._sentinel_touch_time = 0.0
+            self._accum_push = 0.0
+            self._push_edge = EDGE_NONE
+            self._recent_dx = 0.0
+            self._recent_dy = 0.0
+            dy_adjust = max(-300, min(300, self.cur_y - prev_y))
+            dx_adjust = max(-300, min(300, self.cur_x - prev_x))
+
+        self._edge_cooldown_until = time.time() + 0.45
 
         # Physically nudge OS cursor away from the boundary edge to prevent instant bounce back
         try:
             if edge == EDGE_RIGHT:
-                self.node.injector.move_relative(-60, 0)
+                self.node.injector.move_relative(-inset, dy_adjust)
             elif edge == EDGE_LEFT:
-                self.node.injector.move_relative(60, 0)
+                self.node.injector.move_relative(inset, dy_adjust)
             elif edge == EDGE_TOP:
-                self.node.injector.move_relative(0, 60)
+                self.node.injector.move_relative(dx_adjust, inset)
             elif edge == EDGE_BOTTOM:
-                self.node.injector.move_relative(0, -60)
+                self.node.injector.move_relative(dx_adjust, -inset)
         except Exception:
             pass
 
@@ -1581,7 +1733,8 @@ class LinuxHardwareInputGrabber:
                 pass
 
     def _process_local_mouse_move(self, dx: int, dy: int) -> None:
-        if self.is_active or time.time() < self._edge_cooldown_until:
+        now = time.time()
+        if self.is_active or now < self._edge_cooldown_until:
             return
 
         if not any(p.get("isMutuallyPaired") for p in self.node.peers.values()):
@@ -1589,16 +1742,46 @@ class LinuxHardwareInputGrabber:
             return
 
         with self._coord_lock:
-            # 1:1 displacement matches desktop compositor movement without false acceleration
-            self.cur_x += dx
-            self.cur_y += dy
+            dt = now - self._last_evdev_move_time
+            if dt > 0.08:
+                self._recent_dx = float(dx)
+                self._recent_dy = float(dy)
+            else:
+                self._recent_dx = self._recent_dx * 0.7 + float(dx)
+                self._recent_dy = self._recent_dy * 0.7 + float(dy)
+            self._last_evdev_move_time = now
+
+            if self._sentinel_hovered_edge == EDGE_RIGHT and dx < -2:
+                self._sentinel_hovered_edge = EDGE_NONE
+            elif self._sentinel_hovered_edge == EDGE_LEFT and dx > 2:
+                self._sentinel_hovered_edge = EDGE_NONE
+            elif self._sentinel_hovered_edge == EDGE_TOP and dy > 2:
+                self._sentinel_hovered_edge = EDGE_NONE
+            elif self._sentinel_hovered_edge == EDGE_BOTTOM and dy < -2:
+                self._sentinel_hovered_edge = EDGE_NONE
+
+            # Match libinput adaptive velocity curve so fast leftward movements and normal rightward
+            # movements stay proportional to the desktop compositor pointer
+            speed = (dx * dx + dy * dy) ** 0.5
+            if speed <= 4.0:
+                accel = 0.82
+            elif speed <= 10.0:
+                accel = 0.82 + (speed - 4.0) * (0.28 / 6.0)
+            else:
+                accel = min(1.48, 1.10 + (speed - 10.0) * 0.025)
+
+            self._cur_x_f += dx * accel
+            self._cur_y_f += dy * accel
 
             min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
             max_x = min_x + vw - 1
             max_y = min_y + vh - 1
 
-            self.cur_x = max(min_x, min(max_x, self.cur_x))
-            self.cur_y = max(min_y, min(max_y, self.cur_y))
+            self._cur_x_f = max(float(min_x), min(float(max_x), self._cur_x_f))
+            self._cur_y_f = max(float(min_y), min(float(max_y), self._cur_y_f))
+
+            self.cur_x = int(round(self._cur_x_f))
+            self.cur_y = int(round(self._cur_y_f))
 
             cur_x = self.cur_x
             cur_y = self.cur_y
@@ -1641,10 +1824,34 @@ class LinuxHardwareInputGrabber:
             self._push_edge = EDGE_NONE
             return
 
+        os_confirmed = self._is_os_edge_confirmed(mon, hit_edge)
+        if not os_confirmed and getattr(self.node, "gui_active", False):
+            # Hold dead-reckoning coordinate just inside the border until the visible OS cursor
+            # actually touches the 2px outer-edge sentinel (or sustained 650-count fallback for fullscreen apps)
+            with self._coord_lock:
+                if hit_edge == EDGE_RIGHT:
+                    self._cur_x_f = float(mon.virtualX + mon.width - 5)
+                    self.cur_x = int(self._cur_x_f)
+                elif hit_edge == EDGE_LEFT:
+                    self._cur_x_f = float(mon.virtualX + 4)
+                    self.cur_x = int(self._cur_x_f)
+                elif hit_edge == EDGE_TOP:
+                    self._cur_y_f = float(mon.virtualY + 4)
+                    self.cur_y = int(self._cur_y_f)
+                elif hit_edge == EDGE_BOTTOM:
+                    self._cur_y_f = float(mon.virtualY + mon.height - 5)
+                    self.cur_y = int(self._cur_y_f)
+
+        eff_rel_x = rel_x
+        eff_rel_y = rel_y
+        if os_confirmed and (now - self._os_update_time < 0.6):
+            eff_rel_x = self._os_x - mon.virtualX
+            eff_rel_y = self._os_y - mon.virtualY
+
         if hit_edge in (EDGE_LEFT, EDGE_RIGHT):
-            norm_pos = max(0.02, min(0.98, rel_y / float(max(1, mon.height))))
+            norm_pos = max(0.02, min(0.98, eff_rel_y / float(max(1, mon.height))))
         else:
-            norm_pos = max(0.02, min(0.98, rel_x / float(max(1, mon.width))))
+            norm_pos = max(0.02, min(0.98, eff_rel_x / float(max(1, mon.width))))
 
         target_peer = self.node.find_adjacent_peer_in_colony(self.node.device_id, hit_edge, norm_pos, mon.monitorId)
         if not target_peer:
@@ -1660,11 +1867,14 @@ class LinuxHardwareInputGrabber:
 
         self._accum_push += outward_push
 
-        # Snappy barrier push: 4.0 outward push ensures deliberate crossing at the true physical boundary
-        if self._accum_push >= 4.0:
+        # Require OS edge confirmation (from 2px edge sentinel or live pointer) for instant 4.0-count crossing;
+        # otherwise require 650.0 counts so dead-reckoning drift never triggers at 75% of the screen.
+        required_push = 4.0 if os_confirmed else 650.0
+        if self._accum_push >= required_push:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
-            self._edge_cooldown_until = time.time() + 0.4
+            self._sentinel_hovered_edge = EDGE_NONE
+            self._edge_cooldown_until = now + 0.45
 
             peer_name = target_peer.get("deviceName", "Cihaz")
             self.node.log(f"[Otomatik Kenar Geçişi] 🎯 İmleç {hit_edge}. kenardan '{peer_name}' cihazına anında aktarılıyor (norm={norm_pos:.2f}).")
@@ -1768,6 +1978,7 @@ class ConnectMeLinuxNode:
         self.peer_arrangements: Dict[str, dict] = self._load_peer_arrangements()
 
         self.peers: Dict[str, dict] = {}
+        self.gui_active: bool = False
         self.active_remote_peer: Optional[dict] = None
         self.entry_edge: int = EDGE_NONE
         self.cursor_x: float = 0.0
@@ -1827,6 +2038,22 @@ class ConnectMeLinuxNode:
         self.audio_rx_target_sink: Optional[str] = None
         self.on_audio_sinks_updated: Optional[Any] = None
         self.on_audio_route_changed: Optional[Any] = None
+
+    def update_os_cursor(
+        self,
+        x: int,
+        y: int,
+        edge_sentinel_hit: int = EDGE_NONE,
+        mon_id: Optional[str] = None,
+    ) -> None:
+        """Calibrates internal cursor coordinates from live XWayland/X11 pointer or 2px edge sentinel."""
+        if hasattr(self, "hardware_grabber"):
+            self.hardware_grabber.sync_cursor(
+                x, y, from_os=True, edge_sentinel_hit=edge_sentinel_hit, mon_id=mon_id
+            )
+        if self.active_remote_peer is not None:
+            self.cursor_x = float(x)
+            self.cursor_y = float(y)
 
     def log(self, text: str) -> None:
         line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
@@ -3710,26 +3937,54 @@ class ConnectMeLinuxNode:
                     self.active_remote_peer = peer
                     self.entry_edge = edge
 
-                    # Calculate entrance coordinate on Linux (edge is targetEntranceEdge)
-                    if edge == EDGE_LEFT:
-                        # Cursor entered through Linux's LEFT edge
-                        self.cursor_x = min_x + 18
-                        self.cursor_y = min_y + int(vh * norm_pos)
-                    elif edge == EDGE_RIGHT:
-                        # Cursor entered through Linux's RIGHT edge
-                        self.cursor_x = min_x + vw - 18
-                        self.cursor_y = min_y + int(vh * norm_pos)
-                    elif edge == EDGE_TOP:
-                        # Cursor entered through Linux's TOP edge
-                        self.cursor_x = min_x + int(vw * norm_pos)
-                        self.cursor_y = min_y + 18
-                    elif edge == EDGE_BOTTOM:
-                        # Cursor entered through Linux's BOTTOM edge
-                        self.cursor_x = min_x + int(vw * norm_pos)
-                        self.cursor_y = min_y + vh - 18
+                    target_mon = None
+                    if peer and peer.get("attachedMonitorId"):
+                        m_id = peer.get("attachedMonitorId")
+                        for m in self.topology.monitors:
+                            if m.monitorId == m_id:
+                                target_mon = m
+                                break
+                    if not target_mon:
+                        target_mon = self.topology.get_outermost_monitor_for_edge(edge)
+                    if not target_mon and self.topology.monitors:
+                        target_mon = self.topology.monitors[0]
+
+                    if target_mon:
+                        if edge == EDGE_LEFT:
+                            self.cursor_x = float(target_mon.virtualX + 24)
+                            self.cursor_y = float(target_mon.virtualY + int(target_mon.height * norm_pos))
+                        elif edge == EDGE_RIGHT:
+                            self.cursor_x = float(target_mon.virtualX + target_mon.width - 24)
+                            self.cursor_y = float(target_mon.virtualY + int(target_mon.height * norm_pos))
+                        elif edge == EDGE_TOP:
+                            self.cursor_x = float(target_mon.virtualX + int(target_mon.width * norm_pos))
+                            self.cursor_y = float(target_mon.virtualY + 24)
+                        elif edge == EDGE_BOTTOM:
+                            self.cursor_x = float(target_mon.virtualX + int(target_mon.width * norm_pos))
+                            self.cursor_y = float(target_mon.virtualY + target_mon.height - 24)
+                        else:
+                            self.cursor_x = float(target_mon.virtualX + target_mon.width // 2)
+                            self.cursor_y = float(target_mon.virtualY + target_mon.height // 2)
                     else:
-                        self.cursor_x = min_x + int(vw * 0.5)
-                        self.cursor_y = min_y + int(vh * 0.5)
+                        if edge == EDGE_LEFT:
+                            self.cursor_x = float(min_x + 24)
+                            self.cursor_y = float(min_y + int(vh * norm_pos))
+                        elif edge == EDGE_RIGHT:
+                            self.cursor_x = float(min_x + vw - 24)
+                            self.cursor_y = float(min_y + int(vh * norm_pos))
+                        elif edge == EDGE_TOP:
+                            self.cursor_x = float(min_x + int(vw * norm_pos))
+                            self.cursor_y = float(min_y + 24)
+                        elif edge == EDGE_BOTTOM:
+                            self.cursor_x = float(min_x + int(vw * norm_pos))
+                            self.cursor_y = float(min_y + vh - 24)
+                        else:
+                            self.cursor_x = float(min_x + int(vw * 0.5))
+                            self.cursor_y = float(min_y + int(vh * 0.5))
+
+                    if hasattr(self, "hardware_grabber"):
+                        self.hardware_grabber.clear_sentinel_hover()
+                        self.hardware_grabber.sync_cursor(int(self.cursor_x), int(self.cursor_y), from_os=False)
 
                     self.return_edge_push_accum = 0.0
 
@@ -3747,9 +4002,27 @@ class ConnectMeLinuxNode:
                     seq, dx, dy = struct.unpack("<Hhh", data[4:10])
                     self.injector.move_relative(dx, dy)
 
+                    if hasattr(self, "hardware_grabber"):
+                        if self.hardware_grabber._sentinel_hovered_edge == EDGE_RIGHT and dx < -2:
+                            self.hardware_grabber.clear_sentinel_hover(EDGE_RIGHT)
+                        elif self.hardware_grabber._sentinel_hovered_edge == EDGE_LEFT and dx > 2:
+                            self.hardware_grabber.clear_sentinel_hover(EDGE_LEFT)
+                        elif self.hardware_grabber._sentinel_hovered_edge == EDGE_TOP and dy > 2:
+                            self.hardware_grabber.clear_sentinel_hover(EDGE_TOP)
+                        elif self.hardware_grabber._sentinel_hovered_edge == EDGE_BOTTOM and dy < -2:
+                            self.hardware_grabber.clear_sentinel_hover(EDGE_BOTTOM)
+
+                    speed = (dx * dx + dy * dy) ** 0.5
+                    if speed <= 4.0:
+                        accel = 0.82
+                    elif speed <= 10.0:
+                        accel = 0.82 + (speed - 4.0) * (0.28 / 6.0)
+                    else:
+                        accel = min(1.48, 1.10 + (speed - 10.0) * 0.025)
+
                     min_x, min_y, vw, vh = self.topology.virtual_desktop_bounds()
-                    self.cursor_x = max(min_x, min(min_x + vw, self.cursor_x + dx))
-                    self.cursor_y = max(min_y, min(min_y + vh, self.cursor_y + dy))
+                    self.cursor_x = max(float(min_x), min(float(min_x + vw - 1), self.cursor_x + dx * accel))
+                    self.cursor_y = max(float(min_y), min(float(min_y + vh - 1), self.cursor_y + dy * accel))
 
                     if self.on_cursor_update:
                         try:
@@ -3764,31 +4037,51 @@ class ConnectMeLinuxNode:
                         relay_peer = None
                         ret_edge = EDGE_NONE
                         ret_norm = 0.5
-                        RESISTANCE_THRESHOLD = 24.0
+
+                        cur_mon = self.topology.find_monitor_at(int(self.cursor_x), int(self.cursor_y))
+                        if not cur_mon and self.topology.monitors:
+                            cur_mon = self.topology.monitors[0]
 
                         pushing_edge = EDGE_NONE
                         push_amount = 0.0
 
-                        if self.cursor_x <= min_x and dx < 0:
-                            pushing_edge = EDGE_LEFT
-                            push_amount = abs(dx)
-                        elif self.cursor_x >= min_x + vw and dx > 0:
-                            pushing_edge = EDGE_RIGHT
-                            push_amount = abs(dx)
-                        elif self.cursor_y <= min_y and dy < 0:
-                            pushing_edge = EDGE_TOP
-                            push_amount = abs(dy)
-                        elif self.cursor_y >= min_y + vh and dy > 0:
-                            pushing_edge = EDGE_BOTTOM
-                            push_amount = abs(dy)
+                        if cur_mon:
+                            if self.cursor_x <= cur_mon.virtualX + 4 and dx < 0:
+                                pushing_edge = EDGE_LEFT
+                                push_amount = abs(dx)
+                            elif self.cursor_x >= cur_mon.virtualX + cur_mon.width - 5 and dx > 0:
+                                pushing_edge = EDGE_RIGHT
+                                push_amount = abs(dx)
+                            elif self.cursor_y <= cur_mon.virtualY + 4 and dy < 0:
+                                pushing_edge = EDGE_TOP
+                                push_amount = abs(dy)
+                            elif self.cursor_y >= cur_mon.virtualY + cur_mon.height - 5 and dy > 0:
+                                pushing_edge = EDGE_BOTTOM
+                                push_amount = abs(dy)
 
-                        if pushing_edge != EDGE_NONE:
+                            if pushing_edge != EDGE_NONE and self.topology.is_internal_seam(cur_mon, pushing_edge, int(self.cursor_x), int(self.cursor_y)):
+                                pushing_edge = EDGE_NONE
+                                push_amount = 0.0
+
+                        if pushing_edge != EDGE_NONE and cur_mon:
+                            os_confirmed = self.hardware_grabber._is_os_edge_confirmed(cur_mon, pushing_edge) if hasattr(self, "hardware_grabber") else True
+                            if not os_confirmed and self.gui_active:
+                                if pushing_edge == EDGE_RIGHT:
+                                    self.cursor_x = float(cur_mon.virtualX + cur_mon.width - 5)
+                                elif pushing_edge == EDGE_LEFT:
+                                    self.cursor_x = float(cur_mon.virtualX + 4)
+                                elif pushing_edge == EDGE_TOP:
+                                    self.cursor_y = float(cur_mon.virtualY + 4)
+                                elif pushing_edge == EDGE_BOTTOM:
+                                    self.cursor_y = float(cur_mon.virtualY + cur_mon.height - 5)
+
+                            RESISTANCE_THRESHOLD = 8.0 if os_confirmed else 650.0
                             self.return_edge_push_accum += push_amount
                             if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
                                 if pushing_edge in (EDGE_LEFT, EDGE_RIGHT):
-                                    norm_val = max(0.0, min(1.0, (self.cursor_y - min_y) / float(max(1, vh))))
+                                    norm_val = max(0.02, min(0.98, (self.cursor_y - cur_mon.virtualY) / float(max(1, cur_mon.height))))
                                 else:
-                                    norm_val = max(0.0, min(1.0, (self.cursor_x - min_x) / float(max(1, vw))))
+                                    norm_val = max(0.02, min(0.98, (self.cursor_x - cur_mon.virtualX) / float(max(1, cur_mon.width))))
 
                                 # Case A: Pushing against the entry edge from Host -> return to Host!
                                 if pushing_edge == self.entry_edge:
@@ -3797,8 +4090,7 @@ class ConnectMeLinuxNode:
                                     ret_norm = norm_val
                                 else:
                                     # Case B: Pushing against an edge that has another adjacent peer in colony!
-                                    cur_mon = self.topology.find_monitor_at(int(self.cursor_x), int(self.cursor_y))
-                                    cur_mon_id = getattr(cur_mon, "monitorId", None) if cur_mon else None
+                                    cur_mon_id = getattr(cur_mon, "monitorId", None)
                                     adj = self.find_adjacent_peer_in_colony(self.device_id, pushing_edge, norm_val, cur_mon_id)
                                     if adj:
                                         relay_triggered = True

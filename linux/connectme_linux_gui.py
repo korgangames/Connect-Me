@@ -99,35 +99,185 @@ for _i in range(1, 13):
 
 
 class ScreenEdgeSentinels:
-    """Invisible high-precision 60Hz edge monitor for Linux host KVM.
-    Polls global pointer coordinates using Tkinter root.winfo_pointerxy() to detect when cursor reaches
-    the physical outermost screen boundary without rendering any visual artifacts or blue lines.
-    Completely immune to fast mouse gestures (physical pointer stops at the desktop edge).
+    """Invisible high-precision 60Hz edge monitor & 2px outer-edge compositor sentinel for Linux host KVM.
+    Combines change-detected root.winfo_pointerxy() calibration with ultra-thin (2px) invisible topmost
+    XWayland edge strips strictly on outer monitor boundaries so Wayland compositors (KWin / Mutter)
+    deliver ground-truth coordinates the exact millisecond the visible cursor touches the physical edge.
     """
 
     def __init__(self, root: tk.Tk, node: ConnectMeLinuxNode, on_edge_triggered: Callable[[dict, int, float], None], gui: Optional[Any] = None):
         self.root = root
         self.node = node
         self.gui = gui
+        self.node.gui_active = True
         self.on_edge_triggered = on_edge_triggered
         self.cooldown_until = 0.0
         self.enabled = True
         self._poll_job: Optional[str] = None
+        self.sentinels: Dict[str, tk.Toplevel] = {}
+        self._sentinel_geoms: Dict[str, str] = {}
+        self._sentinels_hidden = False
+        self._last_raw_x: Optional[int] = None
+        self._last_raw_y: Optional[int] = None
         self._start_poll()
+        self.root.after(250, self.update_sentinels)
 
     def set_cooldown(self, duration_sec: float = 0.8):
         self.cooldown_until = time.time() + duration_sec
 
     def hide(self):
         self.enabled = False
+        self._sentinels_hidden = True
+        if hasattr(self.node, "hardware_grabber"):
+            self.node.hardware_grabber.clear_sentinel_hover()
+        for win in list(self.sentinels.values()):
+            try:
+                win.withdraw()
+            except Exception:
+                pass
 
     def show_with_cooldown(self, cooldown: float = 0.8):
         self.enabled = True
         self.set_cooldown(cooldown)
+        self._sentinels_hidden = False
+        self.update_sentinels()
+
+    def _destroy_all_sentinels(self):
+        for key, win in list(self.sentinels.items()):
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        self.sentinels.clear()
+        self._sentinel_geoms.clear()
 
     def update_sentinels(self):
-        """Called when peer topology or monitor layout changes."""
-        pass
+        """Creates or updates 2px invisible outer-edge sentinel strips on physical monitor boundaries."""
+        if not self.enabled:
+            return
+
+        has_paired = any(p.get("isMutuallyPaired") for p in self.node.peers.values()) or (self.node.active_remote_peer is not None)
+        if not has_paired or not self.node.topology.monitors:
+            self._destroy_all_sentinels()
+            return
+
+        desired: Dict[str, Tuple[PhysicalMonitor, int, str, bool]] = {}
+        dead_zone = 16
+        thickness = 2
+
+        for mon in self.node.topology.monitors:
+            for edge in (EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, EDGE_BOTTOM):
+                mid_x = mon.virtualX + (0 if edge == EDGE_LEFT else (mon.width - 1 if edge == EDGE_RIGHT else mon.width // 2))
+                mid_y = mon.virtualY + (0 if edge == EDGE_TOP else (mon.height - 1 if edge == EDGE_BOTTOM else mon.height // 2))
+
+                # Never place a sentinel on an internal seam between two local monitors
+                if self.node.topology.is_internal_seam(mon, edge, mid_x, mid_y):
+                    continue
+
+                has_peer_on_edge = False
+                if self.node.active_remote_peer is not None and self.node.entry_edge == edge:
+                    has_peer_on_edge = True
+                else:
+                    for sample_norm in (0.15, 0.35, 0.5, 0.65, 0.85):
+                        p = self.node.find_adjacent_peer_in_colony(self.node.device_id, edge, sample_norm, mon.monitorId)
+                        if not p:
+                            p = self.node.resolve_peer_for_edge_and_norm(edge, sample_norm, mon.monitorId)
+                        if p:
+                            has_peer_on_edge = True
+                            break
+
+                if has_peer_on_edge:
+                    if edge == EDGE_RIGHT:
+                        h = max(32, mon.height - 2 * dead_zone)
+                        geom = f"{thickness}x{h}+{mon.virtualX + mon.width - thickness}+{mon.virtualY + dead_zone}"
+                    elif edge == EDGE_LEFT:
+                        h = max(32, mon.height - 2 * dead_zone)
+                        geom = f"{thickness}x{h}+{mon.virtualX}+{mon.virtualY + dead_zone}"
+                    elif edge == EDGE_TOP:
+                        w = max(32, mon.width - 2 * dead_zone)
+                        geom = f"{w}x{thickness}+{mon.virtualX + dead_zone}+{mon.virtualY}"
+                    else:
+                        w = max(32, mon.width - 2 * dead_zone)
+                        geom = f"{w}x{thickness}+{mon.virtualX + dead_zone}+{mon.virtualY + mon.height - thickness}"
+                    desired[f"{mon.monitorId}_{edge}"] = (mon, edge, geom, True)
+                elif edge in (EDGE_LEFT, EDGE_RIGHT):
+                    # 1px calibration strip on non-peer vertical outer boundary to zero out leftward/rightward drift
+                    cal_margin = 48
+                    h = max(32, mon.height - 2 * cal_margin)
+                    x_pos = mon.virtualX if edge == EDGE_LEFT else (mon.virtualX + mon.width - 1)
+                    geom = f"1x{h}+{x_pos}+{mon.virtualY + cal_margin}"
+                    desired[f"{mon.monitorId}_{edge}"] = (mon, edge, geom, False)
+
+        # Remove obsolete sentinel windows
+        for key in list(self.sentinels.keys()):
+            if key not in desired:
+                try:
+                    self.sentinels[key].destroy()
+                except Exception:
+                    pass
+                self.sentinels.pop(key, None)
+                self._sentinel_geoms.pop(key, None)
+
+        # Create or update active sentinel windows
+        for key, (mon, edge, geom, is_peer_edge) in desired.items():
+            win = self.sentinels.get(key)
+            need_reconfig = (win is None) or (self._sentinel_geoms.get(key) != geom) or self._sentinels_hidden
+            if win is None:
+                try:
+                    win = tk.Toplevel(self.root)
+                    win.withdraw()
+                    win.overrideredirect(True)
+                    win.configure(bg="#000000", bd=0, highlightthickness=0)
+                    self.sentinels[key] = win
+                except Exception:
+                    continue
+
+            if need_reconfig:
+                try:
+                    win.geometry(geom)
+                    win.deiconify()
+                    win.update_idletasks()
+                    win.attributes("-alpha", 0.01)
+                    win.attributes("-topmost", True)
+                    win.lift()
+                    self._sentinel_geoms[key] = geom
+                except Exception:
+                    pass
+
+            win.bind("<Enter>", lambda e, m=mon, ed=edge, pe=is_peer_edge, k=key: self._on_sentinel_enter_or_motion(e, m, ed, pe, k))
+            win.bind("<Motion>", lambda e, m=mon, ed=edge, pe=is_peer_edge, k=key: self._on_sentinel_enter_or_motion(e, m, ed, pe, k))
+            win.bind("<Leave>", lambda e, m=mon, ed=edge: self._on_sentinel_leave(e, m, ed))
+
+        self._sentinels_hidden = False
+
+    def _on_sentinel_enter_or_motion(self, event, mon: PhysicalMonitor, edge: int, is_peer_edge: bool, key: str):
+        try:
+            cur_x = int(event.x_root)
+            cur_y = int(event.y_root)
+        except Exception:
+            return
+
+        self._last_raw_x = cur_x
+        self._last_raw_y = cur_y
+
+        if not is_peer_edge:
+            self.node.update_os_cursor(cur_x, cur_y, edge_sentinel_hit=EDGE_NONE, mon_id=mon.monitorId)
+            win = self.sentinels.get(key)
+            if win:
+                try:
+                    win.withdraw()
+                    self.root.after(500, lambda w=win: w.deiconify() if self.enabled and not self._sentinels_hidden else None)
+                except Exception:
+                    pass
+            return
+
+        self.node.update_os_cursor(cur_x, cur_y, edge_sentinel_hit=edge, mon_id=mon.monitorId)
+        if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.can_grab():
+            self.node.hardware_grabber.on_os_edge_sentinel_hit(mon, edge, cur_x, cur_y)
+
+    def _on_sentinel_leave(self, event, mon: PhysicalMonitor, edge: int):
+        if hasattr(self.node, "hardware_grabber"):
+            self.node.hardware_grabber.clear_sentinel_hover(edge)
 
     def _start_poll(self):
         if self._poll_job is not None:
@@ -150,26 +300,34 @@ class ScreenEdgeSentinels:
                     pass
 
     def _do_check(self):
-        if not self.enabled or time.time() < self.cooldown_until:
-            return
-        if self.node.controlling_remote_peer is not None:
-            return
         if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.is_active:
             return
         if self.gui and hasattr(self.gui, "host_capture_overlay") and self.gui.host_capture_overlay.is_active:
+            return
+
+        try:
+            cur_x, cur_y = self.root.winfo_pointerxy()
+        except Exception:
+            return
+
+        # Only calibrate when XWayland/X11 actually receives a fresh pointer update from the compositor.
+        # This prevents overwriting coordinates with stale values when hovering over native Wayland surfaces.
+        if (cur_x, cur_y) != (self._last_raw_x, self._last_raw_y):
+            self._last_raw_x = cur_x
+            self._last_raw_y = cur_y
+            self.node.update_os_cursor(cur_x, cur_y)
+
+        if not self.enabled or time.time() < self.cooldown_until:
+            return
+        if self.node.controlling_remote_peer is not None:
             return
 
         if not any(p.get("isMutuallyPaired") for p in self.node.peers.values()):
             return
 
         # If kernel-level hardware grabber is available and monitoring, let it handle edge transitions
-        # directly from /dev/input/event* to prevent XWayland pointer clamping and coordinate drift
+        # using 1000Hz directional push combined with OS edge confirmation from update_os_cursor / sentinels
         if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.can_grab():
-            return
-
-        try:
-            cur_x, cur_y = self.root.winfo_pointerxy()
-        except Exception:
             return
 
         mon = self.node.topology.find_monitor_at(cur_x, cur_y)
@@ -492,7 +650,7 @@ class ConnectMeLinuxGui:
         self.root.bind_all("<KeyRelease-Prior>", self._on_emergency_pageup_release, add="+")
         self.root.bind_all("<KeyPress-Next>", self._on_emergency_pagedown_press, add="+")
         self.root.bind_all("<KeyRelease-Next>", self._on_emergency_pagedown_release, add="+")
-        self.root.bind_all("<Motion>", lambda e: getattr(self.node, "hardware_grabber", None) and self.node.hardware_grabber.sync_cursor(e.x_root, e.y_root), add="+")
+        self.root.bind_all("<Motion>", lambda e: self.node.update_os_cursor(e.x_root, e.y_root), add="+")
 
         self._apply_dark_theme()
         self._build_ui()
