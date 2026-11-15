@@ -1,3 +1,31 @@
+# Connect Me v1.8.25 — Linux Çoklu Monitör Kenar Geçiş Kararlılığı ve Windows Çift Yönlü İmleç Dönüşü Onarımı
+
+Bu sürüm; çoklu monitör kullanan Linux sistemlerinde Windows'a geçerken imlecin ikinci ekranın ortasından ve değişen bir sütun üzerinden erken atlaması sorununu ve Windows'a geçen imlecin Windows'tan geri dönememe / tekrar Windows'a geçememe kilitlenmesini kökten çözer:
+
+1. **Linux Çoklu Monitör İkinci Ekran Erken Atlama ve Değişen Sütun Onarımı:**
+   - **Kök Neden:**
+     a) `HardwareInputGrabber._process_local_mouse_move` içerisinde yapay `accel = min(3.5, ...)` çarpanı kullanılıyordu. Yüksek DPI farelerde (800-1600 DPI) masaüstü kompozitörünün visible imleci ikinci ekranın henüz ortasındayken (x ≈ 2800), evdev toplayıcısı 3.5 kat hızla sanal masaüstü sınırına (x = 3840) ulaşıyor ve `self.cur_x > max_x - 30` kontrolüyle imleci anında kenara doyuruyordu. Farenin hareket hızına göre `accel` değişkenlik gösterdiğinden, erken atlama her seferinde farklı bir dikey sütunda ("değişen bir sütun") meydana geliyordu.
+     b) `LinuxMultiMonitorTopology.ensure_bounds()` fonksiyonu imleç en dış sınıra her dokunduğunda RAM'deki fiziksel monitör tanımlayıcısının genişliğini dinamik olarak artırıyordu (`rightmost.width += ...`). Bu durum donanım ekran sınırlarını bozuyor ve kenar algılama piksellerinin sürekli kaymasına neden oluyordu.
+     c) Tkinter `ScreenEdgeSentinels` içerisindeki `self.root.winfo_pointerxy()` sorgusu Wayland / XWayland kısıtlamaları nedeniyle harici ekranda veya Wayland pencereleri üzerinde donuk/sabit değerler döndürüyor ve her 16ms'de bir evdev donanım konumunu ezerek koordinat karmaşasına yol açıyordu.
+   - **Çözüm:**
+     - Evdev bağıl hareket entegrasyonu 1:1 doğrusal ölçeğe çekildi (`self.cur_x += dx`), yapay 3.5x çarpan ve erken 30px doyurma kaldırıldı. İmleç takibi masaüstü kompozitörüyle birebir senkron çalışır.
+     - `ensure_bounds()` fonksiyonunun monitör boyutlarını RAM'de tahrif etmesi engellendi; monitör geometrileri sabit tutularak koordinatlar yalnızca gerçek sanal masaüstü sınırlarına (`[min_x, max_x]`) kenetlendi.
+     - Çekirdek düzeyindeki `HardwareInputGrabber` aktif olduğunda `ScreenEdgeSentinels`'in koordinat ezmesi engellendi ve nöbetçi algılayıcıya `mon_id` parametresi eklenerek birinci monitörün sağ kenarından ikinci monitördeki cihaza hatalı geçiş yapılması önlendi.
+     - Kenar algılama eşiği hassaslaştırıldı (`rel_x >= mon.width - 6`) ve 4.0 birimlik kararlı bariyer direnci ile yalnızca ekranın gerçek fiziksel dış kenarına ulaşıldığında geçiş tetiklenmesi sağlandı.
+
+2. **Windows Çift Yönlü İmleç Dönüşü ve Tekrar Geçiş Kilitlenmesi Onarımı:**
+   - **Kök Neden:**
+     a) Windows düşük seviye fare kancasında (`Win32InputEngine.MouseHookCallback`), Linux'tan gelen `SetCursorPos` çağrıları Win32 API gereği `LLMHF_INJECTED` bayrağını taşımıyordu. Gelen hareket paketleri sırasındaki zaman farkı veya yüksek DPI ölçeklemesi nedeniyle `Math.Abs(info.pt.X - _lastCursorX) <= 2` kontrolü başarısız olduğunda sistem Windows'un yerel bir fare hareketi algıladığını sanarak `_controllingRemotePeer = null` yapıyor ve `_incomingPushAccum`'u sıfırlıyordu.
+     b) `_controllingRemotePeer` null olduğunda Windows kendisini kimin yönettiğini unutuyor, sol kenara itilse dahi `EDGE_RETURN` paketini gönderemiyor ve kanca yerel moda düştüğü için Windows'un Linux'u yakalamaya çalışmasına yol açarak dairesel bir durum karmaşası (deadlock) yaratıyordu. Bu durum imlecin Windows'ta kilitlenip tekrar Linux'a veya Windows'a geçememesine ("tekrardan windows'a geçmiyor") sebep oluyordu.
+     c) Windows çoklu monitör yapılarında monitörler arası iç dikiş (`IsPointOnInternalMonitorSeam`) kontrolü eksikti ve `_incomingPushAccum >= 24` eşiği çok yüksekti; ufak bir dikey sapmada (`DeltaY > 2`) birikim sıfırlanıyordu.
+   - **Çözüm:**
+     - `Win32InputEngine.MouseHookCallback` içerisine uzaktan kontrol koruması eklendi (`if (_controllingRemotePeer != null) return CallNextHookEx(...)`). Uzak kontrol esnasında enjekte edilen fare hareketlerinin `_controllingRemotePeer` değişkenini silmesi tamamen engellendi.
+     - `OnRemoteMouseMoveReceived` içerisine `!_topology.IsPointOnInternalMonitorSeam(mon, pushingEdge, pt.X, pt.Y)` kontrolü eklendi; Windows çoklu ekranlarında iç dikişlerde erken dönüş engellendi.
+     - Geri dönüş itme direnci 24'ten 6.0'a düşürülerek dönüş son derece akıcı ve yumuşak hale getirildi; tek karelik sapmalarda birikimin sıfırlanması yerine ekranın iç kısımlarına (>25px) dönüldüğünde sıfırlanması sağlandı.
+     - Linux tarafında dönüş konumu `inset = 60` ile masaüstü içeriğine güvenli bir mesafede konuşlandırıldı ve 400ms soğuma uygulanarak anında geri sekme önlendi.
+
+---
+
 # Connect Me v1.8.23 — Dinamik Ekran Hotplug Algılama, Mantıksal Çözünürlük Ölçeklemesi & PageUp+PageDown Acil Kurtarma Kısayolu
 
 Bu sürüm; Linux'ta ikinci ekran bağlandığında yaşanan arayüz güncellenmeme ve harici ekranın yarısında diğer cihaza geçme hatasını çözer; Windows ve Linux için `PageUp + PageDown` eşzamanlı acil kontrol geri alma kısayolunu getirir:

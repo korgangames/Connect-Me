@@ -455,7 +455,7 @@ public sealed class Win32InputEngine : IDisposable
                 pushAmount = packet.DeltaY;
             }
 
-            if (pushingEdge != ScreenEdge.None)
+            if (pushingEdge != ScreenEdge.None && !_topology.IsPointOnInternalMonitorSeam(mon, pushingEdge, pt.X, pt.Y))
             {
                 _incomingPushAccum += pushAmount;
 
@@ -466,7 +466,7 @@ public sealed class Win32InputEngine : IDisposable
                     _ => 0.5f
                 };
 
-                if (_incomingPushAccum >= 24)
+                if (_incomingPushAccum >= 6.0)
                 {
                     // Case A: Pushing against the entrance edge from the Host -> return to Host!
                     if (pushingEdge == _incomingEntryEdge)
@@ -500,7 +500,8 @@ public sealed class Win32InputEngine : IDisposable
                     }
                 }
             }
-            else if (Math.Abs(packet.DeltaX) > 2 || Math.Abs(packet.DeltaY) > 2)
+            else if (pt.X > mon.VirtualX + 25 && pt.X < mon.Right - 25 &&
+                     pt.Y > mon.VirtualY + 25 && pt.Y < mon.Bottom - 25)
             {
                 _incomingPushAccum = 0;
             }
@@ -600,18 +601,19 @@ public sealed class Win32InputEngine : IDisposable
             // Ignore self-injected events
             if ((info.flags & LLMHF_INJECTED) == 0)
             {
+                // When Windows is being controlled remotely (e.g. from Linux or another host),
+                // pass all mouse events through and DO NOT nullify _controllingRemotePeer!
+                if (_controllingRemotePeer != null)
+                {
+                    return CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
+                }
+
                 // If this is a WM_MOUSEMOVE caused by our SetCursorPos injection within 120ms, ignore it!
                 if (Environment.TickCount64 - _lastInjectedCursorTime < 120 &&
                     Math.Abs(info.pt.X - _lastCursorX) <= 2 &&
                     Math.Abs(info.pt.Y - _lastCursorY) <= 2)
                 {
                     return CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
-                }
-
-                if (_controllingRemotePeer != null)
-                {
-                    _controllingRemotePeer = null;
-                    _incomingPushAccum = 0;
                 }
 
                 int msg = wParam.ToInt32();

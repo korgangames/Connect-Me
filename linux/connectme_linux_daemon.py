@@ -187,38 +187,8 @@ class LinuxMultiMonitorTopology:
         return self.monitors
 
     def ensure_bounds(self, cur_x: int, cur_y: int) -> bool:
-        """Dynamically expands known monitor dimensions if cursor travels beyond current bounds."""
-        if not self.monitors:
-            return False
-        max_r = max(m.right for m in self.monitors)
-        max_b = max(m.bottom for m in self.monitors)
-        min_l = min(m.virtualX for m in self.monitors)
-        min_t = min(m.virtualY for m in self.monitors)
-        changed = False
-
-        if cur_x >= max_r:
-            rightmost = max(self.monitors, key=lambda m: m.right)
-            rightmost.width += (cur_x - max_r + 1)
-            changed = True
-        elif cur_x < min_l:
-            leftmost = min(self.monitors, key=lambda m: m.virtualX)
-            delta = min_l - cur_x
-            leftmost.virtualX -= delta
-            leftmost.width += delta
-            changed = True
-
-        if cur_y >= max_b:
-            bottommost = max(self.monitors, key=lambda m: m.bottom)
-            bottommost.height += (cur_y - max_b + 1)
-            changed = True
-        elif cur_y < min_t:
-            topmost = min(self.monitors, key=lambda m: m.virtualY)
-            delta = min_t - cur_y
-            topmost.virtualY -= delta
-            topmost.height += delta
-            changed = True
-
-        return changed
+        """Physical monitor descriptors are hardware-defined and must never be mutated in RAM."""
+        return False
 
     def virtual_desktop_bounds(self) -> Tuple[int, int, int, int]:
         min_x = min(m.virtualX for m in self.monitors)
@@ -1260,7 +1230,7 @@ class LinuxHardwareInputGrabber:
         mapped_norm = seg_start + max(0.0, min(1.0, float(norm_pos))) * (seg_end - seg_start)
         norm = max(0.02, min(0.98, mapped_norm))
 
-        inset = 35
+        inset = 60
         with self._coord_lock:
             if target_mon:
                 if edge == EDGE_RIGHT:
@@ -1282,7 +1252,7 @@ class LinuxHardwareInputGrabber:
                 min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
                 self.cur_x = min_x + vw // 2
                 self.cur_y = min_y + vh // 2
-        self._edge_cooldown_until = time.time() + 0.35
+        self._edge_cooldown_until = time.time() + 0.4
 
         # Physically nudge OS cursor away from the boundary edge to prevent instant bounce back
         try:
@@ -1619,31 +1589,13 @@ class LinuxHardwareInputGrabber:
             return
 
         with self._coord_lock:
-            # Apply dynamic pointer acceleration so internal tracking matches desktop compositor speed
-            accel = 1.0
-            spd_sq = dx * dx + dy * dy
-            if spd_sq > 49:  # > 7 raw counts per event
-                accel = min(3.5, 1.0 + (spd_sq ** 0.5) / 10.0)
-
-            self.cur_x += int(dx * accel)
-            self.cur_y += int(dy * accel)
-
-            # Ensure bounds dynamically in case external monitor is connected or cursor travels into extended space
-            self.node.topology.ensure_bounds(self.cur_x, self.cur_y)
+            # 1:1 displacement matches desktop compositor movement without false acceleration
+            self.cur_x += dx
+            self.cur_y += dy
 
             min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
             max_x = min_x + vw - 1
             max_y = min_y + vh - 1
-
-            # When mouse is pushed outward near edges, immediately saturate coordinates to eliminate drift
-            if dx > 0 and self.cur_x > max_x - 30:
-                self.cur_x = max_x
-            elif dx < 0 and self.cur_x < min_x + 30:
-                self.cur_x = min_x
-            if dy > 0 and self.cur_y > max_y - 30:
-                self.cur_y = max_y
-            elif dy < 0 and self.cur_y < min_y + 30:
-                self.cur_y = min_y
 
             self.cur_x = max(min_x, min(max_x, self.cur_x))
             self.cur_y = max(min_y, min(max_y, self.cur_y))
@@ -1665,16 +1617,16 @@ class LinuxHardwareInputGrabber:
         hit_edge = EDGE_NONE
         outward_push = 0.0
 
-        if rel_x >= mon.width - 12 and dx > 0 and not in_v_corner:
+        if rel_x >= mon.width - 6 and dx > 0 and not in_v_corner:
             hit_edge = EDGE_RIGHT
             outward_push = dx
-        elif rel_x <= 11 and dx < 0 and not in_v_corner:
+        elif rel_x <= 5 and dx < 0 and not in_v_corner:
             hit_edge = EDGE_LEFT
             outward_push = -dx
-        elif rel_y <= 11 and dy < 0 and not in_h_corner:
+        elif rel_y <= 5 and dy < 0 and not in_h_corner:
             hit_edge = EDGE_TOP
             outward_push = -dy
-        elif rel_y >= mon.height - 12 and dy > 0 and not in_h_corner:
+        elif rel_y >= mon.height - 6 and dy > 0 and not in_h_corner:
             hit_edge = EDGE_BOTTOM
             outward_push = dy
 
@@ -1708,11 +1660,11 @@ class LinuxHardwareInputGrabber:
 
         self._accum_push += outward_push
 
-        # Snappy barrier push: 2.0 outward push is enough for immediate, natural crossing
-        if self._accum_push >= 2.0:
+        # Snappy barrier push: 4.0 outward push ensures deliberate crossing at the true physical boundary
+        if self._accum_push >= 4.0:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
-            self._edge_cooldown_until = time.time() + 0.35
+            self._edge_cooldown_until = time.time() + 0.4
 
             peer_name = target_peer.get("deviceName", "Cihaz")
             self.node.log(f"[Otomatik Kenar Geçişi] 🎯 İmleç {hit_edge}. kenardan '{peer_name}' cihazına anında aktarılıyor (norm={norm_pos:.2f}).")

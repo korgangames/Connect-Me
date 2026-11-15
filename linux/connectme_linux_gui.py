@@ -162,13 +162,15 @@ class ScreenEdgeSentinels:
         if not any(p.get("isMutuallyPaired") for p in self.node.peers.values()):
             return
 
+        # If kernel-level hardware grabber is available and monitoring, let it handle edge transitions
+        # directly from /dev/input/event* to prevent XWayland pointer clamping and coordinate drift
+        if hasattr(self.node, "hardware_grabber") and self.node.hardware_grabber.can_grab():
+            return
+
         try:
             cur_x, cur_y = self.root.winfo_pointerxy()
         except Exception:
             return
-
-        if hasattr(self.node, "hardware_grabber"):
-            self.node.hardware_grabber.sync_cursor(cur_x, cur_y)
 
         mon = self.node.topology.find_monitor_at(cur_x, cur_y)
         if not mon:
@@ -208,7 +210,7 @@ class ScreenEdgeSentinels:
             return
 
         mon_id = getattr(mon, "monitorId", None)
-        target = self.node.find_adjacent_peer_in_colony(self.node.device_id, hit_edge, norm_pos)
+        target = self.node.find_adjacent_peer_in_colony(self.node.device_id, hit_edge, norm_pos, mon_id)
         if not target:
             target = self.node.resolve_peer_for_edge_and_norm(hit_edge, norm_pos, mon_id)
         if not target and mon_id:

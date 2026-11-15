@@ -25,6 +25,7 @@ public static class Program
         TestSpatialTopologyEdgeSwitchingAndDeadCorners();
         TestMultiDevicePartialEdgeSegmentsAndCanvasSnapping();
         TestMultiMonitorInternalSeamPassThrough();
+        TestSecondaryReturnPushAndInternalSeamGuard();
         TestMultiMonitorNegativeCoordinateReturn();
         TestLinuxKScreenDoctorJsonParser();
         TestLinuxXRandrOutputParser();
@@ -316,6 +317,28 @@ public static class Program
             outerTransition.TargetPeer?.DeviceId == "android-dual" &&
             outerTransition.SourceMonitorId == "DISPLAY2",
             "Çoklu Monitör İç Birleşim Koruması: Monitör 1 -> Monitör 2 geçişinde imleç serbest, Monitör 2 dış kenarında Android'e geçiş");
+    }
+
+    private static void TestSecondaryReturnPushAndInternalSeamGuard()
+    {
+        var topo = new SpatialTopologyEngine();
+        var mon1 = new PhysicalMonitorDescriptor { MonitorId = "DISPLAY1", Name = "Monitör 1", VirtualX = 0, VirtualY = 0, Width = 1920, Height = 1080, IsPrimary = true };
+        var mon2 = new PhysicalMonitorDescriptor { MonitorId = "DISPLAY2", Name = "Monitör 2", VirtualX = 1920, VirtualY = 0, Width = 1920, Height = 1080, IsPrimary = false };
+        topo.UpdateLocalMonitors([mon1, mon2]);
+
+        // 1. Point at left edge of Monitor 2 (X=1920) is an internal seam (transitioning to Monitor 1)
+        bool mon2LeftIsSeam = topo.IsPointOnInternalMonitorSeam(mon2, ScreenEdge.Left, 1920, 540);
+        // 2. Point at left edge of Monitor 1 (X=0) is a true outer boundary
+        bool mon1LeftIsSeam = topo.IsPointOnInternalMonitorSeam(mon1, ScreenEdge.Left, 0, 540);
+
+        // 3. Point at right edge of Monitor 1 (X=1919) is an internal seam (transitioning to Monitor 2)
+        bool mon1RightIsSeam = topo.IsPointOnInternalMonitorSeam(mon1, ScreenEdge.Right, 1919, 540);
+        // 4. Point at right edge of Monitor 2 (X=3839) is a true outer boundary
+        bool mon2RightIsSeam = topo.IsPointOnInternalMonitorSeam(mon2, ScreenEdge.Right, 3839, 540);
+
+        AssertTrue(
+            mon2LeftIsSeam && !mon1LeftIsSeam && mon1RightIsSeam && !mon2RightIsSeam,
+            "İkincil Mod Kenar Dönüşü ve Çoklu Monitör İç Dikiş Koruması (İç dikişlerde erken dönüş engellendi, dış kenarlarda dönüş serbest)");
     }
 
     private static void TestMultiMonitorNegativeCoordinateReturn()
