@@ -43,6 +43,7 @@ public static class Program
         await TestAudioMatrixAndRoutingAsync();
         await TestRelativeSpatialTopologyAndMultiDeviceColonySyncAsync();
         await TestRichClipboardImageAndCrossEdgeDragAsync();
+        TestConsistentEdgeCrossingAndPrematureJumpPrevention();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -1389,6 +1390,71 @@ public static class Program
             "Ortak Cep Dosya Aktarımı: Gönderilen dosya kullanıcının seçtiği yeni Ortak Cep klasörüne kaydedildi");
 
         try { Directory.Delete(tempShelf, true); } catch { }
+    }
+
+    private static void TestConsistentEdgeCrossingAndPrematureJumpPrevention()
+    {
+        var topo = new SpatialTopologyEngine
+        {
+            CornerDeadZonePixels = 24,
+            EdgeResistancePixels = 20.0
+        };
+        var mon = new PhysicalMonitorDescriptor
+        {
+            MonitorId = "DISPLAY1",
+            Name = "Birincil Ekran",
+            VirtualX = 0,
+            VirtualY = 0,
+            Width = 1920,
+            Height = 1080,
+            IsPrimary = true
+        };
+        topo.UpdateLocalMonitors([mon]);
+
+        var peer = new PeerDeviceNode
+        {
+            DeviceId = "laptop-1",
+            DeviceName = "Laptop",
+            Platform = "linux",
+            ScreenWidth = 1920,
+            ScreenHeight = 1080,
+            MyEnteredPinVerifiedByRemote = true,
+            RemoteEnteredMyPinVerified = true
+        };
+        topo.AssignPeerToEdge(ScreenEdge.Right, peer);
+
+        // 1. Ekranın %75'inde (X=1440) yüksek hızda fare hareketi (deltaX=150) ASLA erken geçiş yapmamalıdır
+        var midScreenStep = topo.EvaluateCursorStep(1440, 500, deltaX: 150, deltaY: 0);
+        AssertTrue(!midScreenStep.ShouldTransition,
+            "Erken Geçiş Önleme: Ekranın %75'inde (X=1440) hızlı fare vuruşunda diğer cihaza erken zıplama engellendi");
+
+        // 2. Fiziksel sınırın hemen içi (X=1900) yine erken geçiş yapmamalıdır
+        var nearBorderStep = topo.EvaluateCursorStep(1900, 500, deltaX: 20, deltaY: 0);
+        AssertTrue(!nearBorderStep.ShouldTransition,
+            "Erken Geçiş Önleme: Ekran kenarına yaklaşırken (X=1900) imleç henüz sınıra ulaşmadan geçiş engellendi");
+
+        // 3. Pencere kapatma köşesinde (X=1919, Y=10) Dead-Corner koruması geçişi engeller
+        var deadCornerStep = topo.EvaluateCursorStep(1919, 10, deltaX: 50, deltaY: 0);
+        AssertTrue(!deadCornerStep.ShouldTransition,
+            "Köşe Koruması: Sağ üst pencere kapatma köşesinde (Y=10) yanlışlıkla geçiş engellendi");
+
+        // 4. Gerçek fiziksel sınırda (X=1919, Y=500) kasıtlı dışa doğru itme (>= 20px) geçişi tam ve tutarlı sağlar
+        var push1 = topo.EvaluateCursorStep(1919, 500, deltaX: 12, deltaY: 0);
+        var push2 = topo.EvaluateCursorStep(1919, 500, deltaX: 12, deltaY: 0);
+        AssertTrue(!push1.ShouldTransition && push2.ShouldTransition && push2.TargetPeer?.DeviceId == "laptop-1",
+            "Tutarlı Kenar Geçişi: Fiziksel sınırda (X=1919) kasıtlı itmede 20px direnç aşılarak diğer cihaza pürüzsüz geçiş sağlandı");
+
+        // 5. İçe doğru geri çekilme (X=1900) birikmiş itmeyi sıfırlar
+        topo.EvaluateCursorStep(1919, 500, deltaX: 10, deltaY: 0); // 10px birikti
+        topo.EvaluateCursorStep(1500, 500, deltaX: -10, deltaY: 0); // İçe çekildi -> reset
+        var pushAfterReset = topo.EvaluateCursorStep(1919, 500, deltaX: 12, deltaY: 0); // 12px < 20px
+        AssertTrue(!pushAfterReset.ShouldTransition,
+            "Kenar İtme Sıfırlama: İmleç sınırdan içeri çekildiğinde birikmiş direnç sıfırlandı ve kilitlenme önlendi");
+
+        // 6. Geri dönüş koordinatı güvenli iç marj ile (X=1912) iniş yapar ve anında geri sekme yaşanmaz
+        var (entryX, entryY) = topo.ComputeLocalEntryPoint(ScreenEdge.Right, 0.5f, peer);
+        AssertTrue(entryX == 1912 && entryY == 540,
+            "Güvenli İniş Koordinatı: Uzak cihazdan Windows'a geri dönüşte imleç sınırın içine (1912, 540) güvenle iniş yaptı");
     }
 }
 

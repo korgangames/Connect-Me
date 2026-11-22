@@ -165,7 +165,6 @@ public sealed class Win32InputEngine : IDisposable
     private void ProcessRawInput(IntPtr hRawInput)
     {
         var remote = ActiveRemotePeer;
-        if (remote == null) return;
 
         uint dwSize = 0;
         int headerSize = Marshal.SizeOf<RAWINPUTHEADER>();
@@ -191,15 +190,52 @@ public sealed class Win32InputEngine : IDisposable
                             int dx = *(int*)(pBuf + offset + 12);
                             int dy = *(int*)(pBuf + offset + 16);
 
-                            if (dx != 0 || dy != 0)
+                            if (remote != null)
                             {
-                                remote.RemoteCursorX = Math.Clamp(remote.RemoteCursorX + dx, 0, remote.ScreenWidth);
-                                remote.RemoteCursorY = Math.Clamp(remote.RemoteCursorY + dy, 0, remote.ScreenHeight);
+                                if (dx != 0 || dy != 0)
+                                {
+                                    remote.RemoteCursorX = Math.Clamp(remote.RemoteCursorX + dx, 0, remote.ScreenWidth);
+                                    remote.RemoteCursorY = Math.Clamp(remote.RemoteCursorY + dy, 0, remote.ScreenHeight);
 
-                                _network.SendMouseMove(
-                                    remote,
-                                    (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
-                                    (short)Math.Clamp(dy, short.MinValue, short.MaxValue));
+                                    _network.SendMouseMove(
+                                        remote,
+                                        (short)Math.Clamp(dx, short.MinValue, short.MaxValue),
+                                        (short)Math.Clamp(dy, short.MinValue, short.MaxValue));
+                                }
+                            }
+                            else if (_controllingRemotePeer == null && (dx != 0 || dy != 0))
+                            {
+                                // Local Windows Host: Even when the visible OS cursor is clamped against a physical screen edge
+                                // (where WH_MOUSE_LL receives dx = 0), RawInput delivers physical mouse pushes outward so the cursor
+                                // can push through edge resistance smoothly without ever getting stuck.
+                                if (GetCursorPos(out POINT curPt))
+                                {
+                                    var mon = _topology.FindMonitorContainingPoint(curPt.X, curPt.Y)
+                                              ?? _topology.FindMonitorNearestPoint(curPt.X, curPt.Y);
+                                    if (mon != null)
+                                    {
+                                        int relX = curPt.X - mon.VirtualX;
+                                        int relY = curPt.Y - mon.VirtualY;
+                                        bool atEdge = (relX <= 1 && dx < 0) ||
+                                                      (relX >= mon.Width - 2 && dx > 0) ||
+                                                      (relY <= 1 && dy < 0) ||
+                                                      (relY >= mon.Height - 2 && dy > 0);
+
+                                        if (atEdge)
+                                        {
+                                            var transition = _topology.EvaluateCursorStep(curPt.X, curPt.Y, dx, dy);
+                                            if (transition.ShouldTransition && transition.TargetPeer != null &&
+                                                (DateTimeOffset.UtcNow - _lastReturnToLocalTime > TimeSpan.FromMilliseconds(400)))
+                                            {
+                                                SwitchControlToPeer(
+                                                    transition.TargetPeer,
+                                                    transition.LocalExitEdge,
+                                                    transition.TargetEntranceEdge,
+                                                    transition.NormalizedPosition);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

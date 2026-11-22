@@ -1,3 +1,35 @@
+# Connect Me v1.8.33 — Ekran Sınırı Geçiş Tutarsızlıkları, Erken Atlama (Premature Jump) ve Sınırda Kilitlenme/Takılma Düzeltmeleri (Windows & Linux)
+
+Bu sürüm; cihazlar arası ekran sınırı geçişlerinde yaşanan tutarsızlıkları, imlecin ekrandan çıkamayıp kilitlenmesi/takılması (locked out / stuck) ve ekranın henüz %25'i varken istemci cihaza erkenden atlaması (premature jump) sorunlarını kökten çözer:
+
+1. **Linux İstemci Modunda Sınırda Kilitlenme & Ana Makineye Dönememe Sorununun Giderilmesi:**
+   - **Kök Neden:** Linux istemci (ikincil ekran) olarak Windows'tan gelen fare hareketlerini alırken, imlecin ekrandan çıkıp Windows'a geri dönebilmesi için `hardware_grabber._is_os_edge_confirmed()` kontrolü yapılıyordu. Ancak bu fonksiyon Linux'un *fiziksel* faresinin Tkinter sentinel penceresi üzerinde olup olmadığını denetliyordu. Kullanıcı Windows faresini hareket ettirdiği sırada Linux'un fiziksel faresi masada hareketsiz durduğundan bu kontrol daima `False` dönüyordu. Sonuç olarak `RESISTANCE_THRESHOLD = 650.0` zorlanıyor, imleç sınıra hapsediliyor ve `abs(dx) > 3` olan her UDP paketinde birikmiş direnç sıfırlanarak kullanıcının arayüzdeki "transfer cursor" butonuna basmadan Windows'a geri dönmesi imkansız hale geliyordu.
+   - **Çözüm:** İstemci modundaki sınır geçiş mantığında donanım yakalayıcı sentinel bağımlılığı tamamen kaldırıldı. Temiz ve duyarlı `RESISTANCE_THRESHOLD = 8.0` eşiği getirildi; `return_edge_push_accum` birikimi yalnızca imleç ekran sınırından >25 piksel içeriye doğru bilinçli olarak çekildiğinde sıfırlanacak şekilde düzenlendi.
+
+2. **Ekranın %75'inde / Sınıra Mesafe Varken Erken Atlama (Premature Jump) Sorununun Ortadan Kaldırılması:**
+   - **Kök Neden:** Linux ana makine modundayken `evdev` ham fare deltaları (`_cur_x_f += dx * accel`) ile sanal koordinat hesaplanıyordu. Bu yazılımsal koordinat hesabı, Wayland/KDE/GNOME kompozitörünün hızlandırma eğrileri ve kesirli ölçekleme (%125/%150) ile zamanla kayma (drift) yaşıyordu. Koordinat ekranın sağına vurduğunda, işletim sisteminin görünür imleci henüz ekranın %75'indeyken bile `required_push = 650.0` geri dönüş mekanizması devreye girip 650 sayım toplayarak imleci istemci cihaza erkenden fırlatıyordu.
+   - **Çözüm:** `_process_local_mouse_move` içinde `if not os_confirmed:` durumunda geçiş kesinlikle engellendi (`self._accum_push = 0.0; self._push_edge = EDGE_NONE; return`). Görünür OS imleci fiziksel monitörün en dış sınırındaki sentinel penceresine temas etmeden hiçbir şekilde geçiş tetiklenmez.
+
+3. **Kenar Algılama Güvenilirliği & Kalıcı Kenar Gezinme (Persistent Edge Hover):**
+   - **Sentinel Kalınlığı:** `connectme_linux_gui.py` içindeki `ScreenEdgeSentinels` sınır şeritlerinin kalınlığı `2px`'den `4px`'e çıkarıldı. Hızlı fare savurmalarında veya kesirli piksel ölçeklemelerinde imlecin şeridi atlaması engellendi.
+   - **Yapay Zaman Aşımının Kaldırılması:** `_is_os_edge_confirmed()` içindeki yapay `0.6` saniyelik zaman aşımı (`now - self._sentinel_touch_time < 0.6`) kaldırıldı. Kullanıcı imleci ekran sınırına dayayıp hafifçe beklese veya itmeye devam etse dahi imleç içeriye doğru çekilmediği (`dx < -2`) veya `<Leave>` tetiklenmediği sürece kenar teyit durumu aktif kalır.
+
+4. **Windows Ana Makine Ham Girdi (RawInput) İtme Desteği:**
+   - **Kök Neden:** Windows imleci monitörün en sağ pikseline (`X = 1919`) ulaştığında Windows işletim sistemi imleç koordinatını kilitler (`clamp`). Bu nedenle `WH_MOUSE_LL` kancası sonraki karelerde `dx = 0` raporlar. `Win32InputEngine` içinde `remote == null` durumunda `ProcessRawInput` çağrısı doğrudan sonlandırılıyordu; bu da kullanıcının tek bir karede 20-25 piksel savurma yapmadığı durumlarda sınır direncini aşmasını zorlaştırıyordu.
+   - **Çözüm:** `ActiveRemotePeer == null` iken imleç bir monitör sınırındaysa (`atEdge`), Windows işletim sisteminin yuttuğu ham donanım sensör hareketleri (`dx, dy`) `RawInput` üzerinden `_topology.EvaluateCursorStep()` fonksiyonuna iletilir. Birikmiş itme eşiği aşıldığında pürüzsüz ve doğal bir geçiş sağlanır.
+
+5. **Otomatik Birim Testleri:**
+   - `windows/ConnectMe.Tests/Program.cs` içerisine `TestConsistentEdgeCrossingAndPrematureJumpPrevention` birim testi eklendi:
+     - Ekranın %75 genişliğinde (X=1440) yüksek hızda fare hareketiyle geçiş yapılmadığı doğrulandı.
+     - Sınıra yaklaşırken (X=1900) geçiş yapılmadığı doğrulandı.
+     - Sağ üst ölü köşede (Pencere Kapat 'X' düğmesi civarı, Y=10) geçiş yapılmadığı doğrulandı.
+     - Fiziksel sınırda (X=1919) kasıtlı itmeyle (>=20px) pürüzsüz geçiş sağlandığı doğrulandı.
+     - İçeriye doğru hareketin itme birikimini sıfırladığı doğrulandı.
+     - Dönen imlecin hemen geri sekmemesi için güvenli iç marj ile (1912, 540) indiği doğrulandı.
+     - Toplam 92 birim testin 92'si de başarıyla geçti.
+
+---
+
 # Connect Me v1.8.32 — Dinamik Linux Monitör Tak-Çıkar (Hotplug) Düzeltmesi ve Cihazlara Özel Takma Ad (Nickname) Sistemi (Windows & Linux)
 
 Bu sürüm; uygulama açıkken Linux'a yeni bir monitör bağlandığında veya çözünürlük değiştiğinde topolojinin güncellenmemesi sorununu giderir ve imleç diğer ekrandayken görünen uzun/karmaşık cihaz adları yerine kullanıcının tek bakışta kolayca tanıyabileceği özel takma adlar (nickname) atayabilmesini sağlar:

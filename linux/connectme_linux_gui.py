@@ -163,7 +163,7 @@ class ScreenEdgeSentinels:
 
         desired: Dict[str, Tuple[PhysicalMonitor, int, str, bool]] = {}
         dead_zone = 16
-        thickness = 2
+        thickness = 4
 
         for mon in self.node.topology.monitors:
             for edge in (EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, EDGE_BOTTOM):

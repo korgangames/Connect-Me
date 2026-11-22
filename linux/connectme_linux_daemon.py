@@ -53,7 +53,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.32"
+    return "1.8.33"
 
 VERSION = _resolve_app_version()
 
@@ -1259,6 +1259,7 @@ class LinuxHardwareInputGrabber:
                 self._sentinel_hovered_edge = EDGE_NONE
                 self._sentinel_hovered_mon_id = None
                 self._sentinel_touch_time = 0.0
+                self._os_update_time = 0.0
 
     def _is_os_edge_confirmed(self, mon: PhysicalMonitor, edge: int) -> bool:
         """Verifies that the visible OS cursor has physically reached the monitor's outer edge."""
@@ -1266,20 +1267,22 @@ class LinuxHardwareInputGrabber:
             return True
         now = time.time()
         with self._coord_lock:
-            if self._sentinel_hovered_edge == edge and (now - self._sentinel_touch_time < 0.6):
+            # Active while the pointer is hovering the sentinel strip (cleared when cursor moves inward or leaves)
+            if self._sentinel_hovered_edge == edge:
                 if not self._sentinel_hovered_mon_id or self._sentinel_hovered_mon_id == mon.monitorId:
                     return True
-            if now - self._os_update_time < 0.25:
+            # Also confirm if fresh OS pointer coordinates (within last 0.8s) are right at the physical edge
+            if now - self._os_update_time < 0.8:
                 ox, oy = self._os_x, self._os_y
-                if (mon.virtualX - 4 <= ox <= mon.virtualX + mon.width + 4 and
-                        mon.virtualY - 4 <= oy <= mon.virtualY + mon.height + 4):
-                    if edge == EDGE_RIGHT and ox >= mon.virtualX + mon.width - 10:
+                if (mon.virtualX - 6 <= ox <= mon.virtualX + mon.width + 6 and
+                        mon.virtualY - 6 <= oy <= mon.virtualY + mon.height + 6):
+                    if edge == EDGE_RIGHT and ox >= mon.virtualX + mon.width - 12:
                         return True
-                    if edge == EDGE_LEFT and ox <= mon.virtualX + 9:
+                    if edge == EDGE_LEFT and ox <= mon.virtualX + 11:
                         return True
-                    if edge == EDGE_TOP and oy <= mon.virtualY + 9:
+                    if edge == EDGE_TOP and oy <= mon.virtualY + 11:
                         return True
-                    if edge == EDGE_BOTTOM and oy >= mon.virtualY + mon.height - 10:
+                    if edge == EDGE_BOTTOM and oy >= mon.virtualY + mon.height - 12:
                         return True
         return False
 
@@ -1295,22 +1298,22 @@ class LinuxHardwareInputGrabber:
             return
 
         with self._coord_lock:
-            recent_active = (now - self._last_evdev_move_time) < 0.15
+            recent_active = (now - self._last_evdev_move_time) < 0.35
             rdx = self._recent_dx
             rdy = self._recent_dy
             accum = self._accum_push if self._push_edge == edge else 0.0
 
         moving_into_edge = False
         if recent_active:
-            if edge == EDGE_RIGHT and rdx >= 0.5:
+            if edge == EDGE_RIGHT and rdx >= 0.2:
                 moving_into_edge = True
-            elif edge == EDGE_LEFT and rdx <= -0.5:
+            elif edge == EDGE_LEFT and rdx <= -0.2:
                 moving_into_edge = True
-            elif edge == EDGE_TOP and rdy <= -0.5:
+            elif edge == EDGE_TOP and rdy <= -0.2:
                 moving_into_edge = True
-            elif edge == EDGE_BOTTOM and rdy >= 0.5:
+            elif edge == EDGE_BOTTOM and rdy >= 0.2:
                 moving_into_edge = True
-        if accum >= 3.0:
+        if accum >= 2.0:
             moving_into_edge = True
 
         if not moving_into_edge:
@@ -1764,12 +1767,16 @@ class LinuxHardwareInputGrabber:
 
             if self._sentinel_hovered_edge == EDGE_RIGHT and dx < -2:
                 self._sentinel_hovered_edge = EDGE_NONE
+                self._os_update_time = 0.0
             elif self._sentinel_hovered_edge == EDGE_LEFT and dx > 2:
                 self._sentinel_hovered_edge = EDGE_NONE
+                self._os_update_time = 0.0
             elif self._sentinel_hovered_edge == EDGE_TOP and dy > 2:
                 self._sentinel_hovered_edge = EDGE_NONE
+                self._os_update_time = 0.0
             elif self._sentinel_hovered_edge == EDGE_BOTTOM and dy < -2:
                 self._sentinel_hovered_edge = EDGE_NONE
+                self._os_update_time = 0.0
 
             # Match libinput adaptive velocity curve so fast leftward movements and normal rightward
             # movements stay proportional to the desktop compositor pointer
@@ -1836,26 +1843,15 @@ class LinuxHardwareInputGrabber:
             return
 
         os_confirmed = self._is_os_edge_confirmed(mon, hit_edge)
-        if not os_confirmed and getattr(self.node, "gui_active", False):
-            # Hold dead-reckoning coordinate just inside the border until the visible OS cursor
-            # actually touches the 2px outer-edge sentinel (or sustained 650-count fallback for fullscreen apps)
-            with self._coord_lock:
-                if hit_edge == EDGE_RIGHT:
-                    self._cur_x_f = float(mon.virtualX + mon.width - 5)
-                    self.cur_x = int(self._cur_x_f)
-                elif hit_edge == EDGE_LEFT:
-                    self._cur_x_f = float(mon.virtualX + 4)
-                    self.cur_x = int(self._cur_x_f)
-                elif hit_edge == EDGE_TOP:
-                    self._cur_y_f = float(mon.virtualY + 4)
-                    self.cur_y = int(self._cur_y_f)
-                elif hit_edge == EDGE_BOTTOM:
-                    self._cur_y_f = float(mon.virtualY + mon.height - 5)
-                    self.cur_y = int(self._cur_y_f)
+        if not os_confirmed:
+            # OS cursor is NOT physically at the edge! Never accumulate push or transition prematurely!
+            self._accum_push = 0.0
+            self._push_edge = EDGE_NONE
+            return
 
         eff_rel_x = rel_x
         eff_rel_y = rel_y
-        if os_confirmed and (now - self._os_update_time < 0.6):
+        if now - self._os_update_time < 0.8:
             eff_rel_x = self._os_x - mon.virtualX
             eff_rel_y = self._os_y - mon.virtualY
 
@@ -1878,9 +1874,9 @@ class LinuxHardwareInputGrabber:
 
         self._accum_push += outward_push
 
-        # Require OS edge confirmation (from 2px edge sentinel or live pointer) for instant 4.0-count crossing;
-        # otherwise require 650.0 counts so dead-reckoning drift never triggers at 75% of the screen.
-        required_push = 4.0 if os_confirmed else 650.0
+        # When OS edge is confirmed (cursor physically touching outer border), a small intentional push (6.0 counts)
+        # provides natural resistance without getting stuck or delaying transition
+        required_push = 6.0
         if self._accum_push >= required_push:
             self._accum_push = 0.0
             self._push_edge = EDGE_NONE
@@ -4327,19 +4323,10 @@ class ConnectMeLinuxNode:
                                 push_amount = 0.0
 
                         if pushing_edge != EDGE_NONE and cur_mon:
-                            os_confirmed = self.hardware_grabber._is_os_edge_confirmed(cur_mon, pushing_edge) if hasattr(self, "hardware_grabber") else True
-                            if not os_confirmed and self.gui_active:
-                                if pushing_edge == EDGE_RIGHT:
-                                    self.cursor_x = float(cur_mon.virtualX + cur_mon.width - 5)
-                                elif pushing_edge == EDGE_LEFT:
-                                    self.cursor_x = float(cur_mon.virtualX + 4)
-                                elif pushing_edge == EDGE_TOP:
-                                    self.cursor_y = float(cur_mon.virtualY + 4)
-                                elif pushing_edge == EDGE_BOTTOM:
-                                    self.cursor_y = float(cur_mon.virtualY + cur_mon.height - 5)
-
-                            RESISTANCE_THRESHOLD = 8.0 if os_confirmed else 650.0
+                            # In client mode, self.cursor_x/y is driven directly by remote input packets.
+                            # Standard 8.0 pixel edge resistance allows immediate, natural return without getting trapped.
                             self.return_edge_push_accum += push_amount
+                            RESISTANCE_THRESHOLD = 8.0
                             if self.return_edge_push_accum >= RESISTANCE_THRESHOLD:
                                 if pushing_edge in (EDGE_LEFT, EDGE_RIGHT):
                                     norm_val = max(0.02, min(0.98, (self.cursor_y - cur_mon.virtualY) / float(max(1, cur_mon.height))))
@@ -4360,7 +4347,8 @@ class ConnectMeLinuxNode:
                                         relay_peer = adj
                                         ret_edge = {EDGE_LEFT: EDGE_RIGHT, EDGE_RIGHT: EDGE_LEFT, EDGE_TOP: EDGE_BOTTOM, EDGE_BOTTOM: EDGE_TOP}.get(pushing_edge, EDGE_NONE)
                                         ret_norm = norm_val
-                        elif abs(dx) > 3 or abs(dy) > 3:
+                        elif cur_mon and (cur_mon.virtualX + 25 < self.cursor_x < cur_mon.virtualX + cur_mon.width - 25 and
+                                          cur_mon.virtualY + 25 < self.cursor_y < cur_mon.virtualY + cur_mon.height - 25):
                             self.return_edge_push_accum = 0.0
 
                         if return_triggered:
