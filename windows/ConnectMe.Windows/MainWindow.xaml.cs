@@ -688,7 +688,7 @@ public partial class MainWindow : Window
     private (double Width, double Height) GetScaledPeerBoxSize(PeerDeviceNode peer)
     {
         double scale = GetCanvasMonitorScale();
-        if (peer.RemoteMonitors is { Count: > 0 })
+        if (peer.RemoteMonitors is { Count: > 1 })
         {
             int minVx = peer.RemoteMonitors.Min(m => m.VirtualX);
             int minVy = peer.RemoteMonitors.Min(m => m.VirtualY);
@@ -696,13 +696,13 @@ public partial class MainWindow : Window
             int maxVy = peer.RemoteMonitors.Max(m => m.VirtualY + m.Height);
             double deskW = (maxVx - minVx) * scale;
             double deskH = (maxVy - minVy) * scale;
-            return (Math.Max(120, deskW), Math.Max(70, deskH));
+            return (Math.Max(140, deskW + 16), Math.Max(84, deskH + 46));
         }
 
         double rawW = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
         double rawH = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
         double w = Math.Max(120, rawW * scale);
-        double h = Math.Max(70, rawH * scale);
+        double h = Math.Max(68, rawH * scale);
         return (w, h);
     }
 
@@ -759,8 +759,8 @@ public partial class MainWindow : Window
         {
             double mLeft = offsetX + (_topology.LocalColonyX + (mon.VirtualX - minVx)) * scale;
             double mTop = offsetY + (_topology.LocalColonyY + (mon.VirtualY - minVy)) * scale;
-            double mW = Math.Max(70, mon.Width * scale);
-            double mH = Math.Max(50, mon.Height * scale);
+            double mW = Math.Max(100, mon.Width * scale);
+            double mH = Math.Max(64, mon.Height * scale);
             _lastRenderedLocalBoxes.Add((mon, mLeft, mTop, mW, mH));
 
             bool isLocalMonSelected = _selectedLocalMonitor?.MonitorId == mon.MonitorId;
@@ -830,7 +830,7 @@ public partial class MainWindow : Window
 
             monStack.Children.Add(new TextBlock
             {
-                Text = mon.IsPrimary ? $"🪟 {mon.MonitorId} (Ana)" : $"🖥️ {mon.MonitorId}",
+                Text = mon.IsPrimary ? $"🖥️ {mon.MonitorId} (Ana)" : $"🖥️ {mon.MonitorId}",
                 FontWeight = FontWeights.Bold,
                 FontSize = _lastRenderedLocalBoxes.Count > 1 ? 10.5 : 12,
                 Foreground = Brushes.White,
@@ -901,8 +901,31 @@ public partial class MainWindow : Window
             int ph = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
             double pLeft = offsetX + peer.ColonyX * scale;
             double pTop = offsetY + peer.ColonyY * scale;
-            double boxW = Math.Max(120, pw * scale);
-            double boxH = Math.Max(70, ph * scale);
+
+            bool isMultiMon = peer.RemoteMonitors is { Count: > 1 };
+            double boxW, boxH;
+            double deskW = 0, deskH = 0;
+            int pMinVx = 0, pMinVy = 0;
+
+            if (isMultiMon)
+            {
+                pMinVx = peer.RemoteMonitors.Min(m => m.VirtualX);
+                pMinVy = peer.RemoteMonitors.Min(m => m.VirtualY);
+                int pMaxVx = peer.RemoteMonitors.Max(m => m.VirtualX + m.Width);
+                int pMaxVy = peer.RemoteMonitors.Max(m => m.VirtualY + m.Height);
+                deskW = Math.Max(1, (pMaxVx - pMinVx) * scale);
+                deskH = Math.Max(1, (pMaxVy - pMinVy) * scale);
+
+                double headerH = 34.0;
+                double padY = 12.0;
+                boxW = Math.Max(140.0, deskW + 16.0);
+                boxH = Math.Max(84.0, deskH + headerH + padY);
+            }
+            else
+            {
+                boxW = Math.Max(120.0, pw * scale);
+                boxH = Math.Max(68.0, ph * scale);
+            }
 
             peer.CanvasX = pLeft;
             peer.CanvasY = pTop;
@@ -920,7 +943,7 @@ public partial class MainWindow : Window
                 anchorTop = parentPeer.CanvasY;
                 anchorW = parentPeer.CanvasWidth;
                 anchorH = parentPeer.CanvasHeight;
-                anchorName = parentPeer.DeviceName;
+                anchorName = parentPeer.DisplayName;
             }
             else
             {
@@ -933,7 +956,7 @@ public partial class MainWindow : Window
                 anchorTop = attachedMonBox.Top;
                 anchorW = attachedMonBox.Width;
                 anchorH = attachedMonBox.Height;
-                anchorName = attachedMonBox.Monitor?.Name ?? "Bu Bilgisayar";
+                anchorName = attachedMonBox.Monitor?.MonitorId ?? attachedMonBox.Monitor?.Name ?? "Bu Bilgisayar";
             }
 
             DrawSharedEdgePortalLine(
@@ -947,7 +970,7 @@ public partial class MainWindow : Window
             bool isCursorHere = _inputEngine.ActiveRemotePeer?.DeviceId == peer.DeviceId;
             bool isPaired = peer.IsMutuallyPaired;
 
-            string multiMonInfo = peer.RemoteMonitorCount > 1
+            string multiMonInfo = isMultiMon
                 ? $" ({peer.RemoteMonitorCount} Ekran)"
                 : $" ({peer.ScreenWidth}x{peer.ScreenHeight})";
 
@@ -976,59 +999,64 @@ public partial class MainWindow : Window
                 ToolTip = $"{peer.DisplayName} (Gerçek: {peer.DeviceName}){multiMonInfo}\nDurum: {(isPaired ? "Çift Taraflı Aktif" : "PIN Onayı Bekleniyor")}\nBağlı Ekran/Cihaz: {anchorName} — {FormatEdgeTr(peer.AssignedEdgeOnLocal)} Kenar (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek herhangi bir monitörün veya cihazın kenarına yapıştırabilirsiniz."
             };
 
-            var stack = new StackPanel
-            {
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(3)
-            };
+            // Status Sub-label text & styling
+            string statusSubText = isCursorHere
+                ? "🎯 [İMLEÇ UZAKTA]"
+                : (!isPaired
+                    ? "⏳ PIN Onayı Bekleniyor"
+                    : $"{anchorName} {FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}");
 
-            // Peer Device Title Banner
-            stack.Children.Add(new TextBlock
-            {
-                Text = $"{GetPlatformIcon(peer.Platform)} {peer.DisplayName}",
-                FontWeight = FontWeights.Bold,
-                FontSize = 10.5,
-                Foreground = Brushes.White,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = boxW - 10,
-                HorizontalAlignment = HorizontalAlignment.Center
-            });
-
-            // Status Sub-label
-            string statusSubText = !isPaired
-                ? "⏳ PIN Onayı Bekleniyor"
-                : $"{anchorName} {FormatEdgeShortTr(peer.AssignedEdgeOnLocal)} %{peer.EdgeOffsetStart * 100:F0}-{peer.EdgeOffsetEnd * 100:F0}";
-
-            stack.Children.Add(new TextBlock
-            {
-                Text = statusSubText,
-                FontSize = 8.8,
-                FontWeight = !isPaired ? FontWeights.Bold : FontWeights.Normal,
-                Foreground = !isPaired
+            Brush statusBrush = isCursorHere
+                ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
+                : (!isPaired
                     ? new SolidColorBrush(Color.FromRgb(251, 191, 36))
-                    : new SolidColorBrush(Color.FromRgb(56, 189, 248)),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 1, 0, 2)
-            });
+                    : new SolidColorBrush(Color.FromRgb(56, 189, 248)));
 
-            // True-To-Scale Monitor Boxes
-            if (peer.RemoteMonitors is { Count: > 0 })
+            if (isMultiMon)
             {
-                int pMinVx = peer.RemoteMonitors.Min(m => m.VirtualX);
-                int pMinVy = peer.RemoteMonitors.Min(m => m.VirtualY);
-                int pMaxVx = peer.RemoteMonitors.Max(m => m.VirtualX + m.Width);
-                int pMaxVy = peer.RemoteMonitors.Max(m => m.VirtualY + m.Height);
+                var cardGrid = new Grid();
+                cardGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                cardGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-                double deskW = Math.Max(1, (pMaxVx - pMinVx) * scale);
-                double deskH = Math.Max(1, (pMaxVy - pMinVy) * scale);
+                var headerStack = new StackPanel
+                {
+                    Margin = new Thickness(6, 5, 6, 3),
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+
+                // Peer Device Title Banner
+                headerStack.Children.Add(new TextBlock
+                {
+                    Text = $"{GetPlatformIcon(peer.Platform)} {peer.DisplayName}",
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 10.5,
+                    Foreground = Brushes.White,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    MaxWidth = boxW - 12,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                });
+
+                // Status Sub-label
+                headerStack.Children.Add(new TextBlock
+                {
+                    Text = statusSubText,
+                    FontSize = 8.5,
+                    FontWeight = !isPaired || isCursorHere ? FontWeights.Bold : FontWeights.Normal,
+                    Foreground = statusBrush,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 1, 0, 0)
+                });
+
+                Grid.SetRow(headerStack, 0);
+                cardGrid.Children.Add(headerStack);
 
                 var monCanvas = new Canvas
                 {
                     Width = deskW,
                     Height = deskH,
                     HorizontalAlignment = HorizontalAlignment.Center,
-                    Margin = new Thickness(2, 2, 2, 2)
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(4, 2, 4, 4)
                 };
 
                 for (int mIdx = 0; mIdx < peer.RemoteMonitors.Count; mIdx++)
@@ -1126,63 +1154,54 @@ public partial class MainWindow : Window
                     }
                 }
 
-                stack.Children.Add(monCanvas);
+                Grid.SetRow(monCanvas, 1);
+                cardGrid.Children.Add(monCanvas);
+                peerBorder.Child = cardGrid;
             }
             else
             {
-                // Single Screen
-                double rawW = peer.ScreenWidth > 0 ? peer.ScreenWidth : 1920;
-                double rawH = peer.ScreenHeight > 0 ? peer.ScreenHeight : 1080;
-                double sw = Math.Max(70, rawW * scale);
-                double sh = Math.Max(48, rawH * scale);
-
-                var singleBox = new Border
-                {
-                    Width = sw,
-                    Height = sh,
-                    Background = isCursorHere
-                        ? new SolidColorBrush(Color.FromRgb(6, 78, 59))
-                        : new SolidColorBrush(Color.FromRgb(15, 23, 42)),
-                    BorderBrush = isCursorHere
-                        ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
-                        : new SolidColorBrush(Color.FromRgb(56, 189, 248)),
-                    BorderThickness = new Thickness(isCursorHere ? 2.0 : 1.2),
-                    CornerRadius = new CornerRadius(5),
-                    Margin = new Thickness(2, 2, 2, 2)
-                };
-
                 var singleStack = new StackPanel
                 {
-                    HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(2)
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(6, 4, 6, 4)
                 };
 
+                // Peer Device Title Banner
                 singleStack.Children.Add(new TextBlock
                 {
-                    Text = $"{rawW:F0}x{rawH:F0}",
-                    FontSize = 8.5,
-                    Foreground = new SolidColorBrush(Color.FromRgb(147, 197, 253)),
+                    Text = $"{GetPlatformIcon(peer.Platform)} {peer.DisplayName}",
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 10.5,
+                    Foreground = Brushes.White,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    MaxWidth = boxW - 12,
                     HorizontalAlignment = HorizontalAlignment.Center
                 });
 
-                if (isCursorHere)
+                // Screen Resolution
+                singleStack.Children.Add(new TextBlock
                 {
-                    singleStack.Children.Add(new TextBlock
-                    {
-                        Text = "🎯 [İMLEÇ BURADA]",
-                        FontSize = 8.0,
-                        FontWeight = FontWeights.Bold,
-                        Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128)),
-                        HorizontalAlignment = HorizontalAlignment.Center
-                    });
-                }
+                    Text = $"{pw}x{ph}",
+                    FontSize = 9.0,
+                    Foreground = new SolidColorBrush(Color.FromRgb(147, 197, 253)),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 2, 0, 1)
+                });
 
-                singleBox.Child = singleStack;
-                stack.Children.Add(singleBox);
+                // Status Badge / Edge Alignment
+                singleStack.Children.Add(new TextBlock
+                {
+                    Text = statusSubText,
+                    FontSize = 8.5,
+                    FontWeight = !isPaired || isCursorHere ? FontWeights.Bold : FontWeights.Normal,
+                    Foreground = statusBrush,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 1, 0, 0)
+                });
+
+                peerBorder.Child = singleStack;
             }
-
-            peerBorder.Child = stack;
 
             peerBorder.MouseLeftButtonDown += PeerBox_MouseLeftButtonDown;
             peerBorder.MouseMove += PeerBox_MouseMove;
@@ -2038,7 +2057,7 @@ public partial class MainWindow : Window
                 ActiveFocusBadge.Background = new SolidColorBrush(Color.FromRgb(30, 58, 47));
                 ActiveFocusBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
                 ActiveFocusText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));
-                ActiveFocusText.Text = "🪟 Kontrol: Bu Bilgisayar (Yerel)";
+                ActiveFocusText.Text = "🖥️ Kontrol: Bu Bilgisayar (Yerel)";
                 AppendLog("[Kenar Geçişi] ⬅️ İmleç ve klavye ana ekrana geri döndü.");
                 HideRemoteHostHud();
             }
@@ -2737,11 +2756,15 @@ public partial class MainWindow : Window
 
     private static string GetPlatformIcon(string platform)
     {
+        if (string.IsNullOrWhiteSpace(platform))
+            return "🖥️";
         if (platform.Contains("android", StringComparison.OrdinalIgnoreCase))
             return "📱";
         if (platform.Contains("linux", StringComparison.OrdinalIgnoreCase) || platform.Contains("nobara", StringComparison.OrdinalIgnoreCase))
             return "🐧";
-        return "🪟";
+        if (platform.Contains("mac", StringComparison.OrdinalIgnoreCase) || platform.Contains("darwin", StringComparison.OrdinalIgnoreCase) || platform.Contains("apple", StringComparison.OrdinalIgnoreCase))
+            return "🍎";
+        return "🖥️";
     }
 
     private static string FormatPinDisplay(string pin) =>

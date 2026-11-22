@@ -1,3 +1,29 @@
+# Connect Me v1.8.38 — 2D Ekran Dizilim Kanvası Cihaz Kartları Okunabilirlik & Yerleşim İyileştirmesi
+
+Bu sürüm; 2D Ekran Dizilim Kanvası üzerinde uzak cihaz kartlarının başlık ve durum yazılarının dışarı taşması/kırpılması sorununu kökten çözer, tek ekranlı cihazları sadeleştirir ve Windows glif uyumluluğunu sağlar:
+
+1. **📱 Tek Ekranlı Uzak Cihaz Kartlarının Sadeleştirilmesi & Taşma Onarımı:**
+   - Tek ekranlı uzak cihazlarda (telefon, tablet vb.) kartın içine ikinci bir iç sınır kutusu (`singleBox`) çizilmesi kaldırıldı; cihaz kartının kendisi doğrudan ekran temsili haline getirildi.
+   - Dikeyde ortalanan içerik kutunun dışına taşarak cihaz başlığını ve durum rozetini gizliyordu. Artık cihaz simgesi + adı (`📱 Red Magic 7`), çözünürlük (`2460x1080`) ve bağlantı durumu (`⏳ PIN Onayı Bekleniyor` veya `DISPLAY1 SOL %0-100`) dikey yığında orantılı boşluklarla tertemiz şekilde kartın içinde gösterilmektedir.
+   - Cihaz başlığı hiçbir koşulda üst sınırın dışına taşmaz, kırpılmaz veya görünmez olmaz.
+
+2. **🖥️ Çoklu Monitörlü Uzak Cihaz Kartları İçin Dinamik Başlık & Kanvas Boyutlandırması:**
+   - Çoklu fiziksel monitöre sahip uzak bilgisayarlarda (örneğin Linux Laptop: `eDP-1` + `HDMI-A-1`), kart yüksekliği (`boxH`) yalnızca alt monitörlerin yüksekliğine eşitlendiği için cihaz başlığı ve durum metni kartın üst sınırından tamamen dışarı taşıyordu.
+   - Kart boyutu artık başlık alanı (Cihaz adı + Durum rozeti ~34px) ve çevre dolgusu eklenerek dinamik olarak hesaplanmaktadır (`deskH + headerH + padY`).
+   - İçerik yerleşimi `Grid` yapısına taşındı: Üst satırda cihaz başlığı ve durum rozeti, alt satırda ise gerçek oranlı çocuk monitörler (`monCanvas`) ve mor kesikli iç birleşim çizgileri (seam lines) birbirine temas etmeden ve taşma olmadan kusursuzca konumlandırılır.
+
+3. **🔤 Windows Karakter Glif Uyumsuzluğunun (Tofu Kutusu `▯`) Giderilmesi:**
+   - Standart Windows sistem yazı tiplerinde bulunmayan ve yerel birincil monitörde `▯ DISPLAY1 (Ana)` şeklinde boş kutu olarak render edilen pencere emojisi (`🪟`) yerine, tüm Windows sürümlerinde tam desteklenen ve net okunan monitör emojisi (`🖥️`) getirildi.
+   - `GetPlatformIcon` metodu güncellenerek Windows işletim sistemi için `🖥️`, macOS için `🍎` ve Linux için `🐧` simgeleri hatasız render edilecek şekilde standardize edildi.
+
+4. **📏 Durum Rozeti Metin Sadeliliği:**
+   - Kartın bağlı olduğu yerel monitör adı artık aşırı uzun ve taşmaya yol açan işletim sistemi adı (`Monitor 1 (DISPLAY1 — Birincil)`) yerine kısa ve net olan monitör kimliği (`DISPLAY1`) üzerinden gösterilir (Örn: `DISPLAY1 SOL %80-100`). Uzun açıklama araç ipucu (ToolTip) balonunda ayrıntılı olarak korunur.
+
+5. **🧪 133/133 Birim Testi:**
+   - Tüm protokol, çoklu monitör, semver, koloni ağ ve kenar aktarım testleri çalıştırıldı ve tamamı başarıyla geçti (**133 Başarılı, 0 Başarısız**).
+
+---
+
 # Connect Me v1.8.37 — Etkileşimli Çoklu Monitör Konumlandırma & İstifleme, Koloni Çoklu Atlama (Multi-Hop Stacking) ve Bağıl Cihaz İmleç Aktarımı
 
 Bu sürüm; kullanıcının çoklu monitör kurulumlarında yerel monitörleri istediği gibi konumlandırmasını, istiflemesini (dikey/yatay) ve tüm cihazların ana makineye doğrudan bitişik olma zorunluluğunu ortadan kaldıran çoklu atlamalı koloni istifleme (multi-hop colony device stacking & relay) mimarisini sunar:
