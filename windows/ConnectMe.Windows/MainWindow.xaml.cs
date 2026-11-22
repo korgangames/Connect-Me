@@ -39,6 +39,13 @@ public partial class MainWindow : Window
     private Point _dragMouseOffset;
     private List<(PhysicalMonitorDescriptor Monitor, double Left, double Top, double Width, double Height)> _lastRenderedLocalBoxes = new();
 
+    // Local Physical Monitor Interactive Positioning state
+    private PhysicalMonitorDescriptor? _selectedLocalMonitor;
+    private PhysicalMonitorDescriptor? _draggingLocalMonitor;
+    private Border? _draggingLocalBorder;
+    private Point _dragLocalMouseOffset;
+    private (PhysicalMonitorDescriptor Anchor, ScreenEdge Edge, int NewVx, int NewVy)? _pendingLocalSnap;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -663,7 +670,7 @@ public partial class MainWindow : Window
         var list = new List<CanvasAnchorBox>();
         foreach (var (mon, ml, mt, mw, mh) in _lastRenderedLocalBoxes)
         {
-            list.Add(new CanvasAnchorBox(_network.LocalDeviceId, $"Bu Bilgisayar ({mon.Name})", true, ml, mt, mw, mh));
+            list.Add(new CanvasAnchorBox(mon.MonitorId, $"Bu Bilgisayar ({mon.Name})", true, ml, mt, mw, mh));
         }
 
         var peers = _topology.GetConfiguredPeers();
@@ -756,20 +763,63 @@ public partial class MainWindow : Window
             double mH = Math.Max(50, mon.Height * scale);
             _lastRenderedLocalBoxes.Add((mon, mLeft, mTop, mW, mH));
 
+            bool isLocalMonSelected = _selectedLocalMonitor?.MonitorId == mon.MonitorId;
             var monBorder = new Border
             {
                 Width = mW,
                 Height = mH,
-                Background = mon.IsPrimary
-                    ? new SolidColorBrush(Color.FromRgb(23, 37, 84))
-                    : new SolidColorBrush(Color.FromRgb(15, 23, 42)),
-                BorderBrush = _inputEngine.ActiveRemotePeer == null
-                    ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
-                    : new SolidColorBrush(Color.FromRgb(56, 189, 248)),
-                BorderThickness = new Thickness(mon.IsPrimary ? 2.5 : 1.8),
+                Background = isLocalMonSelected
+                    ? new SolidColorBrush(Color.FromRgb(30, 58, 138))
+                    : (mon.IsPrimary
+                        ? new SolidColorBrush(Color.FromRgb(23, 37, 84))
+                        : new SolidColorBrush(Color.FromRgb(15, 23, 42))),
+                BorderBrush = isLocalMonSelected
+                    ? new SolidColorBrush(Color.FromRgb(56, 189, 248))
+                    : (_inputEngine.ActiveRemotePeer == null
+                        ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
+                        : new SolidColorBrush(Color.FromRgb(100, 116, 139))),
+                BorderThickness = new Thickness(isLocalMonSelected ? 2.8 : (mon.IsPrimary ? 2.2 : 1.5)),
                 CornerRadius = new CornerRadius(7),
-                ToolTip = $"Bu Bilgisayar — {mon.Name}\nKonum: ({mon.VirtualX}, {mon.VirtualY}) | Çözünürlük: {mon.Width}x{mon.Height} | Ölçek: %{mon.ScaleFactor * 100:F0}"
+                Tag = mon,
+                ToolTip = $"Bu Bilgisayar — {mon.Name}\nKonum: ({mon.VirtualX}, {mon.VirtualY}) | Çözünürlük: {mon.Width}x{mon.Height} | Ölçek: %{mon.ScaleFactor * 100:F0}" +
+                          (monitors.Count > 1 ? "\nSürükleyerek diğer monitörün yanına/üstüne/altına istifleyebilirsiniz. Sağ tık ile hızlı hizalayabilirsiniz." : "")
             };
+
+            if (monitors.Count > 1)
+            {
+                monBorder.Cursor = Cursors.SizeAll;
+                monBorder.MouseLeftButtonDown += LocalMonitorBox_MouseLeftButtonDown;
+                monBorder.MouseMove += LocalMonitorBox_MouseMove;
+                monBorder.MouseLeftButtonUp += LocalMonitorBox_MouseLeftButtonUp;
+
+                var cm = new ContextMenu();
+                var primaryMon = monitors.FirstOrDefault(m => m.IsPrimary) ?? monitors[0];
+                if (mon.MonitorId != primaryMon.MonitorId)
+                {
+                    var miTop = new MenuItem { Header = $"⬆️ '{primaryMon.MonitorId}' Üstüne İstifle" };
+                    miTop.Click += (_, _) => { _topology.AlignLocalMonitor(mon.MonitorId, ScreenEdge.Top, primaryMon.MonitorId); OnLocalMonitorLayoutChanged(mon); };
+                    cm.Items.Add(miTop);
+
+                    var miBottom = new MenuItem { Header = $"⬇️ '{primaryMon.MonitorId}' Altına İstifle" };
+                    miBottom.Click += (_, _) => { _topology.AlignLocalMonitor(mon.MonitorId, ScreenEdge.Bottom, primaryMon.MonitorId); OnLocalMonitorLayoutChanged(mon); };
+                    cm.Items.Add(miBottom);
+
+                    var miLeft = new MenuItem { Header = $"⬅️ '{primaryMon.MonitorId}' Soluna Yerleştir" };
+                    miLeft.Click += (_, _) => { _topology.AlignLocalMonitor(mon.MonitorId, ScreenEdge.Left, primaryMon.MonitorId); OnLocalMonitorLayoutChanged(mon); };
+                    cm.Items.Add(miLeft);
+
+                    var miRight = new MenuItem { Header = $"➡️ '{primaryMon.MonitorId}' Sağına Yerleştir" };
+                    miRight.Click += (_, _) => { _topology.AlignLocalMonitor(mon.MonitorId, ScreenEdge.Right, primaryMon.MonitorId); OnLocalMonitorLayoutChanged(mon); };
+                    cm.Items.Add(miRight);
+
+                    cm.Items.Add(new Separator());
+                }
+
+                var miReset = new MenuItem { Header = "🔄 Orijinal OS Düzenine Sıfırla" };
+                miReset.Click += (_, _) => ResetMonitorsToOsBtn_Click(this, new RoutedEventArgs());
+                cm.Items.Add(miReset);
+                monBorder.ContextMenu = cm;
+            }
 
             var monStack = new StackPanel
             {
@@ -1250,6 +1300,11 @@ public partial class MainWindow : Window
         if (sender is Border border && border.Tag is PeerDeviceNode peer)
         {
             _selectedPeer = peer;
+            _selectedLocalMonitor = null;
+            if (QuickAssignLabelText != null)
+            {
+                QuickAssignLabelText.Text = "Seçili Cihazı Taşı:";
+            }
             _draggingPeer = peer;
             _draggingBorder = border;
             _dragMouseOffset = e.GetPosition(border);
@@ -1257,7 +1312,178 @@ public partial class MainWindow : Window
 
             RefreshPeersList();
             UpdateSelectedPeerPairingPanel();
+            RedrawDisplayArrangementCanvas();
             e.Handled = true;
+        }
+    }
+
+    private void LocalMonitorBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Border border && border.Tag is PhysicalMonitorDescriptor mon)
+        {
+            _selectedLocalMonitor = mon;
+            _selectedPeer = null;
+            _draggingLocalMonitor = mon;
+            _draggingLocalBorder = border;
+            _dragLocalMouseOffset = e.GetPosition(border);
+            _pendingLocalSnap = null;
+            border.CaptureMouse();
+
+            if (QuickAssignLabelText != null)
+            {
+                QuickAssignLabelText.Text = $"Seçili Monitörü Taşı ({mon.MonitorId}):";
+            }
+            CanvasSelectionInfoText.Text = $"🎯 Seçili Monitör: {mon.MonitorId} ({mon.Name}) — Diğer monitörün kenarına sürükleyip bırakabilir veya aşağıdaki butonları kullanabilirsiniz.";
+            RedrawDisplayArrangementCanvas();
+            e.Handled = true;
+        }
+    }
+
+    private void LocalMonitorBox_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_draggingLocalMonitor != null && _draggingLocalBorder != null && e.LeftButton == MouseButtonState.Pressed)
+        {
+            Point canvasPt = e.GetPosition(DisplayArrangementCanvas);
+            double newLeft = canvasPt.X - _dragLocalMouseOffset.X;
+            double newTop = canvasPt.Y - _dragLocalMouseOffset.Y;
+
+            var otherBoxes = _lastRenderedLocalBoxes.Where(b => b.Monitor.MonitorId != _draggingLocalMonitor.MonitorId).ToList();
+            if (otherBoxes.Count > 0)
+            {
+                double bestDist = double.MaxValue;
+                PhysicalMonitorDescriptor? bestAnchor = null;
+                ScreenEdge bestEdge = ScreenEdge.Right;
+                double snappedLeft = newLeft;
+                double snappedTop = newTop;
+                int candidateNewVx = _draggingLocalMonitor.VirtualX;
+                int candidateNewVy = _draggingLocalMonitor.VirtualY;
+
+                foreach (var (anchorMon, aLeft, aTop, aW, aH) in otherBoxes)
+                {
+                    // Snap Right of anchor:
+                    double dRight = Math.Abs(newLeft - (aLeft + aW)) + Math.Abs(newTop - aTop);
+                    if (dRight < bestDist)
+                    {
+                        bestDist = dRight;
+                        bestAnchor = anchorMon;
+                        bestEdge = ScreenEdge.Right;
+                        snappedLeft = aLeft + aW + 3;
+                        snappedTop = aTop;
+                        candidateNewVx = anchorMon.Right;
+                        candidateNewVy = anchorMon.VirtualY;
+                    }
+
+                    // Snap Left of anchor:
+                    double dLeft = Math.Abs((newLeft + _draggingLocalBorder.Width) - aLeft) + Math.Abs(newTop - aTop);
+                    if (dLeft < bestDist)
+                    {
+                        bestDist = dLeft;
+                        bestAnchor = anchorMon;
+                        bestEdge = ScreenEdge.Left;
+                        snappedLeft = aLeft - _draggingLocalBorder.Width - 3;
+                        snappedTop = aTop;
+                        candidateNewVx = anchorMon.VirtualX - _draggingLocalMonitor.Width;
+                        candidateNewVy = anchorMon.VirtualY;
+                    }
+
+                    // Snap Top of anchor (stack above):
+                    double dTop = Math.Abs((newTop + _draggingLocalBorder.Height) - aTop) + Math.Abs(newLeft - aLeft);
+                    if (dTop < bestDist)
+                    {
+                        bestDist = dTop;
+                        bestAnchor = anchorMon;
+                        bestEdge = ScreenEdge.Top;
+                        snappedLeft = aLeft;
+                        snappedTop = aTop - _draggingLocalBorder.Height - 3;
+                        candidateNewVx = anchorMon.VirtualX;
+                        candidateNewVy = anchorMon.VirtualY - _draggingLocalMonitor.Height;
+                    }
+
+                    // Snap Bottom of anchor (stack below):
+                    double dBottom = Math.Abs(newTop - (aTop + aH)) + Math.Abs(newLeft - aLeft);
+                    if (dBottom < bestDist)
+                    {
+                        bestDist = dBottom;
+                        bestAnchor = anchorMon;
+                        bestEdge = ScreenEdge.Bottom;
+                        snappedLeft = aLeft;
+                        snappedTop = aTop + aH + 3;
+                        candidateNewVx = anchorMon.VirtualX;
+                        candidateNewVy = anchorMon.Bottom;
+                    }
+                }
+
+                if (bestAnchor != null)
+                {
+                    _pendingLocalSnap = (bestAnchor, bestEdge, candidateNewVx, candidateNewVy);
+                    Canvas.SetLeft(_draggingLocalBorder, snappedLeft);
+                    Canvas.SetTop(_draggingLocalBorder, snappedTop);
+                    CanvasSelectionInfoText.Text =
+                        $"🎯 [{_draggingLocalMonitor.MonitorId}] -> {bestAnchor.MonitorId} {FormatEdgeTr(bestEdge)} kenarına hizalanıyor ({candidateNewVx}, {candidateNewVy})";
+                    return;
+                }
+            }
+
+            Canvas.SetLeft(_draggingLocalBorder, newLeft);
+            Canvas.SetTop(_draggingLocalBorder, newTop);
+        }
+    }
+
+    private void LocalMonitorBox_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_draggingLocalBorder != null && _draggingLocalMonitor != null)
+        {
+            _draggingLocalBorder.ReleaseMouseCapture();
+
+            if (_pendingLocalSnap.HasValue)
+            {
+                var snap = _pendingLocalSnap.Value;
+                _topology.MoveLocalMonitor(_draggingLocalMonitor.MonitorId, snap.NewVx, snap.NewVy);
+                OnLocalMonitorLayoutChanged(_draggingLocalMonitor);
+            }
+
+            _draggingLocalBorder = null;
+            _draggingLocalMonitor = null;
+            _pendingLocalSnap = null;
+            RedrawDisplayArrangementCanvas();
+            e.Handled = true;
+        }
+    }
+
+    private void OnLocalMonitorLayoutChanged(PhysicalMonitorDescriptor mon)
+    {
+        _network.LocalMonitors = _topology.LocalMonitors.ToList();
+        var primary = _network.LocalMonitors.FirstOrDefault(m => m.IsPrimary) ?? _network.LocalMonitors[0];
+        _network.LocalScreenWidth = primary.Width;
+        _network.LocalScreenHeight = primary.Height;
+
+        _topology.RecomputeColonyWorldCoordinates(_network.LocalDeviceId);
+        var colonyDesc = _topology.BuildColonyLayoutDescriptors(_network.LocalDeviceId, _network.LocalDeviceName, _network.LocalPlatform);
+        _network.SendColonyTopologySyncToAllPeers(colonyDesc);
+
+        AppendLog($"[Monitör Düzeni] 🖥️ '{mon.MonitorId}' ({mon.Name}) yeni sanal koordinatlarına yerleştirildi ({mon.VirtualX}, {mon.VirtualY}). Toplam sanal masaüstü: {_topology.LocalWidth}x{_topology.LocalHeight}.");
+        RedrawDisplayArrangementCanvas();
+    }
+
+    private void ResetMonitorsToOsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_topology.ResetLocalMonitorsToOsLayout())
+        {
+            _network.LocalMonitors = _topology.LocalMonitors.ToList();
+            var primary = _network.LocalMonitors.FirstOrDefault(m => m.IsPrimary) ?? _network.LocalMonitors[0];
+            _network.LocalScreenWidth = primary.Width;
+            _network.LocalScreenHeight = primary.Height;
+
+            _topology.RecomputeColonyWorldCoordinates(_network.LocalDeviceId);
+            var colonyDesc = _topology.BuildColonyLayoutDescriptors(_network.LocalDeviceId, _network.LocalDeviceName, _network.LocalPlatform);
+            _network.SendColonyTopologySyncToAllPeers(colonyDesc);
+
+            AppendLog("[Monitör Düzeni] 🔄 Yerel çoklu monitör yerleşimi orijinal Windows masaüstü koordinatlarına sıfırlandı.");
+            RedrawDisplayArrangementCanvas();
+        }
+        else
+        {
+            AppendLog("[Monitör Düzeni] Orijinal OS monitör yerleşimi zaten aktif.");
         }
     }
 
@@ -1335,9 +1561,30 @@ public partial class MainWindow : Window
 
     private void QuickAssignSelectedPeer(ScreenEdge edge)
     {
+        if (_selectedLocalMonitor != null && _selectedPeer == null)
+        {
+            var primary = _topology.LocalMonitors.FirstOrDefault(m => m.IsPrimary) ?? _topology.LocalMonitors[0];
+            if (_selectedLocalMonitor.MonitorId != primary.MonitorId)
+            {
+                _topology.AlignLocalMonitor(_selectedLocalMonitor.MonitorId, edge, primary.MonitorId);
+                OnLocalMonitorLayoutChanged(_selectedLocalMonitor);
+                return;
+            }
+            else
+            {
+                var secondary = _topology.LocalMonitors.FirstOrDefault(m => !m.IsPrimary);
+                if (secondary != null)
+                {
+                    _topology.AlignLocalMonitor(secondary.MonitorId, SpatialTopologyEngine.GetOppositeEdge(edge), primary.MonitorId);
+                    OnLocalMonitorLayoutChanged(secondary);
+                    return;
+                }
+            }
+        }
+
         if (_selectedPeer == null || !_selectedPeer.IsMutuallyPaired)
         {
-            AppendLog("[Uyarı] Kenar atamak için önce çift taraflı 6 haneli PIN onayı tamamlanmış bir cihaz seçin.");
+            AppendLog("[Uyarı] Kenar atamak için önce çift taraflı 6 haneli PIN onayı tamamlanmış bir cihaz veya ikincil monitör seçin.");
             return;
         }
 

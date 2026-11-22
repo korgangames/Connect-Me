@@ -2875,12 +2875,19 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
                 case "EDGE_RELAY":
                 {
-                    if (!string.IsNullOrEmpty(header.RelayTargetDeviceId))
+                    var retEdge = (ScreenEdge)(header.ReturnEdge ?? 0);
+                    float retNorm = (float)(header.NormalizedPosition ?? 0.5);
+                    string targetId = header.RelayTargetDeviceId ?? string.Empty;
+
+                    if (string.IsNullOrEmpty(targetId))
                     {
-                        var retEdge = (ScreenEdge)(header.ReturnEdge ?? 0);
-                        float retNorm = (float)(header.NormalizedPosition ?? 0.5);
-                        Log($"[Kenar Aktarımı] '{header.SenderName}' ({remoteIp}) imleci '{header.RelayTargetDeviceId}' cihazına aktarmayı talep etti ({retEdge}, %{(int)(retNorm * 100)}).");
-                        RemoteEdgeRelayRequested?.Invoke(header.RelayTargetDeviceId, retEdge, retNorm);
+                        targetId = header.SenderId ?? string.Empty;
+                    }
+
+                    if (!string.IsNullOrEmpty(targetId))
+                    {
+                        Log($"[Kenar Aktarımı] '{header.SenderName}' ({remoteIp}) imleci '{targetId}' cihazına aktarmayı talep etti ({retEdge}, %{(int)(retNorm * 100)}).");
+                        RemoteEdgeRelayRequested?.Invoke(targetId, retEdge, retNorm);
                     }
                     break;
                 }

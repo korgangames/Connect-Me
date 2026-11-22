@@ -138,6 +138,14 @@ public sealed class SpatialTopologyEngine
     public int LocalWidth { get; private set; } = 1920;
     public int LocalHeight { get; private set; } = 1080;
 
+    /// <summary>
+    /// Local machine unique Device ID (cached for relative topology and candidate edge resolution).
+    /// </summary>
+    public string LocalDeviceId { get; set; } = string.Empty;
+
+    // Cache of original operating system monitor positions for layout reset
+    private readonly List<PhysicalMonitorDescriptor> _osDefaultMonitors = new();
+
     // Global Colony Mesh Coordinates for Local Node
     public double LocalColonyX { get; set; } = 0;
     public double LocalColonyY { get; set; } = 0;
@@ -245,7 +253,136 @@ public sealed class SpatialTopologyEngine
                 });
             }
 
+            if (_osDefaultMonitors.Count == 0 || (_osDefaultMonitors.Count == 1 && _localMonitors.Count > 1))
+            {
+                StoreOsDefaultMonitorsLocked(_localMonitors);
+            }
+
             RecalculateVirtualDesktopBoundsLocked();
+        }
+    }
+
+    /// <summary>
+    /// Stores the operating system default monitor topology layout for future reset.
+    /// </summary>
+    public void StoreOsDefaultMonitors(IEnumerable<PhysicalMonitorDescriptor> monitors)
+    {
+        lock (_sync)
+        {
+            StoreOsDefaultMonitorsLocked(monitors);
+        }
+    }
+
+    private void StoreOsDefaultMonitorsLocked(IEnumerable<PhysicalMonitorDescriptor> monitors)
+    {
+        _osDefaultMonitors.Clear();
+        foreach (var m in monitors)
+        {
+            _osDefaultMonitors.Add(new PhysicalMonitorDescriptor
+            {
+                MonitorId = m.MonitorId,
+                Name = m.Name,
+                VirtualX = m.VirtualX,
+                VirtualY = m.VirtualY,
+                Width = m.Width,
+                Height = m.Height,
+                ScaleFactor = m.ScaleFactor,
+                IsPrimary = m.IsPrimary,
+                IsSimulated = m.IsSimulated
+            });
+        }
+    }
+
+    /// <summary>
+    /// Resets all local physical monitors back to their native OS display arrangement coordinates.
+    /// </summary>
+    public bool ResetLocalMonitorsToOsLayout()
+    {
+        lock (_sync)
+        {
+            if (_osDefaultMonitors.Count == 0)
+                return false;
+
+            _localMonitors.Clear();
+            foreach (var m in _osDefaultMonitors)
+            {
+                _localMonitors.Add(new PhysicalMonitorDescriptor
+                {
+                    MonitorId = m.MonitorId,
+                    Name = m.Name,
+                    VirtualX = m.VirtualX,
+                    VirtualY = m.VirtualY,
+                    Width = m.Width,
+                    Height = m.Height,
+                    ScaleFactor = m.ScaleFactor,
+                    IsPrimary = m.IsPrimary,
+                    IsSimulated = m.IsSimulated
+                });
+            }
+
+            RecalculateVirtualDesktopBoundsLocked();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Explicitly repositions a physical monitor within the multi-monitor virtual desktop.
+    /// Automatically updates virtual desktop bounds and internal seams.
+    /// </summary>
+    public bool MoveLocalMonitor(string monitorId, int newVirtualX, int newVirtualY)
+    {
+        lock (_sync)
+        {
+            var target = _localMonitors.FirstOrDefault(m => string.Equals(m.MonitorId, monitorId, StringComparison.OrdinalIgnoreCase));
+            if (target == null)
+                return false;
+
+            target.VirtualX = newVirtualX;
+            target.VirtualY = newVirtualY;
+            RecalculateVirtualDesktopBoundsLocked();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Aligns/stacks a local physical monitor against another anchor monitor along a specific edge
+    /// (e.g. stacking a secondary monitor above or to the left of the primary monitor).
+    /// </summary>
+    public bool AlignLocalMonitor(string movingMonitorId, ScreenEdge relativeEdge, string anchorMonitorId, double alignmentOffset = 0.0)
+    {
+        lock (_sync)
+        {
+            var moving = _localMonitors.FirstOrDefault(m => string.Equals(m.MonitorId, movingMonitorId, StringComparison.OrdinalIgnoreCase));
+            var anchor = _localMonitors.FirstOrDefault(m => string.Equals(m.MonitorId, anchorMonitorId, StringComparison.OrdinalIgnoreCase));
+            if (moving == null || anchor == null || moving == anchor)
+                return false;
+
+            alignmentOffset = Math.Clamp(alignmentOffset, 0.0, 1.0);
+
+            switch (relativeEdge)
+            {
+                case ScreenEdge.Left:
+                    moving.VirtualX = anchor.VirtualX - moving.Width;
+                    moving.VirtualY = anchor.VirtualY + (int)(alignmentOffset * Math.Max(0, anchor.Height - moving.Height));
+                    break;
+                case ScreenEdge.Right:
+                    moving.VirtualX = anchor.Right;
+                    moving.VirtualY = anchor.VirtualY + (int)(alignmentOffset * Math.Max(0, anchor.Height - moving.Height));
+                    break;
+                case ScreenEdge.Top:
+                    moving.VirtualX = anchor.VirtualX + (int)(alignmentOffset * Math.Max(0, anchor.Width - moving.Width));
+                    moving.VirtualY = anchor.VirtualY - moving.Height;
+                    break;
+                case ScreenEdge.Bottom:
+                    moving.VirtualX = anchor.VirtualX + (int)(alignmentOffset * Math.Max(0, anchor.Width - moving.Width));
+                    moving.VirtualY = anchor.Bottom;
+                    break;
+                default:
+                    return false;
+            }
+
+            RecalculateVirtualDesktopBoundsLocked();
+            return true;
         }
     }
 
@@ -799,6 +936,11 @@ public sealed class SpatialTopologyEngine
     {
         lock (_sync)
         {
+            if (!string.IsNullOrEmpty(localDeviceId))
+            {
+                LocalDeviceId = localDeviceId;
+            }
+
             var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             bool localHasParent = !string.IsNullOrEmpty(LocalAttachedToDeviceId) &&
@@ -1228,9 +1370,14 @@ public sealed class SpatialTopologyEngine
 
     private PeerDeviceNode? FindMatchingPeerOnEdgeLocked(ScreenEdge edge, float localEdgeNormPos, string? monitorId = null)
     {
-        // Only mutually paired devices can receive edge transitions
+        // Only mutually paired devices that are directly attached to the local host machine can receive direct edge transitions
         var candidates = _peersById.Values
-            .Where(p => p.IsMutuallyPaired && p.AssignedEdgeOnLocal == edge)
+            .Where(p => p.IsMutuallyPaired &&
+                        p.AssignedEdgeOnLocal == edge &&
+                        (string.IsNullOrEmpty(p.AttachedToDeviceId) ||
+                         (!string.IsNullOrEmpty(LocalDeviceId) && string.Equals(p.AttachedToDeviceId, LocalDeviceId, StringComparison.OrdinalIgnoreCase)) ||
+                         string.Equals(p.AttachedToDeviceId, LocalAttachedToDeviceId, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(p.AttachedToDeviceId, "LOCAL", StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         if (candidates.Count == 0)

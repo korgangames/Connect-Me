@@ -1,3 +1,32 @@
+# Connect Me v1.8.37 — Etkileşimli Çoklu Monitör Konumlandırma & İstifleme, Koloni Çoklu Atlama (Multi-Hop Stacking) ve Bağıl Cihaz İmleç Aktarımı
+
+Bu sürüm; kullanıcının çoklu monitör kurulumlarında yerel monitörleri istediği gibi konumlandırmasını, istiflemesini (dikey/yatay) ve tüm cihazların ana makineye doğrudan bitişik olma zorunluluğunu ortadan kaldıran çoklu atlamalı koloni istifleme (multi-hop colony device stacking & relay) mimarisini sunar:
+
+1. **🖥️ Etkileşimli 2D Çoklu Monitör Konumlandırma ve Manyetik İstifleme:**
+   - 2D Ekran Dizilim Kanvası üzerindeki yerel fiziksel monitör kutuları (`DISPLAY1`, `DISPLAY2` vb.) artık fare ile sürüklenebilir ve seçilebilir hale getirildi.
+   - Monitörler birbirlerinin üstüne (dikey kodlama/okuma ekranı), altına, soluna veya sağına manyetik olarak yapışır ve istiflenir (`AlignLocalMonitor`, `MoveLocalMonitor`).
+   - Monitör kutularına sağ tık bağlam menüsü (Context Menu) eklendi: "⬆️ Üstüne İstifle", "⬇️ Altına İstifle", "⬅️ Soluna Yerleştir", "➡️ Sağına Yerleştir" ve "🔄 Orijinal OS Düzenine Sıfırla".
+   - Üst araç çubuğuna **"🔄 OS Düzenine Sıfırla"** butonu eklendi; istenildiği an Windows işletim sisteminin orijinal monitör koordinatlarına tek tıkla dönülebilir.
+   - Monitörler yeniden konumlandırıldığında iç birleşim çizgileri (internal seams), dış sınır kenarları ve sanal masaüstü sınırları dinamik olarak güncellenir.
+
+2. **🪐 Çok Atlamalı Koloni İstifleme (Multi-Hop Device Stacking):**
+   - Cihazların artık ana makinenin hemen yanında olma zorunluluğu yoktur. Kullanıcı cihazları birbirlerinin yanına zincirleme istifleyebilir (Örn: **Ana Bilgisayar ➔ Laptop (B) ➔ Tablet (C)**; Tablet doğrudan Ana Bilgisayara değil, Laptop'un sağ kenarına bağlıdır).
+   - Ana makine kenar geçiş filtresi (`FindMatchingPeerOnEdgeLocked`) güncellendi: Ana makine ekran sınırından çıkıldığında yalnızca ana makineye doğrudan kenetlenmiş cihazlar (B) hedeflenir; istiflenmiş alt cihazlara (C) erken veya hatalı atlamalar engellendi.
+
+3. **⚡ Kesintisiz Çok Atlamalı İmleç Aktarımı (`EDGE_RELAY` & Return):**
+   - İmleç Ana Bilgisayardan Laptop'a (B) geçtiğinde, Laptop'un sağ kenarına doğru itilirse `EDGE_RELAY` sinyaliyle imleç pürüzsüzce Tablet'e (C) aktarılır.
+   - Tablet'ten (C) sol kenara doğru geri itildiğinde imleç doğrudan ana makineye sıçramaz; bağlı olduğu üst cihaz olan Laptop'a (B) döner; Laptop'tan sol kenara itildiğinde ise Ana Bilgisayara geri döner.
+   - Aktarım sırasında önceki cihazın (`prevPeer`) imlecinin gizlenmesi ve takılmaması için otomatik çıkış/deaktivasyon sinyali iletilir.
+   - Android (`CursorAccessibilityService.kt` ve `ConnectMeService.kt`) ile Linux (`connectme_linux_daemon.py`) istemcilerine `EDGE_RELAY` ve çoklu atlama desteği entegre edildi.
+
+4. **🎯 Kanvas Manyetik Çapa (Anchor) Düzeltmesi:**
+   - Çoklu monitörlü sistemlerde yerel monitörlerin çapa kutusu kimliği (`bestAnchor.Id`) düzeltildi (`_network.LocalDeviceId` yerine `mon.MonitorId` kaydedilerek `AttachedLocalMonitorId` eşleşme hatası giderildi).
+
+5. **🧪 133/133 Birim Testi:**
+   - Çoklu monitör dikey/yatay istifleme, iç dikiş koruması, OS düzenine sıfırlama, 3 katmanlı koloni zinciri (A ➔ B ➔ C) ve çok atlamalı aktarım senaryolarını test eden 13 yeni birim testi eklendi; tüm testler başarıyla geçti (**133 Başarılı, 0 Başarısız**).
+
+---
+
 # Connect Me v1.8.36 — Windows Otomatik Güncelleme Algılama (Auto-Update Detection) Onarımı, Çok Katmanlı GitHub Güncelleyici ve Android CI Derleme Düzeltmesi
 
 Bu sürüm; Windows Connect Me üzerinde yeni GitHub sürümlerinin otomatik olarak algılanamaması sorununu kökten çözer, güncelleyici mimarisini 4 katmanlı dayanıklı (fault-tolerant) yapıya kavuşturur ve CI derlemesini engelleyen Android çağrı imzasını onarır:

@@ -347,49 +347,41 @@ class CursorAccessibilityService : AccessibilityService() {
         // Grace period: ignore edge push for 450ms after entering Android to prevent ping-pong bounce
         val isGracePeriod = (SystemClock.uptimeMillis() - lastEdgeHandOffEnterTime) < 450L
 
-        // Detect if cursor is hitting the configured shared boundary facing the PC
+        // Detect if cursor is hitting any screen boundary (return edge or colony relay edge)
         var pushingSharedEdge = false
+        var isRelayEdge = false
         var outwardDelta = 0f
         var returnNormPos = 0.5f
         var oppositeWindowsEdge: Byte = ProtocolConstants.EDGE_NONE
 
-        when (activeEntranceEdge) {
-            ProtocolConstants.EDGE_LEFT -> {
-                if (!isGracePeriod && moveDx < 0 && (cursorX <= 1.5f || nextX < 0f)) {
-                    pushingSharedEdge = true
-                    outwardDelta = -moveDx
-                    returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
-                    oppositeWindowsEdge = ProtocolConstants.EDGE_RIGHT
-                }
-            }
-            ProtocolConstants.EDGE_RIGHT -> {
-                if (!isGracePeriod && moveDx > 0 && (cursorX >= (screenWidth - 1.5f) || nextX > screenWidth)) {
-                    pushingSharedEdge = true
-                    outwardDelta = moveDx
-                    returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
-                    oppositeWindowsEdge = ProtocolConstants.EDGE_LEFT
-                }
-            }
-            ProtocolConstants.EDGE_TOP -> {
-                if (!isGracePeriod && moveDy < 0 && (cursorY <= 1.5f || nextY < 0f)) {
-                    pushingSharedEdge = true
-                    outwardDelta = -moveDy
-                    returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
-                    oppositeWindowsEdge = ProtocolConstants.EDGE_BOTTOM
-                }
-            }
-            ProtocolConstants.EDGE_BOTTOM -> {
-                if (!isGracePeriod && moveDy > 0 && (cursorY >= (screenHeight - 1.5f) || nextY > screenHeight)) {
-                    pushingSharedEdge = true
-                    outwardDelta = moveDy
-                    returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
-                    oppositeWindowsEdge = ProtocolConstants.EDGE_TOP
-                }
+        if (!isGracePeriod) {
+            if (moveDx < 0 && (cursorX <= 1.5f || nextX < 0f)) {
+                pushingSharedEdge = true
+                outwardDelta = -moveDx
+                returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
+                oppositeWindowsEdge = ProtocolConstants.EDGE_RIGHT
+                isRelayEdge = (activeEntranceEdge != ProtocolConstants.EDGE_LEFT)
+            } else if (moveDx > 0 && (cursorX >= (screenWidth - 1.5f) || nextX > screenWidth)) {
+                pushingSharedEdge = true
+                outwardDelta = moveDx
+                returnNormPos = (cursorY / screenHeight).coerceIn(0f, 1f)
+                oppositeWindowsEdge = ProtocolConstants.EDGE_LEFT
+                isRelayEdge = (activeEntranceEdge != ProtocolConstants.EDGE_RIGHT)
+            } else if (moveDy < 0 && (cursorY <= 1.5f || nextY < 0f)) {
+                pushingSharedEdge = true
+                outwardDelta = -moveDy
+                returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
+                oppositeWindowsEdge = ProtocolConstants.EDGE_BOTTOM
+                isRelayEdge = (activeEntranceEdge != ProtocolConstants.EDGE_TOP)
+            } else if (moveDy > 0 && (cursorY >= (screenHeight - 1.5f) || nextY > screenHeight)) {
+                pushingSharedEdge = true
+                outwardDelta = moveDy
+                returnNormPos = (cursorX / screenWidth).coerceIn(0f, 1f)
+                oppositeWindowsEdge = ProtocolConstants.EDGE_TOP
+                isRelayEdge = (activeEntranceEdge != ProtocolConstants.EDGE_BOTTOM)
             }
         }
 
-        // ONLY allow return if pushing against the configured shared edge facing the PC!
-        // Touching or pushing against any other frame edge keeps the cursor on Android.
         if (pushingSharedEdge && outwardDelta > 0f && !isLeftButtonDown) {
             val requiredResistance = 60f
             returnEdgePushAccum += outwardDelta
@@ -399,7 +391,11 @@ class CursorAccessibilityService : AccessibilityService() {
                 mainHandler.post {
                     cursorView?.visibility = View.GONE
                 }
-                ConnectMeService.instance?.sendEdgeHandOffBackToPeer(oppositeWindowsEdge, returnNormPos)
+                if (isRelayEdge) {
+                    ConnectMeService.instance?.sendEdgeRelayToHost(oppositeWindowsEdge, returnNormPos)
+                } else {
+                    ConnectMeService.instance?.sendEdgeHandOffBackToPeer(oppositeWindowsEdge, returnNormPos)
+                }
                 return
             }
         } else if (!pushingSharedEdge || (cursorX > 40f && cursorX < (screenWidth - 40f) && cursorY > 40f && cursorY < (screenHeight - 40f))) {

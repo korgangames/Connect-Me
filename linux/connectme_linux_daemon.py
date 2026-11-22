@@ -4064,6 +4064,31 @@ class ConnectMeLinuxNode:
                         except Exception:
                             pass
 
+            elif msg_type == "COLONY_TOPOLOGY_SYNC":
+                topology_list = header.get("colonyTopology", [])
+                if topology_list:
+                    self.apply_colony_topology(topology_list, header.get("senderId", remote_ip))
+                    self.log(f"[Koloni Topolojisi] '{header.get('senderName')}' ({remote_ip}) tarafından {len(topology_list)} cihazlık düzen güncellendi.")
+                    if self.on_topology_changed:
+                        try:
+                            self.on_topology_changed()
+                        except Exception:
+                            pass
+
+            elif msg_type == "EDGE_RELAY":
+                relay_target_id = header.get("relayTargetDeviceId", "")
+                ret_edge = header.get("returnEdge", EDGE_NONE)
+                norm_pos = float(header.get("normalizedPosition", 0.5))
+                target_peer = self.peers.get(relay_target_id)
+                if not target_peer:
+                    for p in self.peers.values():
+                        if p.get("deviceId") == relay_target_id:
+                            target_peer = p
+                            break
+                if target_peer and target_peer.get("isMutuallyPaired"):
+                    self.log(f"[Kenar Aktarımı] '{header.get('senderName')}' ({remote_ip}) imleci '{relay_target_id}' cihazına aktarmayı talep etti.")
+                    self.switch_control_to_peer(target_peer, local_exit_edge=ret_edge, norm_pos=norm_pos)
+
             elif msg_type == "DISCONNECT":
                 sender_id = header.get("senderId", remote_ip)
                 sender_name = header.get("senderName", remote_ip)

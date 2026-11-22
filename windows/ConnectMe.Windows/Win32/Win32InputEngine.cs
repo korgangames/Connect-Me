@@ -286,6 +286,7 @@ public sealed class Win32InputEngine : IDisposable
     public void RefreshMonitorBounds()
     {
         var monitors = Win32MonitorEnumerator.EnumerateLocalMonitors();
+        _topology.StoreOsDefaultMonitors(monitors);
         _topology.UpdateLocalMonitors(monitors);
         _network.LocalMonitors = monitors;
         var primary = monitors.FirstOrDefault(m => m.IsPrimary) ?? monitors[0];
@@ -450,6 +451,31 @@ public sealed class Win32InputEngine : IDisposable
     {
         if (ActiveRemotePeer != null)
         {
+            var returningPeer = ActiveRemotePeer;
+
+            // Multi-Hop Stacking: Check if returningPeer is docked to another peer in the colony mesh instead of the host
+            if (!string.IsNullOrEmpty(returningPeer.AttachedToDeviceId) &&
+                !string.Equals(returningPeer.AttachedToDeviceId, _network.LocalDeviceId, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(returningPeer.AttachedToDeviceId, "LOCAL", StringComparison.OrdinalIgnoreCase))
+            {
+                var parentPeer = _network.DiscoveredPeers.FirstOrDefault(p =>
+                    string.Equals(p.DeviceId, returningPeer.AttachedToDeviceId, StringComparison.OrdinalIgnoreCase) && p.IsMutuallyPaired);
+
+                if (parentPeer != null)
+                {
+                    // Deactivate returningPeer so its cursor disappears immediately
+                    _network.SendEdgeReturnToPeer(returningPeer, ScreenEdge.None, 0.5f);
+
+                    // Returning into the parent peer!
+                    // The entrance on parent peer is the edge where returningPeer was attached
+                    var parentEntranceEdge = returningPeer.AssignedEdgeOnLocal;
+                    float entryNorm = packet.NormalizedPosition > 0f ? packet.NormalizedPosition : 0.5f;
+
+                    SwitchControlToPeer(parentPeer, ScreenEdge.None, parentEntranceEdge, entryNorm);
+                    return;
+                }
+            }
+
             ReturnControlToLocal(packet.TargetEntranceEdge, packet.NormalizedPosition, notifyPeer: false);
             return;
         }
@@ -487,11 +513,24 @@ public sealed class Win32InputEngine : IDisposable
 
     private void OnRemoteEdgeRelayRequested(string relayTargetDeviceId, ScreenEdge returnEdge, float normPos)
     {
+        var prevPeer = ActiveRemotePeer;
         var targetPeer = _network.DiscoveredPeers.FirstOrDefault(p =>
             string.Equals(p.DeviceId, relayTargetDeviceId, StringComparison.OrdinalIgnoreCase) && p.IsMutuallyPaired);
 
+        if (targetPeer == null && prevPeer != null)
+        {
+            var exitEdge = SpatialTopologyEngine.GetOppositeEdge(returnEdge);
+            targetPeer = _topology.FindAdjacentPeerOnEdge(prevPeer.DeviceId, exitEdge, normPos)
+                         ?? _topology.FindAdjacentPeerOnEdge(relayTargetDeviceId, exitEdge, normPos);
+        }
+
         if (targetPeer != null)
         {
+            if (prevPeer != null && prevPeer != targetPeer)
+            {
+                // Deactivate the previously active peer so its cursor hides cleanly
+                _network.SendEdgeReturnToPeer(prevPeer, ScreenEdge.None, 0.5f);
+            }
             SwitchControlToPeer(targetPeer, ScreenEdge.None, returnEdge, normPos);
         }
     }

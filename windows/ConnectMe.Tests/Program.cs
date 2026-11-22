@@ -48,6 +48,8 @@ public static class Program
         await TestDeviceDeduplicationAndClearColonyTreeAsync();
         TestAudioPcmMixerAndNetworkOptimization();
         await TestWindowsUpdateDetectionAndSemverAsync();
+        TestInteractiveMultiMonitorPositioningAndStacking();
+        TestMultiHopColonyDeviceStackingAndEdgeRelay();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -1595,6 +1597,123 @@ public static class Program
         {
             AssertTrue(false, $"Güncelleme testi beklenmeyen hata verdi: {ex.Message}");
         }
+    }
+
+    private static void TestInteractiveMultiMonitorPositioningAndStacking()
+    {
+        var topo = new SpatialTopologyEngine();
+        var m1 = new PhysicalMonitorDescriptor
+        {
+            MonitorId = "DISPLAY1",
+            Name = "Birincil Ekran (Alt/Laptop)",
+            VirtualX = 0,
+            VirtualY = 0,
+            Width = 1920,
+            Height = 1080,
+            IsPrimary = true
+        };
+        var m2 = new PhysicalMonitorDescriptor
+        {
+            MonitorId = "DISPLAY2",
+            Name = "İkincil Ekran (Harici)",
+            VirtualX = 1920,
+            VirtualY = 0,
+            Width = 1920,
+            Height = 1080,
+            IsPrimary = false
+        };
+
+        topo.UpdateLocalMonitors([m1, m2]);
+        topo.StoreOsDefaultMonitors([m1, m2]);
+        AssertTrue(topo.LocalWidth == 3840 && topo.LocalHeight == 1080, "Başlangıç yatay çoklu monitör boyutu 3840x1080");
+
+        // 1. Stack DISPLAY2 ABOVE DISPLAY1 (Vertical multi-monitor stacking)
+        bool aligned = topo.AlignLocalMonitor("DISPLAY2", ScreenEdge.Top, "DISPLAY1");
+        AssertTrue(aligned, "DISPLAY2 başarıyla DISPLAY1'in üstüne istiflendi");
+
+        var updatedM2 = topo.LocalMonitors.First(m => m.MonitorId == "DISPLAY2");
+        AssertTrue(updatedM2.VirtualX == 0 && updatedM2.VirtualY == -1080, "DISPLAY2 sanal koordinatı dikey üste alındı (0, -1080)");
+        AssertTrue(topo.LocalTop == -1080 && topo.LocalHeight == 2160, "Toplam sanal masaüstü dikey olarak 1920x2160 oldu");
+
+        // 2. Internal seam verification after stacking
+        // Moving up from DISPLAY1 at (960, 0) should be an internal seam entering DISPLAY2 natively
+        bool isInternalSeam = topo.IsPointOnInternalMonitorSeam(m1, ScreenEdge.Top, 960, 0);
+        AssertTrue(isInternalSeam, "Dikey istifleme sonrası DISPLAY1 üst kenarı iç dikiş (seam) olarak tanındı");
+
+        // Moving up from DISPLAY2 at (960, -1080) is an exposed outer edge
+        bool isOuterEdge = !topo.IsPointOnInternalMonitorSeam(updatedM2, ScreenEdge.Top, 960, -1080);
+        AssertTrue(isOuterEdge, "DISPLAY2'nin en üst sınırı dış kenar olarak tanındı");
+
+        // 3. MoveLocalMonitor explicit coordinates
+        topo.MoveLocalMonitor("DISPLAY2", -1920, 0);
+        var leftM2 = topo.LocalMonitors.First(m => m.MonitorId == "DISPLAY2");
+        AssertTrue(leftM2.VirtualX == -1920 && leftM2.VirtualY == 0, "MoveLocalMonitor ile DISPLAY2 sola taşındı (-1920, 0)");
+
+        // 4. Reset to OS default layout
+        bool resetOk = topo.ResetLocalMonitorsToOsLayout();
+        AssertTrue(resetOk, "ResetLocalMonitorsToOsLayout başarıyla tamamlandı");
+        var resetM2 = topo.LocalMonitors.First(m => m.MonitorId == "DISPLAY2");
+        AssertTrue(resetM2.VirtualX == 1920 && resetM2.VirtualY == 0, "Orijinal OS koordinatlarına (1920, 0) başarıyla geri dönüldü");
+    }
+
+    private static void TestMultiHopColonyDeviceStackingAndEdgeRelay()
+    {
+        var topo = new SpatialTopologyEngine();
+        string hostId = "HOST-PC";
+        topo.LocalDeviceId = hostId;
+        topo.ResetToSingleMonitor(1920, 1080);
+
+        // Host -> Peer B (Laptop, on Right of Host)
+        var peerB = new PeerDeviceNode
+        {
+            DeviceId = "PEER-B-LAPTOP",
+            DeviceName = "Laptop",
+            Platform = "linux",
+            ScreenWidth = 1920,
+            ScreenHeight = 1080,
+            MyEnteredPinVerifiedByRemote = true,
+            RemoteEnteredMyPinVerified = true,
+            AttachedToDeviceId = hostId,
+            AssignedEdgeOnLocal = ScreenEdge.Right
+        };
+        topo.RegisterPeer(peerB);
+
+        // Peer B -> Peer C (Tablet, on Right of Peer B - STACKED, NOT directly bordering Host!)
+        var peerC = new PeerDeviceNode
+        {
+            DeviceId = "PEER-C-TABLET",
+            DeviceName = "Tablet",
+            Platform = "android",
+            ScreenWidth = 2000,
+            ScreenHeight = 1200,
+            MyEnteredPinVerifiedByRemote = true,
+            RemoteEnteredMyPinVerified = true,
+            AttachedToDeviceId = peerB.DeviceId, // Attached to Peer B!
+            AssignedEdgeOnLocal = ScreenEdge.Right
+        };
+        topo.RegisterPeer(peerC);
+
+        topo.RecomputeColonyWorldCoordinates(hostId);
+
+        // 1. Host edge transition test: Host A's Right edge must ONLY match Peer B, NEVER Peer C!
+        var stepResult = topo.EvaluateCursorStep(1919, 540, deltaX: 30, deltaY: 0);
+        AssertTrue(stepResult.ShouldTransition && stepResult.TargetPeer?.DeviceId == "PEER-B-LAPTOP",
+            "Host sağ kenara vurulduğunda istifli Tablet (C) yerine doğrudan bağlı Laptop (B) eşleşti");
+
+        // 2. Peer B's right edge adjacency: When cursor on Peer B moves right, adjacent peer is Peer C
+        var adjFromB = topo.FindAdjacentPeerOnEdge(peerB.DeviceId, ScreenEdge.Right);
+        AssertTrue(adjFromB?.DeviceId == "PEER-C-TABLET",
+            "Laptop (B) sağ kenarında istifli Tablet (C) başarıyla bulundu (Çoklu atlamalı aktarım hedefi)");
+
+        // 3. Peer C's left edge return: When cursor on Peer C moves left, adjacent parent is Peer B
+        var adjFromC = topo.FindAdjacentPeerOnEdge(peerC.DeviceId, ScreenEdge.Left);
+        AssertTrue(adjFromC?.DeviceId == "PEER-B-LAPTOP",
+            "Tablet (C) sol kenarında bağlı olduğu üst cihaz Laptop (B) başarıyla bulundu");
+
+        // 4. Peer B's left edge return: When cursor on Peer B moves left, adjacent is Host
+        var adjFromBLeft = topo.FindAdjacentPeerOnEdge(peerB.DeviceId, ScreenEdge.Left);
+        AssertTrue(adjFromBLeft == null,
+            "Laptop (B) sol kenarında koloni akranı yok (Yerel Host PC'ye dönüş)");
     }
 }
 

@@ -939,6 +939,43 @@ class ConnectMeService : Service() {
         }
     }
 
+    fun sendEdgeRelayToHost(returnEdge: Byte, normalizedPos: Float, relayTargetId: String = "") {
+        scope.launch(Dispatchers.IO) {
+            val pairedPeer = discoveredPeers.firstOrNull { it.isMutuallyPaired }
+                ?: discoveredPeers.firstOrNull { it.remoteEnteredMyPinVerified || it.myEnteredPinVerifiedByRemote }
+            val targetAddr = activePcAddress
+                ?: (if (pairedPeer != null) {
+                    try { InetAddress.getByName(pairedPeer.ipAddress) } catch (_: Exception) { null }
+                } else null)
+
+            val senderPeer = (if (targetAddr != null) discoveredPeers.find { it.ipAddress == targetAddr.hostAddress } else null)
+                ?: pairedPeer
+
+            val targetTcpPort = senderPeer?.tcpControlPort ?: ProtocolConstants.DATA_CONTROL_TCP_PORT
+            val tcpTargetIp = senderPeer?.ipAddress ?: targetAddr?.hostAddress
+            if (tcpTargetIp != null) {
+                try {
+                    Socket().use { socket ->
+                        socket.connect(InetSocketAddress(tcpTargetIp, targetTcpPort), 3000)
+                        val header = JSONObject().apply {
+                            put("type", "EDGE_RELAY")
+                            put("senderId", localDeviceId)
+                            put("senderName", localDeviceName)
+                            put("senderPlatform", "android")
+                            put("relayTargetDeviceId", relayTargetId)
+                            put("returnEdge", returnEdge.toInt())
+                            put("normalizedPosition", normalizedPos.toDouble())
+                        }
+                        TcpFrameCodec.writeFrame(socket.getOutputStream(), header)
+                    }
+                    log("[Kenar Aktarımı] 🔄 Ana makineye imleç aktarım sinyali iletildi (Kenar: $returnEdge, %${(normalizedPos * 100).toInt()}).")
+                } catch (e: Exception) {
+                    log("[Kenar Aktarımı TCP] Hata: ${e.message}")
+                }
+            }
+        }
+    }
+
     private fun handleServiceClipboardChanged() {
         try {
             val cm = serviceClipboardManager ?: return

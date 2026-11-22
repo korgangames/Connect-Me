@@ -533,6 +533,11 @@
                                         Click="AutoArrangeScreensBtn_Click"
                                         Background="#1F2937" Foreground="#E5E7EB" BorderBrush="#374151" Padding="8,3" Cursor="Hand"
                                         Content="📐 Kenarlara Dağıt"/>
+                                <Button x:Name="ResetMonitorsToOsBtn"
+                                        Click="ResetMonitorsToOsBtn_Click"
+                                        Background="#1F2937" Foreground="#E5E7EB" BorderBrush="#374151" Padding="8,3" Margin="6,0,0,0" Cursor="Hand"
+                                        Content="🔄 OS Düzenine Sıfırla"
+                                        ToolTip="Yerel çoklu monitör yerleşimini orijinal Windows masaüstü koordinatlarına sıfırlar."/>
                             </StackPanel>
 
                             <Button x:Name="TestSwitchBtn"
@@ -568,7 +573,7 @@
                                        VerticalAlignment="Center"
                                        TextTrimming="CharacterEllipsis"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <TextBlock Text="Seçili Cihazı Taşı:" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock x:Name="QuickAssignLabelText" Text="Seçili Öğeyi Taşı:" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                 <Button Content="⬅️ Sol" Click="QuickAssignLeft_Click" Background="#1F2937" Foreground="White" BorderBrush="#374151" Padding="8,3" Margin="2,0" Cursor="Hand"/>
                                 <Button Content="⬆️ Üst" Click="QuickAssignTop_Click" Background="#1F2937" Foreground="White" BorderBrush="#374151" Padding="8,3" Margin="2,0" Cursor="Hand"/>
                                 <Button Content="⬇️ Alt" Click="QuickAssignBottom_Click" Background="#1F2937" Foreground="White" BorderBrush="#374151" Padding="8,3" Margin="2,0" Cursor="Hand"/>
