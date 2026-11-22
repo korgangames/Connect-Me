@@ -56,6 +56,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logViewText: TextView
     private lateinit var audioStatusText: TextView
     private lateinit var audioToggleBtn: Button
+    private lateinit var audioQuickHubBtn: Button
+    private var audioPermPromptedForRoute = false
 
     // In-App Auto Updater UI elements
     private lateinit var updateCard: LinearLayout
@@ -160,6 +162,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        checkPendingAudioPermissionIntent()
+    }
+
+    private fun checkPendingAudioPermissionIntent() {
+        val route = ConnectMeService.activeAudioRoute
+        val localDevId = ConnectMeService.instance?.localDeviceId ?: ""
+        val wantsRemoteAudio = route != null && route.targetDeviceId.isNotEmpty() && route.targetDeviceId != "NONE" && route.targetDeviceId != localDevId
+        val explicitReq = intent?.getBooleanExtra("requestAudioPermission", false) == true
+        if (explicitReq) {
+            intent?.removeExtra("requestAudioPermission")
+            audioPermPromptedForRoute = false
+        }
+        if ((explicitReq || (wantsRemoteAudio && !audioPermPromptedForRoute)) &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            AudioStreamService.activeProjection == null) {
+            audioPermPromptedForRoute = true
+            try {
+                val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+            } catch (t: Throwable) {
+                android.util.Log.e("ConnectMe", "Failed to launch screen capture: ${t.message}", t)
+            }
+        } else if (!wantsRemoteAudio) {
+            audioPermPromptedForRoute = false
+        }
+    }
+
     override fun onResume() {
         super.onResume()
 
@@ -179,19 +211,9 @@ class MainActivity : AppCompatActivity() {
         }
         ConnectMeService.onAudioRouteChanged = {
             runOnUiThread {
+                audioPermPromptedForRoute = false
                 updateAudioUi()
-                val route = ConnectMeService.activeAudioRoute
-                val localDevId = ConnectMeService.instance?.localDeviceId ?: ""
-                if (route != null && route.targetDeviceId.isNotEmpty() && route.targetDeviceId != "NONE" && route.targetDeviceId != localDevId) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && AudioStreamService.activeProjection == null) {
-                        try {
-                            val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                            mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-                        } catch (t: Throwable) {
-                            android.util.Log.e("ConnectMe", "Failed to launch screen capture: ${t.message}", t)
-                        }
-                    }
-                }
+                checkPendingAudioPermissionIntent()
             }
         }
         AudioStreamEngine.instance.onStatusChanged = { _, _ ->
@@ -199,6 +221,7 @@ class MainActivity : AppCompatActivity() {
         }
         refreshUiState()
         updateAudioUi()
+        checkPendingAudioPermissionIntent()
     }
 
     override fun onPause() {
@@ -801,6 +824,28 @@ class MainActivity : AppCompatActivity() {
         }
         audioCard.addView(audioStatusText)
 
+        audioQuickHubBtn = createStyledButton("🎧 Bu Telefonu Kulaklık Merkezi Yap", "#059669") {
+            val svc = ConnectMeService.instance
+            val curr = ConnectMeService.activeAudioRoute
+            if (svc != null && curr?.targetDeviceId == svc.localDeviceId) {
+                svc.setAndBroadcastAudioRoute(null)
+                Toast.makeText(this, "Yerel ses moduna dönüldü", Toast.LENGTH_SHORT).show()
+            } else if (svc != null) {
+                val route = AudioRouteTarget(
+                    targetDeviceId = svc.localDeviceId,
+                    targetDeviceName = svc.localDeviceName,
+                    targetSinkId = "default",
+                    targetSinkName = "Telefon Hoparlör / Kulaklık",
+                    targetIp = svc.getLocalIpv4Address(),
+                    targetUdpPort = com.korgangames.connectme.protocol.ProtocolConstants.AUDIO_STREAM_UDP_PORT
+                )
+                svc.setAndBroadcastAudioRoute(route)
+                Toast.makeText(this, "🎧 Kulaklık Merkezi Aktif! Tüm sesler bu telefona yönlendirildi.", Toast.LENGTH_SHORT).show()
+            }
+            updateAudioUi()
+        }
+        audioCard.addView(audioQuickHubBtn)
+
         audioToggleBtn = createStyledButton("🎧 Ses Çıkışını Seç (Tüm Cihazlar)...", "#1E293B") {
             showAudioSinkSelectionDialog()
         }
@@ -1288,17 +1333,33 @@ class MainActivity : AppCompatActivity() {
             audioStatusText.setTextColor(Color.parseColor("#94A3B8"))
             audioToggleBtn.text = "🎧 Ses Çıkışını Seç (Tüm Cihazlar)..."
             (audioToggleBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#1E293B"))
+            if (::audioQuickHubBtn.isInitialized) {
+                audioQuickHubBtn.text = "🎧 Bu Telefonu Kulaklık Merkezi Yap"
+                (audioQuickHubBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#059669"))
+            }
         } else if (currentRoute.targetDeviceId == localDevId) {
-            audioStatusText.text = "🟢 Aktif Alıcı: Diğer cihazların sesleri bu telefondan (${currentRoute.targetSinkName}) çalınıyor."
+            audioStatusText.text = "🟢 Kulaklık Merkezi Aktif: Diğer cihazların sesleri bu telefondan (${currentRoute.targetSinkName}) çalınıyor."
             audioStatusText.setTextColor(Color.parseColor("#4ADE80"))
             audioToggleBtn.text = "🎧 Aktif Çıkış: Bu Telefon (${currentRoute.targetSinkName})"
             (audioToggleBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#065F46"))
+            if (::audioQuickHubBtn.isInitialized) {
+                audioQuickHubBtn.text = "🔄 Kulaklık Merkezini Kapat (Yerel Moda Dön)"
+                (audioQuickHubBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#374151"))
+            }
         } else {
-            val streamTag = if (isStreaming) " (Canlı Akıyor 48kHz Stereo)" else " (Bağlanıyor...)"
+            val streamTag = when {
+                isStreaming -> " (Canlı Akıyor 48kHz Stereo)"
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && AudioStreamService.activeProjection == null -> " (Ses İzni Bekleniyor)"
+                else -> " (Bağlanıyor...)"
+            }
             audioStatusText.text = "📡 Ses Yayını -> [${currentRoute.targetDeviceName}] ${currentRoute.targetSinkName}$streamTag"
             audioStatusText.setTextColor(Color.parseColor("#F59E0B"))
             audioToggleBtn.text = "📡 Hedef: [${currentRoute.targetDeviceName}] ${currentRoute.targetSinkName}"
             (audioToggleBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#2563EB"))
+            if (::audioQuickHubBtn.isInitialized) {
+                audioQuickHubBtn.text = "🎧 Bu Telefonu Kulaklık Merkezi Yap"
+                (audioQuickHubBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#059669"))
+            }
         }
     }
 

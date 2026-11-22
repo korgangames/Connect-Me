@@ -324,37 +324,128 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         }
     }
 
-    public static List<IPAddress> GetLocalIPv4Addresses()
+    private sealed record CachedNetInterface(IPAddress Address, byte[] AddrBytes, byte[] MaskBytes, int Score);
+    private static readonly object _netCacheLock = new();
+    private static List<CachedNetInterface>? _cachedNetInterfaces;
+    private static List<IPAddress>? _cachedLocalIps;
+    private static long _lastNetCacheTicks;
+    private static bool _netChangeSubscribed;
+
+    static ConnectMeNetworkNode()
     {
-        var result = new List<IPAddress>();
         try
         {
-            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            NetworkChange.NetworkAddressChanged += (_, _) =>
             {
-                if (ni.OperationalStatus != OperationalStatus.Up ||
-                    ni.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                lock (_netCacheLock)
                 {
-                    continue;
+                    _lastNetCacheTicks = 0;
+                    _cachedNetInterfaces = null;
+                    _cachedLocalIps = null;
                 }
+            };
+            _netChangeSubscribed = true;
+        }
+        catch { }
+    }
 
-                foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+    private static List<CachedNetInterface> GetCachedLocalInterfaceEntries()
+    {
+        long nowTicks = Environment.TickCount64;
+        lock (_netCacheLock)
+        {
+            if (_cachedNetInterfaces != null && _netChangeSubscribed && (nowTicks - _lastNetCacheTicks) < 5000)
+                return _cachedNetInterfaces;
+            if (_cachedNetInterfaces != null && !_netChangeSubscribed && (nowTicks - _lastNetCacheTicks) < 3000)
+                return _cachedNetInterfaces;
+
+            var entries = new List<CachedNetInterface>();
+            try
+            {
+                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
                 {
-                    if (ua.Address.AddressFamily == AddressFamily.InterNetwork)
+                    if (ni.OperationalStatus != OperationalStatus.Up ||
+                        ni.NetworkInterfaceType == NetworkInterfaceType.Loopback)
                     {
-                        result.Add(ua.Address);
+                        continue;
+                    }
+
+                    string nameDesc = $"{ni.Name} {ni.Description}".ToLowerInvariant();
+                    bool isVirtual = nameDesc.Contains("vethernet") || nameDesc.Contains("hyper-v") ||
+                                     nameDesc.Contains("wsl") || nameDesc.Contains("virtualbox") ||
+                                     nameDesc.Contains("vmware") || nameDesc.Contains("docker") ||
+                                     nameDesc.Contains("bluetooth") || nameDesc.Contains("tailscale") ||
+                                     nameDesc.Contains("zerotier") || nameDesc.Contains("tap-") ||
+                                     nameDesc.Contains("tun") || nameDesc.Contains("pseudo") ||
+                                     nameDesc.Contains("npcap");
+
+                    var ipProps = ni.GetIPProperties();
+                    bool hasGateway = false;
+                    foreach (var gw in ipProps.GatewayAddresses)
+                    {
+                        if (gw.Address.AddressFamily == AddressFamily.InterNetwork &&
+                            !IPAddress.Any.Equals(gw.Address) &&
+                            !IPAddress.None.Equals(gw.Address))
+                        {
+                            hasGateway = true;
+                            break;
+                        }
+                    }
+
+                    foreach (var ua in ipProps.UnicastAddresses)
+                    {
+                        if (ua.Address.AddressFamily != AddressFamily.InterNetwork)
+                            continue;
+
+                        byte[] addrBytes = ua.Address.GetAddressBytes();
+                        byte[] maskBytes = ua.IPv4Mask?.GetAddressBytes() ?? new byte[] { 255, 255, 255, 0 };
+                        bool isApipa = addrBytes[0] == 169 && addrBytes[1] == 254;
+                        bool isPrivateLan = addrBytes[0] == 192 && addrBytes[1] == 168 ||
+                                            addrBytes[0] == 10 ||
+                                            (addrBytes[0] == 172 && addrBytes[1] >= 16 && addrBytes[1] <= 31);
+
+                        int score = 0;
+                        if (isApipa) score -= 2000;
+                        if (isVirtual) score -= 500;
+                        if (hasGateway) score += 1000;
+                        if (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
+                            ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211)
+                            score += 200;
+                        if (isPrivateLan) score += 100;
+
+                        entries.Add(new CachedNetInterface(ua.Address, addrBytes, maskBytes, score));
                     }
                 }
             }
+            catch
+            {
+                // Fallback
+            }
+
+            entries.Sort((a, b) => b.Score.CompareTo(a.Score));
+            // Exclude APIPA (169.254.x.x) whenever at least one non-APIPA IP exists
+            bool hasNonApipa = entries.Any(e => !(e.AddrBytes[0] == 169 && e.AddrBytes[1] == 254));
+            if (hasNonApipa)
+            {
+                entries.RemoveAll(e => e.AddrBytes[0] == 169 && e.AddrBytes[1] == 254);
+            }
+
+            _cachedNetInterfaces = entries;
+            _cachedLocalIps = entries.Count > 0
+                ? entries.Select(e => e.Address).ToList()
+                : new List<IPAddress> { IPAddress.Loopback };
+            _lastNetCacheTicks = nowTicks;
+            return _cachedNetInterfaces;
         }
-        catch
+    }
+
+    public static List<IPAddress> GetLocalIPv4Addresses()
+    {
+        GetCachedLocalInterfaceEntries();
+        lock (_netCacheLock)
         {
-            // Fallback
+            return _cachedLocalIps ?? new List<IPAddress> { IPAddress.Loopback };
         }
-
-        if (result.Count == 0)
-            result.Add(IPAddress.Loopback);
-
-        return result;
     }
 
     /// <summary>
@@ -1445,19 +1536,29 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         Log($"[Kenar Dönüşü] '{peer.DeviceName}' ({peer.IpAddress}) cihazına dönüş sinyali iletildi ({returnEntranceEdge}, %{(int)(normalizedPosition * 100)}).");
     }
 
+    private readonly ConcurrentDictionary<string, (Socket Sock, IPEndPoint Ep)> _peerUdpEndpointCache = new(StringComparer.Ordinal);
+
     private void SendUdpFireAndForget(PeerDeviceNode peer, byte[] packet)
     {
+        string ipStr = peer.IpAddress;
+        int port = peer.UdpInputPort;
+        string cacheKey = $"{ipStr}:{port}";
         try
         {
-            if (IPAddress.TryParse(peer.IpAddress, out var ip))
+            if (!_peerUdpEndpointCache.TryGetValue(cacheKey, out var entry))
             {
+                if (!IPAddress.TryParse(ipStr, out var ip))
+                    return;
                 var socket = GetOrCreateSubnetBoundUdpSocket(ip);
-                socket.SendTo(packet, new IPEndPoint(ip, peer.UdpInputPort));
+                entry = (socket, new IPEndPoint(ip, port));
+                _peerUdpEndpointCache[cacheKey] = entry;
             }
+            entry.Sock.SendTo(packet, entry.Ep);
         }
         catch (Exception ex)
         {
-            Log($"[UDP Uyarı] '{peer.DeviceName}' ({peer.IpAddress}:{peer.UdpInputPort}) paket iletilemedi: {ex.Message}");
+            _peerUdpEndpointCache.TryRemove(cacheKey, out _);
+            Log($"[UDP Uyarı] '{peer.DeviceName}' ({ipStr}:{port}) paket iletilemedi: {ex.Message}");
         }
     }
 
@@ -2874,10 +2975,11 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     break;
 
                 case "AUDIO_ROUTE_CHANGE":
-                    ActiveAudioRoute = header.AudioRoute;
-                    string targetName = header.AudioRoute?.TargetSinkName ?? header.AudioRoute?.TargetDeviceName ?? "Varsayılan (Devre Dışı)";
-                    Log($"[Ses Yönlendirme] 🔄 Aktif ses hedefi güncellendi -> {targetName} (Cihaz: {header.AudioRoute?.TargetDeviceId})");
-                    AudioRouteChanged?.Invoke(header.AudioRoute);
+                    var resolvedIncomingRoute = ResolveIncomingAudioRouteIp(header.AudioRoute);
+                    ActiveAudioRoute = resolvedIncomingRoute;
+                    string targetName = resolvedIncomingRoute?.TargetSinkName ?? resolvedIncomingRoute?.TargetDeviceName ?? "Varsayılan (Devre Dışı)";
+                    Log($"[Ses Yönlendirme] 🔄 Aktif ses hedefi güncellendi -> {targetName} (Cihaz: {resolvedIncomingRoute?.TargetDeviceId}, Hedef IP: {resolvedIncomingRoute?.TargetIp})");
+                    AudioRouteChanged?.Invoke(resolvedIncomingRoute);
                     break;
             }
         }
@@ -2944,20 +3046,83 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         }
     }
 
+    private AudioRouteTarget? ResolveIncomingAudioRouteIp(AudioRouteTarget? route)
+    {
+        if (route == null || string.IsNullOrEmpty(route.TargetDeviceId) || route.TargetDeviceId == "NONE")
+            return route;
+
+        if (string.Equals(route.TargetDeviceId, LocalDeviceId, StringComparison.OrdinalIgnoreCase))
+            return route;
+
+        if (_peers.TryGetValue(route.TargetDeviceId, out var targetPeer) &&
+            !string.IsNullOrWhiteSpace(targetPeer.IpAddress) &&
+            !IsLocalAddress(targetPeer.IpAddress) &&
+            IPAddress.TryParse(targetPeer.IpAddress, out _))
+        {
+            return new AudioRouteTarget
+            {
+                TargetDeviceId = route.TargetDeviceId,
+                TargetDeviceName = route.TargetDeviceName,
+                TargetSinkId = route.TargetSinkId,
+                TargetSinkName = route.TargetSinkName,
+                TargetIp = targetPeer.IpAddress,
+                TargetUdpPort = route.TargetUdpPort > 0 ? route.TargetUdpPort : ProtocolConstants.AudioStreamUdpPort
+            };
+        }
+
+        return route;
+    }
+
+    private AudioRouteTarget? BuildAudioRouteForPeer(AudioRouteTarget? route, PeerDeviceNode peer)
+    {
+        if (route == null || !string.Equals(route.TargetDeviceId, LocalDeviceId, StringComparison.OrdinalIgnoreCase))
+            return route;
+
+        string bestLocalIp = route.TargetIp;
+        if (IPAddress.TryParse(peer.IpAddress, out var peerAddr) && !IPAddress.IsLoopback(peerAddr))
+        {
+            var subnetIp = FindBestLocalIpForTarget(peerAddr);
+            if (subnetIp != null)
+            {
+                bestLocalIp = subnetIp.ToString();
+            }
+            else if (string.IsNullOrWhiteSpace(bestLocalIp) || IsApipaAddress(bestLocalIp))
+            {
+                bestLocalIp = LocalIpv4;
+            }
+        }
+
+        if (bestLocalIp == route.TargetIp)
+            return route;
+
+        return new AudioRouteTarget
+        {
+            TargetDeviceId = route.TargetDeviceId,
+            TargetDeviceName = route.TargetDeviceName,
+            TargetSinkId = route.TargetSinkId,
+            TargetSinkName = route.TargetSinkName,
+            TargetIp = bestLocalIp,
+            TargetUdpPort = route.TargetUdpPort
+        };
+    }
+
+    private static bool IsApipaAddress(string? ipStr) =>
+        !string.IsNullOrEmpty(ipStr) && ipStr.StartsWith("169.254.", StringComparison.Ordinal);
+
     public async Task SetAndBroadcastAudioRouteAsync(AudioRouteTarget? route)
     {
         ActiveAudioRoute = route;
-        var header = new TcpControlHeader
-        {
-            Type = "AUDIO_ROUTE_CHANGE",
-            SenderId = LocalDeviceId,
-            SenderName = LocalDeviceName,
-            SenderPlatform = LocalPlatform,
-            AudioRoute = route
-        };
 
         foreach (var peer in _peers.Values.Where(p => p.IsMutuallyPaired || p.IsTrusted))
         {
+            var header = new TcpControlHeader
+            {
+                Type = "AUDIO_ROUTE_CHANGE",
+                SenderId = LocalDeviceId,
+                SenderName = LocalDeviceName,
+                SenderPlatform = LocalPlatform,
+                AudioRoute = BuildAudioRouteForPeer(route, peer)
+            };
             await SendTcpFrameToPeerAsync(peer, header).ConfigureAwait(false);
         }
 
@@ -3003,7 +3168,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 SenderId = LocalDeviceId,
                 SenderName = LocalDeviceName,
                 SenderPlatform = LocalPlatform,
-                AudioRoute = ActiveAudioRoute
+                AudioRoute = BuildAudioRouteForPeer(ActiveAudioRoute, peer)
             };
             await SendTcpFrameToPeerAsync(peer, routeHdr).ConfigureAwait(false);
         }
@@ -3049,44 +3214,25 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             return null;
 
         byte[] targetBytes = targetIp.GetAddressBytes();
+        var entries = GetCachedLocalInterfaceEntries();
 
-        try
+        for (int idx = 0; idx < entries.Count; idx++)
         {
-            foreach (var netInterface in NetworkInterface.GetAllNetworkInterfaces())
+            var entry = entries[idx];
+            bool inSameSubnet = true;
+            for (int i = 0; i < 4; i++)
             {
-                if (netInterface.OperationalStatus != OperationalStatus.Up ||
-                    netInterface.NetworkInterfaceType == NetworkInterfaceType.Loopback)
-                    continue;
-
-                var ipProps = netInterface.GetIPProperties();
-                foreach (var unicast in ipProps.UnicastAddresses)
+                if ((entry.AddrBytes[i] & entry.MaskBytes[i]) != (targetBytes[i] & entry.MaskBytes[i]))
                 {
-                    if (unicast.Address.AddressFamily != AddressFamily.InterNetwork)
-                        continue;
-
-                    byte[] localBytes = unicast.Address.GetAddressBytes();
-                    byte[] maskBytes = unicast.IPv4Mask?.GetAddressBytes() ?? new byte[] { 255, 255, 255, 0 };
-
-                    bool inSameSubnet = true;
-                    for (int i = 0; i < 4; i++)
-                    {
-                        if ((localBytes[i] & maskBytes[i]) != (targetBytes[i] & maskBytes[i]))
-                        {
-                            inSameSubnet = false;
-                            break;
-                        }
-                    }
-
-                    if (inSameSubnet)
-                    {
-                        return unicast.Address;
-                    }
+                    inSameSubnet = false;
+                    break;
                 }
             }
-        }
-        catch
-        {
-            // Ignore interface query failure
+
+            if (inSameSubnet)
+            {
+                return entry.Address;
+            }
         }
 
         return null;

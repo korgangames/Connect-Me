@@ -21,15 +21,19 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     private const uint WAVE_MAPPER = unchecked((uint)-1);
     private const int WAVE_FORMAT_PCM = 1;
 
-    private const int NUM_RING_BUFFERS = 24;
+    private const int NUM_RING_BUFFERS = 32;
     private const int MAX_BUFFER_SIZE = 8192;
-    private const int TARGET_IN_FLIGHT_BUFFERS = 8; // ~40-80ms rock-solid driver cushion
+    private const int MIN_START_BUFFERS = 3; // ~15ms initial cushion to eliminate underrun crackles
+    private const int TARGET_IN_FLIGHT_BUFFERS = 10; // ~50ms rock-solid driver cushion
 
     private readonly ConnectMeNetworkNode _network;
-    private readonly ConcurrentQueue<AudioChunkPacket> _audioQueue = new();
+    private readonly ConcurrentDictionary<string, ConcurrentQueue<AudioChunkPacket>> _peerQueues = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, long> _peerLastRxTicks = new(StringComparer.OrdinalIgnoreCase);
     private readonly AutoResetEvent _dataAvailable = new(false);
     private readonly AutoResetEvent _bufferDoneEvent = new(false);
     private readonly object _waveLock = new();
+    private readonly byte[] _silentZeroBuffer = new byte[MAX_BUFFER_SIZE];
+    private readonly byte[] _mixScratchBuffer = new byte[MAX_BUFFER_SIZE];
 
     private Thread? _playbackThread;
     private volatile bool _isRunning = true;
@@ -138,34 +142,47 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         IPAddress normalizedAddr = sender.Address.IsIPv4MappedToIPv6
             ? sender.Address.MapToIPv4()
             : sender.Address;
-        string senderIp = normalizedAddr.ToString();
 
-        if (IPAddress.IsLoopback(normalizedAddr) ||
-            senderIp == _network.LocalIpv4 ||
-            ConnectMeNetworkNode.GetLocalIPv4Addresses().Any(a => a.Equals(normalizedAddr)))
+        if (ConnectMeNetworkNode.IsLocalAddress(normalizedAddr))
         {
             return;
         }
 
+        string senderIp = normalizedAddr.ToString();
+        long nowTicks = Environment.TickCount64;
         _lastAudioPacketTime = DateTimeOffset.UtcNow;
         _totalAudioBytesReceived += packet.PcmData.Length;
+        _peerLastRxTicks[senderIp] = nowTicks;
 
-        // Bounded jitter queue: max 16 chunks to absorb network jitter while enforcing sub-60ms low latency
-        while (_audioQueue.Count > 16)
+        // Per-peer bounded jitter queue (max 16 chunks = ~80ms)
+        var queue = _peerQueues.GetOrAdd(senderIp, _ => new ConcurrentQueue<AudioChunkPacket>());
+        while (queue.Count > 16)
         {
-            _audioQueue.TryDequeue(out _);
+            queue.TryDequeue(out _);
         }
-
-        _audioQueue.Enqueue(packet);
+        queue.Enqueue(packet);
         _dataAvailable.Set();
 
         // Throttle UI update callback to at most every 500ms (prevent UI thread overhead)
         if ((DateTimeOffset.UtcNow - _lastStatusNotificationTime).TotalMilliseconds >= 500)
         {
             _lastStatusNotificationTime = DateTimeOffset.UtcNow;
-            var peer = _network.MutuallyPairedPeers.FirstOrDefault(p => p.IpAddress == senderIp);
-            string peerName = peer?.DeviceName ?? senderIp;
-            _activeSourceDescription = $"{peerName} ({packet.SampleRate} Hz {(packet.Channels == 2 ? "Stereo" : "Mono")})";
+            int activeSenderCount = 0;
+            foreach (var kv in _peerLastRxTicks)
+            {
+                if (nowTicks - kv.Value < 1500) activeSenderCount++;
+            }
+
+            if (activeSenderCount > 1)
+            {
+                _activeSourceDescription = $"🎧 {activeSenderCount} Cihaz Miksleniyor ({packet.SampleRate} Hz Stereo)";
+            }
+            else
+            {
+                var peer = _network.MutuallyPairedPeers.FirstOrDefault(p => p.IpAddress == senderIp);
+                string peerName = peer?.DisplayName ?? senderIp;
+                _activeSourceDescription = $"{peerName} ({packet.SampleRate} Hz {(packet.Channels == 2 ? "Stereo" : "Mono")})";
+            }
             AudioStatusChanged?.Invoke(_activeSourceDescription);
         }
     }
@@ -173,6 +190,10 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
     private void PlaybackWorkerLoop()
     {
         var waitHandles = new WaitHandle[] { _dataAvailable, _bufferDoneEvent };
+        var activeQueues = new List<ConcurrentQueue<AudioChunkPacket>>(4);
+        var chunksToMix = new List<byte[]>(4);
+        long firstPendingTicks = 0;
+        long lastPruneTicks = 0;
 
         while (_isRunning && !_disposed)
         {
@@ -186,44 +207,120 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
                 continue;
             }
 
+            long nowTicks = Environment.TickCount64;
+            if (nowTicks - lastPruneTicks > 5000)
+            {
+                lastPruneTicks = nowTicks;
+                foreach (var kv in _peerLastRxTicks)
+                {
+                    if (nowTicks - kv.Value > 15000 && _peerQueues.TryGetValue(kv.Key, out var staleQ) && staleQ.IsEmpty)
+                    {
+                        _peerQueues.TryRemove(kv.Key, out _);
+                        _peerLastRxTicks.TryRemove(kv.Key, out _);
+                    }
+                }
+            }
+
             lock (_waveLock)
             {
                 // ALWAYS reclaim any buffers that finished playing in the sound card
                 ReclaimDoneBuffersLocked();
 
-                // If audio packets are waiting in the jitter queue, feed the driver
-                if (_audioQueue.TryPeek(out var peekPacket))
+                // Collect active peer queues without LINQ/heap allocations
+                activeQueues.Clear();
+                int totalAvailable = 0;
+                foreach (var q in _peerQueues.Values)
                 {
-                    int sampleRate = peekPacket.SampleRate > 0 ? (int)peekPacket.SampleRate : 48000;
-                    int channels = peekPacket.Channels > 0 ? peekPacket.Channels : 2;
-                    int bitsPerSample = peekPacket.BitsPerSample > 0 ? peekPacket.BitsPerSample : 16;
-
-                    EnsureWaveOutOpenLocked(sampleRate, channels, bitsPerSample);
-                    if (_hWaveOut != IntPtr.Zero)
+                    if (!q.IsEmpty)
                     {
-                        // Submit chunks up to TARGET_IN_FLIGHT_BUFFERS
-                        while (_inFlightCount < TARGET_IN_FLIGHT_BUFFERS && _audioQueue.TryDequeue(out var packet))
+                        activeQueues.Add(q);
+                        totalAvailable += q.Count;
+                    }
+                }
+
+                if (totalAvailable == 0)
+                {
+                    firstPendingTicks = 0;
+                }
+                else
+                {
+                    if (firstPendingTicks == 0) firstPendingTicks = nowTicks;
+
+                    // Anti-Stutter Pre-buffer Cushion:
+                    // When sound card buffer is empty, wait for MIN_START_BUFFERS (~15ms) OR 15ms timeout
+                    // (so short notification sounds never stall waiting for more packets).
+                    bool readyToFeed = _inFlightCount > 0 ||
+                                       totalAvailable >= MIN_START_BUFFERS ||
+                                       (nowTicks - firstPendingTicks) >= 15;
+
+                    if (readyToFeed)
+                    {
+                        AudioChunkPacket firstPacket = default;
+                        foreach (var q in activeQueues)
                         {
-                            if (packet.PcmData == null || packet.PcmData.Length == 0)
-                                continue;
+                            if (q.TryPeek(out firstPacket)) break;
+                        }
 
-                            int slot = GetFreeBufferSlotLocked();
-                            if (slot < 0)
-                                break;
+                        int sampleRate = firstPacket.SampleRate > 0 ? (int)firstPacket.SampleRate : 48000;
+                        int channels = firstPacket.Channels > 0 ? firstPacket.Channels : 2;
+                        int bitsPerSample = firstPacket.BitsPerSample > 0 ? firstPacket.BitsPerSample : 16;
 
-                            if (!_isMuted && _volume > 0.001f)
+                        EnsureWaveOutOpenLocked(sampleRate, channels, bitsPerSample);
+                        if (_hWaveOut != IntPtr.Zero)
+                        {
+                            bool wasStarved = (_inFlightCount == 0);
+
+                            while (_inFlightCount < TARGET_IN_FLIGHT_BUFFERS)
                             {
-                                if (_volume < 0.999f)
+                                chunksToMix.Clear();
+                                for (int i = 0; i < activeQueues.Count; i++)
                                 {
-                                    ApplyVolume(packet.PcmData, _volume);
+                                    if (activeQueues[i].TryDequeue(out var pkt) && pkt.PcmData != null && pkt.PcmData.Length > 0)
+                                    {
+                                        chunksToMix.Add(pkt.PcmData);
+                                    }
                                 }
-                                SubmitBufferLocked(slot, packet.PcmData);
+
+                                if (chunksToMix.Count == 0)
+                                    break;
+
+                                int slot = GetFreeBufferSlotLocked();
+                                if (slot < 0)
+                                    break;
+
+                                byte[] pcmData;
+                                int pcmLen;
+                                if (chunksToMix.Count == 1)
+                                {
+                                    pcmData = chunksToMix[0];
+                                    pcmLen = pcmData.Length - (pcmData.Length % 4);
+                                }
+                                else
+                                {
+                                    pcmLen = AudioPcmMixer.MixIntoBuffer(chunksToMix, _mixScratchBuffer);
+                                    pcmData = _mixScratchBuffer;
+                                }
+
+                                if (pcmLen <= 0)
+                                    continue;
+
+                                if (!_isMuted && _volume > 0.001f)
+                                {
+                                    if (_volume < 0.999f)
+                                    {
+                                        ApplyVolume(pcmData, pcmLen, _volume);
+                                    }
+                                    SubmitBufferLocked(slot, pcmData, pcmLen);
+                                }
+                                else
+                                {
+                                    SubmitBufferLocked(slot, _silentZeroBuffer, Math.Min(pcmLen, MAX_BUFFER_SIZE));
+                                }
                             }
-                            else
+
+                            if (wasStarved && _inFlightCount > 0)
                             {
-                                // Muted: submit zeroed PCM to keep the hardware clock moving without sound
-                                byte[] silentChunk = new byte[packet.PcmData.Length];
-                                SubmitBufferLocked(slot, silentChunk);
+                                waveOutRestart(_hWaveOut);
                             }
                         }
                     }
@@ -277,7 +374,7 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         return -1;
     }
 
-    private void SubmitBufferLocked(int slot, byte[] pcmData)
+    private void SubmitBufferLocked(int slot, byte[] pcmData, int length)
     {
         if (_hWaveOut == IntPtr.Zero || slot < 0 || slot >= NUM_RING_BUFFERS)
             return;
@@ -287,7 +384,7 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         if (pBuf == IntPtr.Zero || pHdr == IntPtr.Zero)
             return;
 
-        int copyLen = Math.Min(pcmData.Length, MAX_BUFFER_SIZE);
+        int copyLen = Math.Min(Math.Min(length, pcmData.Length), MAX_BUFFER_SIZE);
         Marshal.Copy(pcmData, 0, pBuf, copyLen);
 
         var hdr = new WAVEHDR
@@ -319,9 +416,9 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
         }
     }
 
-    private static void ApplyVolume(byte[] pcm, float vol)
+    public static void ApplyVolume(byte[] pcm, int length, float vol)
     {
-        int samples = pcm.Length / 2;
+        int samples = Math.Min(length, pcm.Length) / 2;
         for (int i = 0; i < samples; i++)
         {
             short val = System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(pcm.AsSpan(i * 2, 2));
@@ -558,6 +655,9 @@ public sealed class WindowsAudioPlaybackEngine : IDisposable
 
     [DllImport("winmm.dll")]
     private static extern int waveOutReset(IntPtr hWaveOut);
+
+    [DllImport("winmm.dll")]
+    private static extern int waveOutRestart(IntPtr hWaveOut);
 
     [DllImport("winmm.dll")]
     private static extern int waveOutClose(IntPtr hWaveOut);

@@ -289,6 +289,51 @@ public static class WirePacketCodec
 }
 
 /// <summary>
+/// Zero-allocation software mixer for summing multiple 16-bit Little-Endian PCM audio streams
+/// with saturation clamping so simultaneous audio sources blend smoothly without static wrap-around.
+/// </summary>
+public static class AudioPcmMixer
+{
+    public static int MixIntoBuffer(IReadOnlyList<byte[]> chunks, byte[] destination)
+    {
+        if (chunks.Count == 0)
+            return 0;
+
+        int maxLen = 0;
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            int aligned = chunks[i].Length - (chunks[i].Length % 4);
+            if (aligned > maxLen) maxLen = aligned;
+        }
+
+        if (maxLen > destination.Length)
+            maxLen = destination.Length - (destination.Length % 4);
+
+        if (maxLen <= 0)
+            return 0;
+
+        int sampleCount = maxLen / 2;
+        for (int s = 0; s < sampleCount; s++)
+        {
+            int sum = 0;
+            int offset = s * 2;
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                byte[] src = chunks[i];
+                if (offset + 1 < src.Length)
+                {
+                    sum += BinaryPrimitives.ReadInt16LittleEndian(src.AsSpan(offset, 2));
+                }
+            }
+            short clamped = (short)Math.Clamp(sum, short.MinValue, short.MaxValue);
+            BinaryPrimitives.WriteInt16LittleEndian(destination.AsSpan(offset, 2), clamped);
+        }
+
+        return maxLen;
+    }
+}
+
+/// <summary>
 /// Represents a single physical monitor within a computer's virtual desktop space
 /// (Windows Virtual Screen or Linux Wayland/KScreen/RandR output layout).
 /// Coordinates (VirtualX, VirtualY) may be negative when secondary monitors are placed left/above the primary monitor.

@@ -1,3 +1,41 @@
+# Connect Me v1.8.35 — Ses Aktarımı Mimari Yenilemesi ("1-Tıkla Kulaklık Merkezi Modu"), Windows Process Loopback, Çoklu Cihaz Ses Miksajı ve Sistem Geneli Performans Optimizasyonu (Windows, Linux & Android)
+
+Bu sürüm; ses aktarımındaki bozulma, statik gürültü, gönderici hoparlörünün susmaması ve çoklu ağ adaptörü kaynaklı bağlantı kopması sorunlarını kökten çözer, "1-Tıkla Kulaklık / Ses Merkezi Modu"nu ekler ve tüm çekirdek alt sistemleri (fare/RawInput, ağ yönlendirme, pano ve PipeWire/Android ses akışı) sıfır bellek ayırımlı (zero-allocation) yüksek verimli yapıya geçirir:
+
+1. **🎧 1-Tıkla "Kulaklık / Ses Merkezi Modu" & Gerçek Çoklu Cihaz Ses Miksajı (`AudioPcmMixer`):**
+   - **Tek Tıkla Tüm Sesleri Kulaklığa Çekme:** Windows üst çubuğu ve Ses Matrisi sekmesi, Linux GUI Ses Matrisi ve Android ana ekranına tek dokunuşlu **`🎧 Kulaklık Merkezi Yap`** düğmesi eklendi. Kullanıcı tek tıkla oturduğu cihazı tüm koloninin kulaklık merkezi haline getirebilir; bağlı tüm cihazlar kendi hoparlörünü susturup seslerini doğrudan merkez cihaza akıtır.
+   - **Eşzamanlı Çoklu Cihaz Ses Miksajı:** `WindowsAudioPlaybackEngine` artık yalnızca tek bir cihazı veya paketleri birbirinin üzerine karıştırarak bozmayı bırakıp, bağlı her gönderici cihaz için ayrı gecikme kuyruğu (`_peerQueues`) ve doymalı 16-bit PCM yazılım mikseri (`AudioPcmMixer.MixIntoBuffer`) kullanır. Windows, Linux ve Android'den aynı anda gelen sesler sıfır bellek ayırımıyla (zero-alloc) pürüzsüz biçimde tek kulaklıkta birleştirilir.
+   - **Cızırtı ve Kesilme Önleyici Jitter Tamponu (Anti-Underrun Pre-Buffer):** Windows (`MIN_START_BUFFERS = 3`, `waveOutRestart`), Linux (`prebuf_chunks = 3`) ve Android (`MIN_PREBUF_CHUNKS = 3`) ses oynatma motorları akış başlangıcında ~15ms tampon biriktirerek Wi-Fi gecikme dalgalanmalarındaki çıtırtı/statik gürültüyü ortadan kaldırır.
+
+2. **🔊 Windows Process Loopback & Kesintisiz Hoparlör Susturma (`WindowsAudioCaptureEngine`):**
+   - **Kernel Seviyesinde Süreç İzolasyonu (`VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK`):** Windows 10 (20348+) ve Windows 11 sistemlerde `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` desteği eklendi. Bu sayede:
+     - Connect Me kendi çaldığı sesi asla geri yakalayamaz (yankı/feedback döngüsü %100 imkansız),
+     - Doğrudan yerel 48kHz Stereo S16LE akışı alındığı için surround kanal/örnekleme kaynaklı bozulmalar ortadan kalkar,
+     - Fiziksel hoparlör `IAudioEndpointVolume::SetMute(1)` (`CLSCTX_ALL`) ile susturulduğunda dahi diğer uygulamaların sesi kayıpsız yakalanmaya devam eder. (Eski Windows sürümlerinde klasik WASAPI Loopback'e otomatik geri döner.)
+   - **Sıfır Tahsisli (Zero-Alloc) UDP Gönderim:** Sabit 14+960 baytlık kablo tamponuyla saniyede 400+ gereksiz bellek ayırımı kaldırıldı.
+
+3. **🌐 Çoklu Ağ Kartı (APIPA `169.254.x.x` / Sanal Adaptör) Hatasının Giderilmesi:**
+   - **Akıllı Ağ Sıralaması ve Önbellekli NIC Seçimi (`ConnectMeNetworkNode`):** Önceki sürümde bağlı olmayan Ethernet/Bluetooth köprülerindeki `169.254.x.x` APIPA adreslerinin veya sanal adaptörlerin (Hyper-V/WSL/VMware) `LocalIpv4` olarak seçilmesi yüzünden Linux ve Android ses paketlerini yanlış IP'ye atıp boşa düşüyordu. Yeni skorlama motoru varsayılan ağ geçidine sahip gerçek Wi-Fi/Ethernet IP'lerini en başa alır ve `169.254.x.x` adreslerini eler.
+   - **Her Eş İçin Doğru Alt Ağ IP Çözümleme (`BuildAudioRouteForPeer` & `ResolveIncomingAudioRouteIp`):** Ses yönlendirme paketlerinde Windows her eşe o eşin alt ağına uygun yerel IP'yi gönderir; Linux ve Android de yönlendirme sırasında eşin doğrulanmış gerçek LAN IP'sini önceliklendirir.
+
+4. **🐧 Linux PipeWire / PulseAudio & 🧹 Pano Optimizasyonu:**
+   - **`stderr=subprocess.PIPE` Kilitlenmesinin Çözümü:** `_audio_receiver_loop` içindeki ses oynatıcı alt süreçlerinde `stderr=subprocess.DEVNULL` kullanılarak 64KB hata tamponu dolduğunda daemon'ın kilitlenmesi engellendi; `SO_RCVBUF` 512KB'a çıkarıldı ve kendi IP'sine karşı loopback koruması eklendi.
+   - **Mikrofona Düşme Korumalı PipeWire Yakalama:** `pw-record` için `.monitor` eki olmadan gerçek düğüm adıyla kayıt denenir; monitör kaynağı bulunamazsa asla ortam mikrofonuna geri düşmez.
+   - **Verimli Pano ve Ağ Döngüleri:** Linux `get_local_ip()` önbelleklendi ve internetsiz LAN desteği eklendi; `_clipboard_monitor_loop` ikili dosya yollarını önbellekleyip gereksiz `wl-paste -n` süreç çağrılarını %50 azalttı ve tüm `peers` döngüleri iş parçacığı güvenli hale getirildi.
+
+5. **📱 Android Ses & Pil/Bant Genişliği İyileştirmeleri:**
+   - PC kulaklık merkezi aktif edildiğinde MediaProjection izni henüz verilmemişse kullanıcıya tek dokunuşlu yüksek öncelikli bildirim gösterilir (`ConnectMeService` -> `MainActivity`).
+   - `AudioStreamEngine` içinde `ByteBuffer`/`DatagramPacket` yeniden kullanımı ve dijital sessizlik (all-zero PCM) filtrelemesi ile Wi-Fi ve pil tüketimi düşürüldü; `AndroidAudioPlaybackEngine` içinde 4-bayt hizalama koruması güçlendirildi.
+
+6. **⚡ Fare & RawInput Motoru Optimizasyonu (`Win32InputEngine` & `ConnectMeNetworkNode`):**
+   - `ProcessRawInput` tek sistem çağrısı + 128 bayt `stackalloc` tamponu ile saniyede 1000+ bellek ayırımından arındırıldı.
+   - `FindBestLocalIpForTarget` ve `SendUdpFireAndForget` önbellekli soket/uç nokta haritası (`_peerUdpEndpointCache`) ile her fare hareketinde OS ağ arayüzlerini yeniden tarama yükü ortadan kaldırıldı.
+
+7. **✅ Kapsamlı Doğrulama:**
+   - `AudioPcmMixer` doyma kırpması ve önbellekli akıllı NIC sıralama testleri eklendi; tüm C# birim testleri (**105/105 Başarılı**), Windows derlemesi ve Python sözdizimi kontrolleri hatasız geçti.
+
+---
+
 # Connect Me v1.8.34 — Simülasyon Butonunun Kaldırılması, Cihaz Ağacında Mükerrer Cihaz (Duplication) Düzeltmesi ve Koloni Görünümü İyileştirmesi (Windows & Linux)
 
 Bu sürüm; arayüzdeki gereksiz simülasyon butonunu ve test kalıntılarını temizler, cihaz listesindeki mükerrer/çift cihaz (duplication) oluşumunu kökten engeller ve Koloni (Colony) ağaç hiyerarşisini yerel makineyi de kapsayacak şekilde net ve anlaşılır hale getirir:

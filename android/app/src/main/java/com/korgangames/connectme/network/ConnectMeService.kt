@@ -1782,13 +1782,11 @@ class ConnectMeService : Service() {
                     // 3. Karşı cihaz hedef seçildi: Telefon seslerini karşıya akıt!
                     AndroidAudioPlaybackEngine.instance.stop()
                     var resolvedIp = target.targetIp
-                    if (resolvedIp.isEmpty() || resolvedIp == "127.0.0.1") {
-                        val peer = discoveredPeers.find { it.deviceId == target.targetDeviceId }
-                        if (peer != null && peer.ipAddress.isNotEmpty() && peer.ipAddress != "127.0.0.1") {
-                            resolvedIp = peer.ipAddress
-                        }
+                    val peer = discoveredPeers.find { it.deviceId.equals(target.targetDeviceId, ignoreCase = true) }
+                    if (peer != null && peer.ipAddress.isNotEmpty() && peer.ipAddress != "127.0.0.1" && peer.ipAddress != "0.0.0.0") {
+                        resolvedIp = peer.ipAddress
                     }
-                    if (resolvedIp.isNotEmpty() && resolvedIp != "127.0.0.1" && resolvedIp != myIp) {
+                    if (resolvedIp.isNotEmpty() && resolvedIp != "127.0.0.1" && !resolvedIp.startsWith("169.254.") && resolvedIp != myIp) {
                         if (AudioStreamService.activeProjection != null) {
                             val intent = Intent(this, AudioStreamService::class.java).apply {
                                 action = AudioStreamService.ACTION_START_AUDIO
@@ -1805,7 +1803,9 @@ class ConnectMeService : Service() {
                             }
                             log("[Ses Matrisi] 📡 Ses Yayını -> '${target.targetDeviceName}' ($resolvedIp - ${target.targetSinkName}) hedefine akıyor.")
                         } else {
-                            log("[Ses Matrisi] ℹ️ Hedef: '${target.targetDeviceName}'. Telefon seslerini PC'ye aktarmak için Connect Me uygulamasında 'Ses Çıkışını Seç' menüsünden izin verin.")
+                            log("[Ses Matrisi] 🔔 '${target.targetDeviceName}' sesinizi istiyor. İzin vermek için bildirime veya uygulamaya dokunun.")
+                            showAudioPermissionPromptNotification(target.targetDeviceName)
+                            onAudioRouteChanged?.invoke()
                         }
                     }
                 }
@@ -1813,5 +1813,39 @@ class ConnectMeService : Service() {
         } catch (t: Throwable) {
             log("[Ses Hata] applyAudioRouteLocally: ${t.message}")
         }
+    }
+
+    private fun showAudioPermissionPromptNotification(targetName: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val promptChan = "connect_me_audio_prompt"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val chan = NotificationChannel(
+                    promptChan,
+                    "Ses Aktarımı İzni",
+                    NotificationManager.IMPORTANCE_HIGH
+                )
+                nm.createNotificationChannel(chan)
+            }
+            val openIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("requestAudioPermission", true)
+            }
+            val pi = PendingIntent.getActivity(
+                this,
+                4287,
+                openIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val notif = NotificationCompat.Builder(this, promptChan)
+                .setContentTitle("🎧 Ses Aktarımı Hazır ($targetName)")
+                .setContentText("Telefon seslerini bilgisayar kulaklığına göndermek için dokunup izin verin.")
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .build()
+            nm.notify(4287, notif)
+        } catch (_: Throwable) {}
     }
 }

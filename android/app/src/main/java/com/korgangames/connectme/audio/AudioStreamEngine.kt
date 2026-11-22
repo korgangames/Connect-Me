@@ -156,7 +156,17 @@ class AudioStreamEngine private constructor() {
         val pcmReadSize = 1920
         val pcmBuffer = ByteArray(pcmReadSize)
         val packetBuffer = ByteArray(14 + 960)
-        var sequence: Short = 0
+        val bb = ByteBuffer.wrap(packetBuffer).order(ByteOrder.LITTLE_ENDIAN)
+        packetBuffer[0] = ProtocolConstants.MAGIC_0
+        packetBuffer[1] = ProtocolConstants.MAGIC_1
+        packetBuffer[2] = ProtocolConstants.PROTOCOL_VERSION
+        packetBuffer[3] = 0x08.toByte() // PacketType.AudioChunk
+        packetBuffer[4] = CHANNELS.toByte()
+        bb.putInt(5, SAMPLE_RATE)
+        packetBuffer[9] = BITS_PER_SAMPLE.toByte()
+
+        val datagram = DatagramPacket(packetBuffer, packetBuffer.size, targetAddr, AUDIO_UDP_PORT)
+        var sequence = 0
 
         while (isRunning.get()) {
             val record = audioRecord ?: break
@@ -175,26 +185,27 @@ class AudioStreamEngine private constructor() {
                 val validBytes = bytesRead - (bytesRead % 4)
                 if (validBytes <= 0) continue
 
+                // Skip transmitting pure digital silence to save battery and Wi-Fi airtime
+                var hasAudio = false
+                for (i in 0 until validBytes step 2) {
+                    if (pcmBuffer[i] != 0.toByte() || pcmBuffer[i + 1] != 0.toByte()) {
+                        hasAudio = true
+                        break
+                    }
+                }
+                if (!hasAudio) continue
+
                 // Send in MTU-safe chunks of at most 960 bytes (5ms each) to eliminate Wi-Fi IP fragmentation
                 var offset = 0
                 while (offset < validBytes && isRunning.get()) {
                     val chunkLen = Math.min(960, validBytes - offset)
 
-                    val bb = ByteBuffer.wrap(packetBuffer).order(ByteOrder.LITTLE_ENDIAN)
-                    bb.put(ProtocolConstants.MAGIC_0)
-                    bb.put(ProtocolConstants.MAGIC_1)
-                    bb.put(ProtocolConstants.PROTOCOL_VERSION)
-                    bb.put(0x08.toByte()) // PacketType.AudioChunk
-                    bb.put(CHANNELS.toByte())
-                    bb.putInt(SAMPLE_RATE)
-                    bb.put(BITS_PER_SAMPLE.toByte())
-                    bb.putShort(sequence++)
-                    bb.putShort(chunkLen.toShort())
-                    bb.put(pcmBuffer, offset, chunkLen)
+                    bb.putShort(10, (sequence++ and 0xFFFF).toShort())
+                    bb.putShort(12, chunkLen.toShort())
+                    System.arraycopy(pcmBuffer, offset, packetBuffer, 14, chunkLen)
 
-                    val packetLength = 14 + chunkLen
+                    datagram.length = 14 + chunkLen
                     try {
-                        val datagram = DatagramPacket(packetBuffer, packetLength, targetAddr, AUDIO_UDP_PORT)
                         udpSocket?.send(datagram)
                     } catch (ex: Throwable) {
                         if (!isRunning.get()) break

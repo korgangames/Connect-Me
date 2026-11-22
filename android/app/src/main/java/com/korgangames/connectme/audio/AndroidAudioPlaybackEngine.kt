@@ -10,21 +10,20 @@ import com.korgangames.connectme.protocol.ProtocolConstants
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Ultra-low-latency real-time PCM audio playback engine for Android.
- * Receives raw 16-bit PCM stereo audio chunks sent from Windows or Linux over UDP port 4287,
+ * Receives raw 16-bit PCM stereo audio chunks sent from Windows or Linux over UDP port 42852,
  * using a decoupled bounded jitter queue to guarantee sub-30ms lag and zero audio stutter.
  */
 class AndroidAudioPlaybackEngine private constructor() {
 
     companion object {
         private const val TAG = "AndroidAudioPlayback"
-        private const val MAX_JITTER_CHUNKS = 8 // ~40ms max cushion, strict anti-lag guard
+        private const val MIN_PREBUF_CHUNKS = 3 // ~15ms initial jitter cushion
+        private const val MAX_JITTER_CHUNKS = 14 // ~70ms max cushion, anti-lag & stutter guard
         val instance: AndroidAudioPlaybackEngine by lazy { AndroidAudioPlaybackEngine() }
     }
 
@@ -169,12 +168,13 @@ class AndroidAudioPlaybackEngine private constructor() {
 
                 val len = packet.length
                 if (len >= 14 && buffer[0] == 'C'.code.toByte() && buffer[1] == 'M'.code.toByte() && buffer[3] == 0x08.toByte()) {
-                    val pcmLen = ByteBuffer.wrap(buffer, 12, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
-                    if (pcmLen > 0 && 14 + pcmLen <= len) {
-                        val chunk = ByteArray(pcmLen)
-                        System.arraycopy(buffer, 14, chunk, 0, pcmLen)
+                    val pcmLen = (buffer[12].toInt() and 0xFF) or ((buffer[13].toInt() and 0xFF) shl 8)
+                    val validLen = pcmLen - (pcmLen % 4)
+                    if (validLen > 0 && 14 + validLen <= len) {
+                        val chunk = ByteArray(validLen)
+                        System.arraycopy(buffer, 14, chunk, 0, validLen)
 
-                        // Strict anti-lag queue limit: drop oldest if buffer exceeds MAX_JITTER_CHUNKS (~40ms)
+                        // Strict anti-lag queue limit: drop oldest if buffer exceeds MAX_JITTER_CHUNKS (~70ms)
                         while (pcmQueue.size >= MAX_JITTER_CHUNKS) {
                             pcmQueue.poll()
                         }
@@ -192,8 +192,35 @@ class AndroidAudioPlaybackEngine private constructor() {
     }
 
     private fun playbackLoop(track: AudioTrack) {
+        var needsPrebuf = true
+        var firstPendingMs = 0L
+
         while (isRunning.get()) {
             try {
+                if (needsPrebuf) {
+                    val qSize = pcmQueue.size
+                    if (qSize == 0) {
+                        firstPendingMs = 0L
+                        synchronized(queueLock) {
+                            if (pcmQueue.isEmpty() && isRunning.get()) {
+                                queueLock.wait(10)
+                            }
+                        }
+                        continue
+                    }
+                    val now = System.currentTimeMillis()
+                    if (firstPendingMs == 0L) firstPendingMs = now
+                    if (qSize < MIN_PREBUF_CHUNKS && (now - firstPendingMs) < 15L) {
+                        synchronized(queueLock) {
+                            if (pcmQueue.size < MIN_PREBUF_CHUNKS && isRunning.get()) {
+                                queueLock.wait(5)
+                            }
+                        }
+                        continue
+                    }
+                    needsPrebuf = false
+                }
+
                 val chunk = pcmQueue.poll()
                 if (chunk != null) {
                     if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
@@ -206,6 +233,8 @@ class AndroidAudioPlaybackEngine private constructor() {
                         track.write(chunk, 0, chunk.size)
                     }
                 } else {
+                    needsPrebuf = true
+                    firstPendingMs = 0L
                     synchronized(queueLock) {
                         if (pcmQueue.isEmpty() && isRunning.get()) {
                             queueLock.wait(10)

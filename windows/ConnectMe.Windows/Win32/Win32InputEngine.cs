@@ -162,21 +162,23 @@ public sealed class Win32InputEngine : IDisposable
         return IntPtr.Zero;
     }
 
-    private void ProcessRawInput(IntPtr hRawInput)
+    private static readonly uint RawInputHeaderSize = (uint)Marshal.SizeOf<RAWINPUTHEADER>();
+
+    private unsafe void ProcessRawInput(IntPtr hRawInput)
     {
         var remote = ActiveRemotePeer;
 
-        uint dwSize = 0;
-        int headerSize = Marshal.SizeOf<RAWINPUTHEADER>();
-        GetRawInputData(hRawInput, RID_INPUT, IntPtr.Zero, ref dwSize, (uint)headerSize);
-        if (dwSize == 0) return;
+        // Fast zero-allocation single-syscall stack buffer path for standard 48-byte RAWINPUT mouse packets
+        byte* stackBuf = stackalloc byte[128];
+        uint dwSize = 128;
+        uint copied = GetRawInputData(hRawInput, RID_INPUT, (IntPtr)stackBuf, ref dwSize, RawInputHeaderSize);
+        if (copied == uint.MaxValue || copied == 0)
+            return;
 
-        byte[] rawBuffer = new byte[dwSize];
-        unsafe
         {
-            fixed (byte* pBuf = rawBuffer)
+            byte* pBuf = stackBuf;
             {
-                if (GetRawInputData(hRawInput, RID_INPUT, (IntPtr)pBuf, ref dwSize, (uint)headerSize) == dwSize)
+                if (copied >= RawInputHeaderSize)
                 {
                     uint dwType = *(uint*)pBuf;
                     if (dwType == 0 /* RIM_TYPEMOUSE */)

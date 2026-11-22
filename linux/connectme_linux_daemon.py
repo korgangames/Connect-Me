@@ -53,7 +53,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.34"
+    return "1.8.35"
 
 VERSION = _resolve_app_version()
 
@@ -2222,15 +2222,26 @@ class ConnectMeLinuxNode:
             pass
 
     def get_local_ip(self) -> str:
-        """Determines active local IPv4 address on LAN."""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            lip = s.getsockname()[0]
-            s.close()
-            return lip
-        except Exception:
-            return "127.0.0.1"
+        """Determines active local IPv4 address on LAN with short caching for efficiency."""
+        now = time.time()
+        cached = getattr(self, "_cached_local_ip", None)
+        if cached and (now - getattr(self, "_cached_local_ip_ts", 0.0) < 3.0):
+            return cached
+
+        lip = "127.0.0.1"
+        for probe_target in ("8.8.8.8", "10.255.255.255"):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect((probe_target, 80))
+                lip = s.getsockname()[0]
+                s.close()
+                if lip and lip != "127.0.0.1" and not lip.startswith("169.254."):
+                    break
+            except Exception:
+                pass
+        self._cached_local_ip = lip
+        self._cached_local_ip_ts = now
+        return lip
 
     def get_peer_arrangement(self, device_id: str) -> dict:
         return self.peer_arrangements.get(device_id, {
@@ -4586,22 +4597,24 @@ class ConnectMeLinuxNode:
 
     def _clipboard_monitor_loop(self) -> None:
         """Polls local clipboard and broadcasts newly copied files, screenshots (image/png), or text to paired devices."""
+        wl_paste_bin = shutil.which("wl-paste")
+        xclip_bin = shutil.which("xclip")
         while self.running:
-            time.sleep(0.6)
-            if not any(p.get("isMutuallyPaired") for p in self.peers.values()):
+            time.sleep(0.7)
+            if not any(p.get("isMutuallyPaired") for p in list(self.peers.values())):
                 continue
 
             mime_types: List[str] = []
-            if shutil.which("wl-paste"):
+            if wl_paste_bin:
                 try:
-                    res_t = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True, timeout=0.5)
+                    res_t = subprocess.run([wl_paste_bin, "--list-types"], capture_output=True, text=True, timeout=0.5)
                     if res_t.returncode == 0 and res_t.stdout:
                         mime_types = [m.strip() for m in res_t.stdout.splitlines() if m.strip()]
                 except Exception:
                     pass
-            elif shutil.which("xclip"):
+            elif xclip_bin:
                 try:
-                    res_t = subprocess.run(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"], capture_output=True, text=True, timeout=0.5)
+                    res_t = subprocess.run([xclip_bin, "-selection", "clipboard", "-t", "TARGETS", "-o"], capture_output=True, text=True, timeout=0.5)
                     if res_t.returncode == 0 and res_t.stdout:
                         mime_types = [m.strip() for m in res_t.stdout.splitlines() if m.strip()]
                 except Exception:
@@ -4620,12 +4633,12 @@ class ConnectMeLinuxNode:
             if any(m.lower().startswith("image/png") for m in mime_types) and not has_file_mime:
                 png_bytes = b""
                 try:
-                    if shutil.which("wl-paste"):
-                        res_img = subprocess.run(["wl-paste", "--type", "image/png"], capture_output=True, timeout=1.5)
+                    if wl_paste_bin:
+                        res_img = subprocess.run([wl_paste_bin, "--type", "image/png"], capture_output=True, timeout=1.5)
                         if res_img.returncode == 0:
                             png_bytes = res_img.stdout
-                    elif shutil.which("xclip"):
-                        res_img = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"], capture_output=True, timeout=1.5)
+                    elif xclip_bin:
+                        res_img = subprocess.run([xclip_bin, "-selection", "clipboard", "-t", "image/png", "-o"], capture_output=True, timeout=1.5)
                         if res_img.returncode == 0:
                             png_bytes = res_img.stdout
                 except Exception:
@@ -4638,18 +4651,25 @@ class ConnectMeLinuxNode:
                         self.broadcast_clipboard_image(png_bytes, img_hash)
                 continue
 
-            # 3. Plain Text Clipboard (or plain file:// / /home/... file path fallback)
+            # 3. Plain Text Clipboard (skip extra subprocess spawn if no text MIME is declared)
+            has_text_mime = (not mime_types) or any(
+                m.lower().startswith("text/") or "utf8" in m.lower() or m.upper() in ("STRING", "TEXT")
+                for m in mime_types
+            )
+            if not has_text_mime:
+                continue
+
             current_text = ""
-            if shutil.which("wl-paste"):
+            if wl_paste_bin:
                 try:
-                    res = subprocess.run(["wl-paste", "-n"], capture_output=True, text=True, timeout=0.5)
+                    res = subprocess.run([wl_paste_bin, "-n"], capture_output=True, text=True, timeout=0.5)
                     if res.returncode == 0:
                         current_text = res.stdout
                 except Exception:
                     pass
-            elif shutil.which("xclip"):
+            elif xclip_bin:
                 try:
-                    res = subprocess.run(["xclip", "-selection", "clipboard", "-o"], capture_output=True, text=True, timeout=0.5)
+                    res = subprocess.run([xclip_bin, "-selection", "clipboard", "-o"], capture_output=True, text=True, timeout=0.5)
                     if res.returncode == 0:
                         current_text = res.stdout
                 except Exception:
@@ -4665,7 +4685,7 @@ class ConnectMeLinuxNode:
                     self.broadcast_clipboard(current_text)
 
     def broadcast_clipboard(self, text: str) -> None:
-        paired = [p for p in self.peers.values() if p.get("isMutuallyPaired")]
+        paired = [p for p in list(self.peers.values()) if p.get("isMutuallyPaired")]
         if not paired:
             return
         hdr = {
@@ -4686,7 +4706,7 @@ class ConnectMeLinuxNode:
         self.log(f"[Evrensel Pano] 📋 Yerel metin ({len(text)} krk) bağlı cihazlara iletildi.")
 
     def broadcast_clipboard_image(self, png_bytes: bytes, content_hash: str = "") -> None:
-        paired = [p for p in self.peers.values() if p.get("isMutuallyPaired")]
+        paired = [p for p in list(self.peers.values()) if p.get("isMutuallyPaired")]
         if not paired or not png_bytes:
             return
         if not content_hash:
@@ -4716,7 +4736,7 @@ class ConnectMeLinuxNode:
         if not file_path.exists():
             return False
 
-        targets = [p for p in self.peers.values() if p.get("isMutuallyPaired")]
+        targets = [p for p in list(self.peers.values()) if p.get("isMutuallyPaired")]
         if peer_id and peer_id in self.peers:
             targets = [self.peers[peer_id]]
 
@@ -4907,14 +4927,14 @@ class ConnectMeLinuxNode:
             # Remote machine is the selected audio sink
             target_ip = route.get("targetIp")
             target_dev_id = route.get("targetDeviceId")
-            if not target_ip or target_ip in ("127.0.0.1", "0.0.0.0", my_ip):
-                peer = self.peers.get(target_dev_id)
-                if not peer:
-                    for p in self.peers.values():
-                        if p.get("deviceId") == target_dev_id:
-                            peer = p
-                            break
-                if peer:
+            peer = self.peers.get(target_dev_id)
+            if not peer and target_dev_id:
+                for p in list(self.peers.values()):
+                    if p.get("deviceId", "").lower() == str(target_dev_id).lower():
+                        peer = p
+                        break
+            if peer and peer.get("ipAddress") and peer.get("ipAddress") not in ("127.0.0.1", "0.0.0.0", my_ip):
+                if not target_ip or target_ip in ("127.0.0.1", "0.0.0.0", my_ip) or str(target_ip).startswith("169.254.") or peer.get("ipAddress") != target_ip:
                     target_ip = peer.get("ipAddress")
             if target_ip and target_ip != my_ip:
                 self.audio_rx_target_sink = None
@@ -5000,41 +5020,52 @@ class ConnectMeLinuxNode:
                     pass
             monitor_device = f"{def_sink}.monitor" if def_sink else "@DEFAULT_MONITOR@"
 
+        rec_cmd_list = []
         if shutil.which("parec"):
-            rec_cmd = ["parec", "--raw", "-d", monitor_device, "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=15"]
-        elif shutil.which("pw-record"):
-            rec_cmd = ["pw-record", "--raw", f"--target={monitor_device}", "--format=s16", "--rate=48000", "--channels=2", "-"]
-        elif shutil.which("ffmpeg"):
-            rec_cmd = ["ffmpeg", "-loglevel", "quiet", "-f", "pulse", "-i", monitor_device, "-f", "s16le", "-ar", "48000", "-ac", "2", "-"]
+            rec_cmd_list.append(["parec", "--raw", "-d", monitor_device, "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=15"])
+        if shutil.which("pw-record"):
+            # PipeWire supports sink node directly as target
+            pw_target = monitor_device.replace(".monitor", "")
+            rec_cmd_list.append(["pw-record", "--raw", f"--target={pw_target}", "--format=s16", "--rate=48000", "--channels=2", "-"])
+            if pw_target != monitor_device:
+                rec_cmd_list.append(["pw-record", "--raw", f"--target={monitor_device}", "--format=s16", "--rate=48000", "--channels=2", "-"])
+        if shutil.which("ffmpeg"):
+            rec_cmd_list.append(["ffmpeg", "-loglevel", "quiet", "-f", "pulse", "-i", monitor_device, "-f", "s16le", "-ar", "48000", "-ac", "2", "-"])
 
-        if not rec_cmd:
-            self.log("[Ses Hatası] ❌ pw-record veya parec bulunamadı (PipeWire/PulseAudio gereklidir).")
+        if shutil.which("parec"):
+            rec_cmd_list.append(["parec", "--raw", "-d", "@DEFAULT_MONITOR@", "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=15"])
+
+        if not rec_cmd_list:
+            self.log("[Ses Hatası] ❌ pw-record, parec veya ffmpeg bulunamadı (PipeWire/PulseAudio gereklidir).")
+            return False
+
+        proc_started = False
+        for cmd in rec_cmd_list:
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    bufsize=3840,
+                )
+                time.sleep(0.04)
+                if proc.poll() is None:
+                    self.audio_proc = proc
+                    proc_started = True
+                    break
+                else:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+        if not proc_started or not self.audio_proc:
+            self.log("[Ses Hatası] ❌ Sistem monitör ses kaydı başlatılamadı. Mikrofon akışı engellendi.")
             return False
 
         try:
-            self.audio_proc = subprocess.Popen(
-                rec_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                bufsize=3840,
-            )
-            time.sleep(0.05)
-            if self.audio_proc.poll() is not None:
-                # Fallback to default monitor, NEVER to microphone!
-                if shutil.which("parec"):
-                    self.audio_proc = subprocess.Popen(
-                        ["parec", "--raw", "-d", "@DEFAULT_MONITOR@", "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=15"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
-                        bufsize=3840,
-                    )
-                elif shutil.which("pw-record"):
-                    self.audio_proc = subprocess.Popen(
-                        ["pw-record", "--raw", "--target=@DEFAULT_MONITOR@", "--format=s16", "--rate=48000", "--channels=2", "-"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
-                        bufsize=3840,
-                    )
             self.audio_streaming = True
             self.audio_target_ip = target_ip
             self.audio_seq = 0
@@ -5124,6 +5155,10 @@ class ConnectMeLinuxNode:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
+            except OSError:
+                pass
             if hasattr(socket, "SO_REUSEPORT"):
                 try:
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
@@ -5136,6 +5171,12 @@ class ConnectMeLinuxNode:
             self.log(f"[Ses Alıcısı Hatası] UDP {AUDIO_STREAM_UDP_PORT} dinlenemedi: {ex}")
             return
 
+        pacat_bin = shutil.which("pacat")
+        pw_cat_bin = shutil.which("pw-cat")
+        pw_play_bin = shutil.which("pw-play")
+        paplay_bin = shutil.which("paplay")
+        aplay_bin = shutil.which("aplay")
+
         last_packet_time = 0.0
         active_playback_proc: Optional[subprocess.Popen] = None
         current_playback_sr = 48000
@@ -5143,6 +5184,10 @@ class ConnectMeLinuxNode:
         current_playback_sink: Optional[str] = None
         consecutive_failures = 0
         last_failure_time = 0.0
+        prebuf = bytearray()
+        prebuf_chunks = 0
+        cached_my_ip = self.get_local_ip()
+        last_ip_refresh = time.time()
 
         while self.running:
             try:
@@ -5150,6 +5195,16 @@ class ConnectMeLinuxNode:
                 try:
                     data, addr = sock.recvfrom(8192)
                 except socket.timeout:
+                    if prebuf and active_playback_proc and active_playback_proc.stdin:
+                        try:
+                            aligned = len(prebuf) - (len(prebuf) % 4)
+                            if aligned > 0:
+                                active_playback_proc.stdin.write(bytes(prebuf[:aligned]))
+                                active_playback_proc.stdin.flush()
+                        except Exception:
+                            pass
+                        prebuf.clear()
+                        prebuf_chunks = 0
                     if active_playback_proc and (time.time() - last_packet_time > 2.5):
                         try:
                             if active_playback_proc.stdin:
@@ -5160,6 +5215,8 @@ class ConnectMeLinuxNode:
                             pass
                         active_playback_proc = None
                         self.audio_rx_active = False
+                        prebuf.clear()
+                        prebuf_chunks = 0
                     continue
 
                 if len(data) < 14 or data[0] != MAGIC_0 or data[1] != MAGIC_1 or data[2] != PROTO_VER:
@@ -5167,17 +5224,29 @@ class ConnectMeLinuxNode:
                 if data[3] != PACKET_AUDIO_CHUNK:
                     continue
 
+                now = time.time()
+                if now - last_ip_refresh > 3.0:
+                    cached_my_ip = self.get_local_ip()
+                    last_ip_refresh = now
+
+                # Anti-loopback guard: ignore self-originated audio packets
+                if addr[0] in ("127.0.0.1", "0.0.0.0", cached_my_ip):
+                    continue
+
                 ch, sr, bits, seq, payload_len = struct.unpack("<BIBHH", data[4:14])
                 pcm_data = data[14:14 + payload_len] if len(data) >= 14 + payload_len else data[14:]
                 if not pcm_data:
                     continue
 
-                now = time.time()
                 last_packet_time = now
                 self.audio_rx_bytes += len(pcm_data)
                 self.audio_rx_last_time = now
                 self.audio_rx_last_sender = addr[0]
                 self.audio_rx_active = True
+
+                # Do not play incoming audio while this machine is actively streaming out its own audio to another sink
+                if self.audio_streaming:
+                    continue
 
                 target_sink = self.audio_rx_target_sink
                 needs_restart = (
@@ -5199,36 +5268,38 @@ class ConnectMeLinuxNode:
                             pass
                         active_playback_proc = None
 
+                    prebuf.clear()
+                    prebuf_chunks = 0
+
                     # If repeatedly failing, avoid spinning at 200 process launches/sec
                     if consecutive_failures >= 3 and (now - last_failure_time < 0.5):
                         continue
 
-                    # Build ordered player candidates
-                    # 1. pacat (PulseAudio / PipeWire-Pulse): Standard for raw PCM with sink targeting & jitter cushion
+                    # Build ordered player candidates using cached binary paths
                     candidates = []
-                    if shutil.which("pacat"):
+                    if pacat_bin:
                         if target_sink and target_sink != "default":
-                            candidates.append(("pacat (özel çıkış)", ["pacat", "--playback", "--raw", "-d", str(target_sink), f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=50"]))
-                        candidates.append(("pacat (varsayılan)", ["pacat", "--playback", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=50"]))
+                            candidates.append(("pacat (özel çıkış)", [pacat_bin, "--playback", "--raw", "-d", str(target_sink), f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=45"]))
+                        candidates.append(("pacat (varsayılan)", [pacat_bin, "--playback", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16le", "--latency-msec=45"]))
 
-                    if shutil.which("pw-cat"):
+                    if pw_cat_bin:
                         if target_sink and target_sink != "default":
-                            candidates.append(("pw-cat (özel çıkış)", ["pw-cat", "-p", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
-                        candidates.append(("pw-cat (varsayılan)", ["pw-cat", "-p", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
-                    elif shutil.which("pw-play"):
+                            candidates.append(("pw-cat (özel çıkış)", [pw_cat_bin, "-p", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
+                        candidates.append(("pw-cat (varsayılan)", [pw_cat_bin, "-p", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
+                    elif pw_play_bin:
                         if target_sink and target_sink != "default":
-                            candidates.append(("pw-play (özel çıkış)", ["pw-play", "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
-                        candidates.append(("pw-play (varsayılan)", ["pw-play", "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
+                            candidates.append(("pw-play (özel çıkış)", [pw_play_bin, "--raw", f"--target={target_sink}", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
+                        candidates.append(("pw-play (varsayılan)", [pw_play_bin, "--raw", f"--rate={sr}", f"--channels={ch}", "--format=s16", "-"]))
 
-                    if shutil.which("paplay"):
+                    if paplay_bin:
                         if target_sink and target_sink != "default":
-                            candidates.append(("paplay (özel çıkış)", ["paplay", "-d", str(target_sink), "--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]))
-                        candidates.append(("paplay (varsayılan)", ["paplay", "--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]))
+                            candidates.append(("paplay (özel çıkış)", [paplay_bin, "-d", str(target_sink), "--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]))
+                        candidates.append(("paplay (varsayılan)", [paplay_bin, "--raw", "--format=s16le", f"--rate={sr}", f"--channels={ch}", "-"]))
 
-                    if shutil.which("aplay"):
+                    if aplay_bin:
                         if target_sink and target_sink != "default":
-                            candidates.append(("aplay (özel çıkış)", ["aplay", "-D", str(target_sink), "-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q", "-"]))
-                        candidates.append(("aplay (varsayılan)", ["aplay", "-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q", "-"]))
+                            candidates.append(("aplay (özel çıkış)", [aplay_bin, "-D", str(target_sink), "-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q", "-"]))
+                        candidates.append(("aplay (varsayılan)", [aplay_bin, "-t", "raw", "-f", "S16_LE", "-r", str(sr), "-c", str(ch), "-q", "-"]))
 
                     started = False
                     for label, play_cmd in candidates:
@@ -5237,7 +5308,7 @@ class ConnectMeLinuxNode:
                                 play_cmd,
                                 stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL,
-                                stderr=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL,
                                 bufsize=0,
                             )
                             # Verify the player process didn't immediately exit
@@ -5253,8 +5324,7 @@ class ConnectMeLinuxNode:
                                 started = True
                                 break
                             else:
-                                err_msg = proc.stderr.read().decode("utf-8", "ignore").strip() if proc.stderr else ""
-                                self.log(f"[Ses Çalma Uyarısı] '{label}' başlatılamadı (çıkış kodu {proc.returncode}): {err_msg}")
+                                self.log(f"[Ses Çalma Uyarısı] '{label}' başlatılamadı (çıkış kodu {proc.returncode}).")
                         except Exception as p_err:
                             self.log(f"[Ses Çalma Hatası] '{label}' süreci başlatılamadı: {p_err}")
 
@@ -5266,10 +5336,21 @@ class ConnectMeLinuxNode:
                 aligned_len = len(pcm_data) - (len(pcm_data) % 4)
                 if active_playback_proc and active_playback_proc.stdin and aligned_len > 0:
                     try:
-                        active_playback_proc.stdin.write(pcm_data[:aligned_len])
-                        active_playback_proc.stdin.flush()
+                        # Accumulate initial 3-chunk (~15ms) jitter cushion on stream start to prevent immediate pipe underrun
+                        if prebuf_chunks < 3:
+                            prebuf.extend(pcm_data[:aligned_len])
+                            prebuf_chunks += 1
+                            if prebuf_chunks >= 3:
+                                active_playback_proc.stdin.write(bytes(prebuf))
+                                active_playback_proc.stdin.flush()
+                                prebuf.clear()
+                        else:
+                            active_playback_proc.stdin.write(pcm_data[:aligned_len])
+                            active_playback_proc.stdin.flush()
                     except BrokenPipeError:
                         active_playback_proc = None
+                        prebuf.clear()
+                        prebuf_chunks = 0
                         consecutive_failures += 1
                         last_failure_time = time.time()
                     except Exception:

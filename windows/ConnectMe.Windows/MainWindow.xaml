@@ -218,6 +218,9 @@
                             <Button x:Name="AudioMuteHeaderBtn" Click="AudioMuteBtn_Click" Background="Transparent" BorderThickness="0" Padding="4,0,0,0" Foreground="#C7D2FE" Content="🔊" Cursor="Hand" ToolTip="Sesi Kapat / Aç"/>
                         </StackPanel>
                     </Border>
+                    <Button x:Name="AudioQuickHubBtn" Click="AudioQuickHubBtn_Click" Background="#1E293B" BorderBrush="#818CF8" BorderThickness="1" Padding="8,2" Margin="0,2,8,2" Cursor="Hand" ToolTip="Tek tıkla tüm bağlı cihazların sesini bu bilgisayarın kulaklığına çeker">
+                        <TextBlock x:Name="AudioQuickHubText" Text="🎧 Kulaklık Merkezi Yap" Foreground="#C7D2FE" FontSize="11.5" FontWeight="SemiBold"/>
+                    </Button>
                     <!-- YENİ SÜRÜM OTOMATİK GÜNCELLEME ROZETİ -->
                     <Border x:Name="UpdateBadge" Background="#064E3B" BorderBrush="#10B981" BorderThickness="1.5" CornerRadius="6" Padding="8,2" Margin="0,2,8,2" Visibility="Collapsed">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -762,6 +765,17 @@
                                                FontSize="11" Foreground="#A7F3D0" Margin="0,6,0,0" FontFamily="Consolas"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="AudioActivateCentralHubBtn"
+                                            Click="AudioQuickHubBtn_Click"
+                                            Background="#059669"
+                                            Foreground="White"
+                                            BorderBrush="#10B981"
+                                            BorderThickness="1"
+                                            FontWeight="Bold"
+                                            Padding="14,6"
+                                            Cursor="Hand"
+                                            Content="🎧 Bu Bilgisayarı Kulaklık / Ses Merkezi Yap"
+                                            Margin="0,0,8,0"/>
                                     <Button x:Name="AudioHubMuteTabBtn"
                                             Click="AudioMuteBtn_Click"
                                             Background="#1F2937"

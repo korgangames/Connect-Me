@@ -2530,10 +2530,22 @@ public partial class MainWindow : Window
         _isRefreshingAudioSinks = true;
         try
         {
-            var previouslySelected = AudioTargetComboBox.SelectedItem as AudioSinkUiItem;
             var items = new List<AudioSinkUiItem>();
 
-            // 1. Local Sinks
+            // 1. Disable / Local mode option FIRST (consistent with Linux GUI & avoids misleading default selection)
+            items.Add(new AudioSinkUiItem
+            {
+                DisplayText = "⚪ [Yerel Mod] Her cihaz kendi sesini çalsın (Yönlendirmeyi Kapat)",
+                DeviceId = "NONE",
+                DeviceName = "NONE",
+                Platform = "",
+                SinkId = "NONE",
+                SinkName = "Yerel Mod",
+                IpAddress = "",
+                IsDisableOption = true
+            });
+
+            // 2. Local Sinks
             foreach (var s in _network.LocalAudioSinks)
             {
                 items.Add(new AudioSinkUiItem
@@ -2549,7 +2561,7 @@ public partial class MainWindow : Window
                 });
             }
 
-            // 2. Remote Sinks from connected peers
+            // 3. Remote Sinks from connected peers
             foreach (var peer in _network.MutuallyPairedPeers)
             {
                 string icon = peer.Platform.ToLowerInvariant() switch
@@ -2565,9 +2577,9 @@ public partial class MainWindow : Window
                     {
                         items.Add(new AudioSinkUiItem
                         {
-                            DisplayText = $"[{icon} {peer.DeviceName}] {rs.SinkName}",
+                            DisplayText = $"[{icon} {peer.DisplayName}] {rs.SinkName}",
                             DeviceId = peer.DeviceId,
-                            DeviceName = peer.DeviceName,
+                            DeviceName = peer.DisplayName,
                             Platform = peer.Platform,
                             SinkId = rs.SinkId,
                             SinkName = rs.SinkName,
@@ -2580,9 +2592,9 @@ public partial class MainWindow : Window
                 {
                     items.Add(new AudioSinkUiItem
                     {
-                        DisplayText = $"[{icon} {peer.DeviceName}] Varsayılan Ses Çıkışı",
+                        DisplayText = $"[{icon} {peer.DisplayName}] Varsayılan Ses Çıkışı",
                         DeviceId = peer.DeviceId,
-                        DeviceName = peer.DeviceName,
+                        DeviceName = peer.DisplayName,
                         Platform = peer.Platform,
                         SinkId = "default",
                         SinkName = "Varsayılan Ses Çıkışı",
@@ -2591,19 +2603,6 @@ public partial class MainWindow : Window
                     });
                 }
             }
-
-            // 3. Disable / Local mode option
-            items.Add(new AudioSinkUiItem
-            {
-                DisplayText = "⚪ [Yerel Mod] Her cihaz kendi sesini çalsın (Yönlendirmeyi Kapat)",
-                DeviceId = "NONE",
-                DeviceName = "NONE",
-                Platform = "",
-                SinkId = "NONE",
-                SinkName = "Yerel Mod",
-                IpAddress = "",
-                IsDisableOption = true
-            });
 
             AudioTargetComboBox.ItemsSource = items;
 
@@ -2614,17 +2613,6 @@ public partial class MainWindow : Window
                 // Pass 2: deviceId fallback
                 match ??= items.FirstOrDefault(i => i.DeviceId == _network.ActiveAudioRoute.TargetDeviceId);
 
-                if (match != null)
-                {
-                    AudioTargetComboBox.SelectedItem = match;
-                    return;
-                }
-            }
-
-            if (previouslySelected != null)
-            {
-                var match = items.FirstOrDefault(i => i.DeviceId == previouslySelected.DeviceId && i.SinkId == previouslySelected.SinkId);
-                match ??= items.FirstOrDefault(i => i.DeviceId == previouslySelected.DeviceId);
                 if (match != null)
                 {
                     AudioTargetComboBox.SelectedItem = match;
@@ -2687,6 +2675,29 @@ public partial class MainWindow : Window
         AppendLog("🔄 [Ses Matrisi] Ses sıfırlandı. Yerel çalma moduna dönüldü.");
     }
 
+    private void AudioQuickHubBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_network.ActiveAudioRoute?.TargetDeviceId == _network.LocalDeviceId)
+        {
+            _ = _network.SetAndBroadcastAudioRouteAsync(null);
+            AppendLog("🔄 [Ses & Kulaklık Merkezi] Yerel çalma moduna dönüldü. Her cihaz kendi sesini çalıyor.");
+        }
+        else
+        {
+            var route = new AudioRouteTarget
+            {
+                TargetDeviceId = _network.LocalDeviceId,
+                TargetDeviceName = _network.LocalDeviceName,
+                TargetSinkId = "default",
+                TargetSinkName = "Varsayılan Windows Kulaklık/Hoparlör",
+                TargetIp = _network.LocalIpv4,
+                TargetUdpPort = ProtocolConstants.AudioStreamUdpPort
+            };
+            _ = _network.SetAndBroadcastAudioRouteAsync(route);
+            AppendLog($"🎧 [Ses & Kulaklık Merkezi] Aktif! Tüm bağlı cihazların sesleri bu bilgisayara ({_network.LocalDeviceName}) yönlendirildi.");
+        }
+    }
+
     private void AudioRefreshSinksBtn_Click(object sender, RoutedEventArgs e)
     {
         var localSinks = WindowsAudioPlaybackEngine.EnumerateLocalAudioSinks(_network.LocalDeviceId, _network.LocalDeviceName);
@@ -2725,6 +2736,20 @@ public partial class MainWindow : Window
                 AudioHubBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(129, 140, 248));
                 AudioHubText.Text = "🎧 Ses: Yerel Mod";
                 AudioHubText.Foreground = new SolidColorBrush(Color.FromRgb(165, 180, 252));
+                if (AudioQuickHubText != null)
+                {
+                    AudioQuickHubText.Text = "🎧 Kulaklık Merkezi Yap";
+                    AudioQuickHubText.Foreground = new SolidColorBrush(Color.FromRgb(199, 210, 254));
+                }
+                if (AudioQuickHubBtn != null)
+                {
+                    AudioQuickHubBtn.Background = new SolidColorBrush(Color.FromRgb(30, 41, 59));
+                }
+                if (AudioActivateCentralHubBtn != null)
+                {
+                    AudioActivateCentralHubBtn.Content = "🎧 Bu Bilgisayarı Kulaklık / Ses Merkezi Yap";
+                    AudioActivateCentralHubBtn.Background = new SolidColorBrush(Color.FromRgb(5, 150, 105));
+                }
                 if (AudioHubStatusDetailText != null)
                 {
                     AudioHubStatusDetailText.Text = "Durum: Boşta (Her cihaz kendi yerel sesini çalıyor)";
@@ -2740,9 +2765,23 @@ public partial class MainWindow : Window
                 AudioHubBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
                 AudioHubText.Text = $"🎧 Çıkış: {route.TargetSinkName}";
                 AudioHubText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));
+                if (AudioQuickHubText != null)
+                {
+                    AudioQuickHubText.Text = "🎧 Kulaklık Merkezi: Aktif";
+                    AudioQuickHubText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));
+                }
+                if (AudioQuickHubBtn != null)
+                {
+                    AudioQuickHubBtn.Background = new SolidColorBrush(Color.FromRgb(30, 58, 47));
+                }
+                if (AudioActivateCentralHubBtn != null)
+                {
+                    AudioActivateCentralHubBtn.Content = "🔄 Kulaklık Merkezini Kapat (Yerel Moda Dön)";
+                    AudioActivateCentralHubBtn.Background = new SolidColorBrush(Color.FromRgb(55, 65, 81));
+                }
                 if (AudioHubStatusDetailText != null)
                 {
-                    AudioHubStatusDetailText.Text = $"Durum: 🟢 Aktif Alıcı — Diğer cihazların sesleri bu bilgisayara ({route.TargetSinkName}) akıyor.";
+                    AudioHubStatusDetailText.Text = $"Durum: 🟢 Kulaklık / Ses Merkezi Aktif — Tüm cihazların sesleri bu bilgisayara ({route.TargetSinkName}) akıyor.";
                 }
             }
             else
@@ -2758,6 +2797,20 @@ public partial class MainWindow : Window
                 AudioHubBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(245, 158, 11));
                 AudioHubText.Text = $"📡 Akış -> {route.TargetDeviceName}";
                 AudioHubText.Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36));
+                if (AudioQuickHubText != null)
+                {
+                    AudioQuickHubText.Text = "🎧 Kulaklık Merkezi Yap";
+                    AudioQuickHubText.Foreground = new SolidColorBrush(Color.FromRgb(199, 210, 254));
+                }
+                if (AudioQuickHubBtn != null)
+                {
+                    AudioQuickHubBtn.Background = new SolidColorBrush(Color.FromRgb(30, 41, 59));
+                }
+                if (AudioActivateCentralHubBtn != null)
+                {
+                    AudioActivateCentralHubBtn.Content = "🎧 Bu Bilgisayarı Kulaklık / Ses Merkezi Yap";
+                    AudioActivateCentralHubBtn.Background = new SolidColorBrush(Color.FromRgb(5, 150, 105));
+                }
                 if (AudioHubStatusDetailText != null)
                 {
                     AudioHubStatusDetailText.Text = $"Durum: 📡 Ses Yayını Aktif — Bu bilgisayarın sesi -> {route.TargetDeviceName} ({route.TargetSinkName}) hedefine akıyor.";

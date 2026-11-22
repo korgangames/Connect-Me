@@ -130,54 +130,86 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
             IntPtr activatePtr = Marshal.ReadIntPtr(vtbl, 3 * IntPtr.Size);
             var activate = Marshal.GetDelegateForFunctionPointer<ActivateDelegate>(activatePtr);
 
-            Guid iidAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
-            int actHr = activate(pDevice, ref iidAudioClient, 1 /* CLSCTX_INPROC_SERVER */, IntPtr.Zero, out pAudioClient);
-            if (actHr != 0 || pAudioClient == IntPtr.Zero)
-            {
-                CaptureStatusChanged?.Invoke("IAudioClient başlatılamadı.");
-                return;
-            }
-
             // Activate IAudioEndpointVolume so we can mute local speakers while streaming to remote sink
             Guid iidEndpointVolume = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
-            if (activate(pDevice, ref iidEndpointVolume, 1 /* CLSCTX_INPROC_SERVER */, IntPtr.Zero, out pEndpointVolume) == 0 &&
+            if (activate(pDevice, ref iidEndpointVolume, 0x17 /* CLSCTX_ALL */, IntPtr.Zero, out pEndpointVolume) == 0 &&
                 pEndpointVolume != IntPtr.Zero)
             {
                 evVtbl = Marshal.ReadIntPtr(pEndpointVolume);
             }
 
-            acVtbl = Marshal.ReadIntPtr(pAudioClient);
-            IntPtr getMixFormatPtr = Marshal.ReadIntPtr(acVtbl, 8 * IntPtr.Size);
-            var getMixFormat = Marshal.GetDelegateForFunctionPointer<GetMixFormatDelegate>(getMixFormatPtr);
-            int gmfHr = getMixFormat(pAudioClient, out pFormat);
-            if (gmfHr != 0 || pFormat == IntPtr.Zero)
+            uint channels = 2;
+            uint sampleRate = 48000;
+            ushort bitsPerSample = 16;
+            bool isFloat = false;
+            bool initialized = false;
+            string captureModeLabel = "Process Loopback";
+
+            // Prefer Windows 10 Build 20348+ / Win11 Process Loopback (EXCLUDE current ConnectMe PID):
+            // 1) Eliminates echo/feedback loops mathematically at OS level
+            // 2) Captures 48kHz Stereo 16-bit PCM cleanly even when physical endpoint is MUTED!
+            if (TryActivateProcessLoopbackClient(out pAudioClient, out pFormat, out channels, out sampleRate, out bitsPerSample, out isFloat))
             {
-                CaptureStatusChanged?.Invoke("Ses formatı alınamadı.");
-                return;
+                acVtbl = Marshal.ReadIntPtr(pAudioClient);
+                var initProc = Marshal.GetDelegateForFunctionPointer<InitializeDelegate>(Marshal.ReadIntPtr(acVtbl, 3 * IntPtr.Size));
+                long hnsBuf = 1000000; // 100ms
+                int initHr = initProc(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuf, 0, pFormat, IntPtr.Zero);
+                if (initHr == 0)
+                {
+                    initialized = true;
+                }
+                else
+                {
+                    Marshal.Release(pAudioClient);
+                    pAudioClient = IntPtr.Zero;
+                    if (pFormat != IntPtr.Zero) { Marshal.FreeCoTaskMem(pFormat); pFormat = IntPtr.Zero; }
+                }
             }
 
-            bool isFloat = DetectWaveFormatProperties(pFormat, out uint channels, out uint sampleRate, out ushort bitsPerSample);
+            // Fallback to Classic Endpoint Loopback (pre-20H1 Windows 10)
+            if (!initialized)
+            {
+                captureModeLabel = "WASAPI Loopback";
+                Guid iidAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
+                int actHr = activate(pDevice, ref iidAudioClient, 0x17 /* CLSCTX_ALL */, IntPtr.Zero, out pAudioClient);
+                if (actHr != 0 || pAudioClient == IntPtr.Zero)
+                {
+                    CaptureStatusChanged?.Invoke("IAudioClient başlatılamadı.");
+                    return;
+                }
 
-            IntPtr initPtr = Marshal.ReadIntPtr(acVtbl, 3 * IntPtr.Size);
-            var init = Marshal.GetDelegateForFunctionPointer<InitializeDelegate>(initPtr);
+                acVtbl = Marshal.ReadIntPtr(pAudioClient);
+                IntPtr getMixFormatPtr = Marshal.ReadIntPtr(acVtbl, 8 * IntPtr.Size);
+                var getMixFormat = Marshal.GetDelegateForFunctionPointer<GetMixFormatDelegate>(getMixFormatPtr);
+                int gmfHr = getMixFormat(pAudioClient, out pFormat);
+                if (gmfHr != 0 || pFormat == IntPtr.Zero)
+                {
+                    CaptureStatusChanged?.Invoke("Ses formatı alınamadı.");
+                    return;
+                }
 
-            // WASAPI shared loopback buffer: 100ms standard with progressive fallbacks
-            long hnsBuffer = 1000000; // 100ms
-            int initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
-            if (initHr != 0)
-            {
-                hnsBuffer = 2000000; // 200ms fallback
-                initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
-            }
-            if (initHr != 0)
-            {
-                hnsBuffer = 5000000; // 500ms fallback
-                initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
-            }
-            if (initHr != 0)
-            {
-                CaptureStatusChanged?.Invoke($"WASAPI loopback başlatılamadı (0x{initHr:X}).");
-                return;
+                isFloat = DetectWaveFormatProperties(pFormat, out channels, out sampleRate, out bitsPerSample);
+
+                IntPtr initPtr = Marshal.ReadIntPtr(acVtbl, 3 * IntPtr.Size);
+                var init = Marshal.GetDelegateForFunctionPointer<InitializeDelegate>(initPtr);
+
+                long hnsBuffer = 1000000; // 100ms
+                int initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
+                if (initHr != 0)
+                {
+                    hnsBuffer = 2000000; // 200ms fallback
+                    initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
+                }
+                if (initHr != 0)
+                {
+                    hnsBuffer = 5000000; // 500ms fallback
+                    initHr = init(pAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, pFormat, IntPtr.Zero);
+                }
+                if (initHr != 0)
+                {
+                    CaptureStatusChanged?.Invoke($"WASAPI loopback başlatılamadı (0x{initHr:X}).");
+                    return;
+                }
             }
 
             IntPtr getServicePtr = Marshal.ReadIntPtr(acVtbl, 14 * IntPtr.Size);
@@ -206,6 +238,19 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
                 return;
             }
 
+            // Rebind UDP socket explicitly to the LAN NIC reaching targetIp if multi-homed
+            try
+            {
+                var bestLocalIp = ConnectMe.Core.Network.ConnectMeNetworkNode.FindBestLocalIpForTarget(parsedIp);
+                if (bestLocalIp != null && _udpClient != null)
+                {
+                    _udpClient.Close();
+                    _udpClient = new UdpClient(new IPEndPoint(bestLocalIp, 0));
+                    _udpClient.Client.SendBufferSize = 512 * 1024;
+                }
+            }
+            catch { }
+
             IPEndPoint remoteEp = new IPEndPoint(parsedIp, _targetPort);
             timeBeginPeriod(1);
 
@@ -227,6 +272,18 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
                     }
                 }
             }
+
+            CaptureStatusChanged?.Invoke($"Yakalama Aktif ({captureModeLabel}) -> {_targetIp}:{_targetPort}");
+
+            // Pre-allocate zero-GC wire packet buffer: 14B header + max 960B payload
+            byte[] wireBuf = new byte[14 + 960];
+            wireBuf[0] = ProtocolConstants.MagicByte0;
+            wireBuf[1] = ProtocolConstants.MagicByte1;
+            wireBuf[2] = ProtocolConstants.ProtocolVersion;
+            wireBuf[3] = (byte)PacketType.AudioChunk;
+            wireBuf[4] = 2; // Stereo
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(wireBuf.AsSpan(5, 4), 48000);
+            wireBuf[9] = 16; // 16-bit PCM
 
             while (_isRunning && !_disposed)
             {
@@ -262,32 +319,47 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
 
                     if (!isSilent)
                     {
-                        byte[] pcmChunk = ConvertToPcm16Stereo(pData, numFramesToRead, channels, sampleRate, bitsPerSample, isFloat, isSilent: false);
+                        byte[]? directPcm = null;
+                        byte* pcmPtr;
+                        int totalPcmBytes;
 
-                        if (pcmChunk.Length > 0 && _udpClient != null)
+                        if (sampleRate == 48000 && channels == 2 && bitsPerSample == 16 && !isFloat)
                         {
-                            // Split into MTU-safe chunks of up to 960 bytes (~5ms @ 48kHz Stereo, strictly 4-byte aligned)
+                            // Zero-copy fast path (Process Loopback outputs native 48kHz Stereo S16LE!)
+                            pcmPtr = (byte*)pData;
+                            totalPcmBytes = (int)(numFramesToRead * 4);
+                        }
+                        else
+                        {
+                            directPcm = ConvertToPcm16Stereo(pData, numFramesToRead, channels, sampleRate, bitsPerSample, isFloat, isSilent: false);
+                            totalPcmBytes = directPcm.Length;
+                            pcmPtr = null;
+                        }
+
+                        if (totalPcmBytes > 0 && _udpClient != null)
+                        {
                             int offset = 0;
-                            while (offset < pcmChunk.Length && _isRunning)
+                            while (offset < totalPcmBytes && _isRunning)
                             {
-                                int chunkLen = Math.Min(960, pcmChunk.Length - offset);
+                                int chunkLen = Math.Min(960, totalPcmBytes - offset);
                                 chunkLen -= (chunkLen % 4);
                                 if (chunkLen <= 0) break;
 
-                                byte[] subChunk = new byte[chunkLen];
-                                Buffer.BlockCopy(pcmChunk, offset, subChunk, 0, chunkLen);
+                                System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(wireBuf.AsSpan(10, 2), _sequence++);
+                                System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(wireBuf.AsSpan(12, 2), (ushort)chunkLen);
 
-                                var packet = new AudioChunkPacket(
-                                    Channels: 2,
-                                    SampleRate: 48000,
-                                    BitsPerSample: 16,
-                                    Sequence: _sequence++,
-                                    PcmData: subChunk);
+                                if (directPcm != null)
+                                {
+                                    Buffer.BlockCopy(directPcm, offset, wireBuf, 14, chunkLen);
+                                }
+                                else
+                                {
+                                    Marshal.Copy((IntPtr)(pcmPtr + offset), wireBuf, 14, chunkLen);
+                                }
 
-                                byte[] wireBytes = WirePacketCodec.EncodeAudioChunk(packet);
                                 try
                                 {
-                                    _udpClient.Send(wireBytes, wireBytes.Length, remoteEp);
+                                    _udpClient.Send(wireBuf, 14 + chunkLen, remoteEp);
                                     _totalAudioBytesSent += chunkLen;
                                 }
                                 catch { }
@@ -527,6 +599,96 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
         }
     }
 
+    private static bool TryActivateProcessLoopbackClient(
+        out IntPtr pAudioClient,
+        out IntPtr pFormat,
+        out uint channels,
+        out uint sampleRate,
+        out ushort bitsPerSample,
+        out bool isFloat)
+    {
+        pAudioClient = IntPtr.Zero;
+        pFormat = IntPtr.Zero;
+        channels = 2;
+        sampleRate = 48000;
+        bitsPerSample = 16;
+        isFloat = false;
+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348) || IntPtr.Size != 8)
+            return false;
+
+        IntPtr pActParams = IntPtr.Zero;
+        IntPtr pProp = IntPtr.Zero;
+        IntPtr pOp = IntPtr.Zero;
+        try
+        {
+            var actParams = new AUDIOCLIENT_ACTIVATION_PARAMS
+            {
+                ActivationType = 1, // AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
+                ProcessLoopbackParams = new AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS
+                {
+                    TargetProcessId = (uint)Environment.ProcessId,
+                    ProcessLoopbackMode = 1 // PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE
+                }
+            };
+            pActParams = Marshal.AllocCoTaskMem(Marshal.SizeOf<AUDIOCLIENT_ACTIVATION_PARAMS>());
+            Marshal.StructureToPtr(actParams, pActParams, false);
+
+            var prop = new PROPVARIANT_BLOB
+            {
+                vt = 65, // VT_BLOB
+                cbSize = (uint)Marshal.SizeOf<AUDIOCLIENT_ACTIVATION_PARAMS>(),
+                pBlobData = pActParams
+            };
+            pProp = Marshal.AllocCoTaskMem(Marshal.SizeOf<PROPVARIANT_BLOB>());
+            Marshal.StructureToPtr(prop, pProp, false);
+
+            using var handler = new ProcessLoopbackCompletionHandler();
+            Guid iidAC = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
+            int hr = ActivateAudioInterfaceAsync("VAD\\Process_Loopback", ref iidAC, pProp, handler, out pOp);
+            if (hr != 0)
+                return false;
+
+            if (!handler.Done.WaitOne(2000) || handler.Operation == IntPtr.Zero)
+                return false;
+
+            IntPtr opVtbl = Marshal.ReadIntPtr(handler.Operation);
+            var getRes = Marshal.GetDelegateForFunctionPointer<GetActivateResultDelegate>(Marshal.ReadIntPtr(opVtbl, 3 * IntPtr.Size));
+            int resHr = getRes(handler.Operation, out int actHr, out pAudioClient);
+            if (resHr != 0 || actHr != 0 || pAudioClient == IntPtr.Zero)
+            {
+                if (pAudioClient != IntPtr.Zero) { Marshal.Release(pAudioClient); pAudioClient = IntPtr.Zero; }
+                return false;
+            }
+
+            var wfx = new WAVEFORMATEX
+            {
+                wFormatTag = WAVE_FORMAT_PCM,
+                nChannels = 2,
+                nSamplesPerSec = 48000,
+                wBitsPerSample = 16,
+                nBlockAlign = 4,
+                nAvgBytesPerSec = 48000 * 4,
+                cbSize = 0
+            };
+            pFormat = Marshal.AllocCoTaskMem(Marshal.SizeOf<WAVEFORMATEX>());
+            Marshal.StructureToPtr(wfx, pFormat, false);
+            return true;
+        }
+        catch
+        {
+            if (pAudioClient != IntPtr.Zero) { Marshal.Release(pAudioClient); pAudioClient = IntPtr.Zero; }
+            if (pFormat != IntPtr.Zero) { Marshal.FreeCoTaskMem(pFormat); pFormat = IntPtr.Zero; }
+            return false;
+        }
+        finally
+        {
+            if (pOp != IntPtr.Zero) Marshal.Release(pOp);
+            if (pProp != IntPtr.Zero) Marshal.FreeCoTaskMem(pProp);
+            if (pActParams != IntPtr.Zero) Marshal.FreeCoTaskMem(pActParams);
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -537,6 +699,72 @@ public sealed class WindowsAudioCaptureEngine : IDisposable
     // =========================================================================
     // Win32 / WASAPI COM Interop
     // =========================================================================
+
+    [Guid("41D949AB-9862-444A-80F6-C261334DA5EB")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IActivateAudioInterfaceCompletionHandler
+    {
+        [PreserveSig]
+        int ActivateCompleted(IntPtr activateOperation);
+    }
+
+    [ComVisible(true)]
+    private sealed class ProcessLoopbackCompletionHandler : IActivateAudioInterfaceCompletionHandler, IDisposable
+    {
+        public readonly ManualResetEvent Done = new(false);
+        public IntPtr Operation;
+
+        public int ActivateCompleted(IntPtr activateOperation)
+        {
+            Operation = activateOperation;
+            if (Operation != IntPtr.Zero) Marshal.AddRef(Operation);
+            Done.Set();
+            return 0;
+        }
+
+        public void Dispose()
+        {
+            if (Operation != IntPtr.Zero)
+            {
+                Marshal.Release(Operation);
+                Operation = IntPtr.Zero;
+            }
+            Done.Dispose();
+        }
+    }
+
+    [DllImport("mmdevapi.dll", CharSet = CharSet.Unicode)]
+    private static extern int ActivateAudioInterfaceAsync(
+        string deviceInterfacePath,
+        [In] ref Guid riid,
+        IntPtr activationParams,
+        IActivateAudioInterfaceCompletionHandler completionHandler,
+        out IntPtr activationOperation);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS
+    {
+        public uint TargetProcessId;
+        public uint ProcessLoopbackMode;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AUDIOCLIENT_ACTIVATION_PARAMS
+    {
+        public uint ActivationType;
+        public AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS ProcessLoopbackParams;
+    }
+
+    [StructLayout(LayoutKind.Explicit, Size = 24)]
+    private struct PROPVARIANT_BLOB
+    {
+        [FieldOffset(0)] public ushort vt;
+        [FieldOffset(8)] public uint cbSize;
+        [FieldOffset(16)] public IntPtr pBlobData;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int GetActivateResultDelegate(IntPtr thisPtr, out int activateResult, out IntPtr activatedInterface);
 
     [ComImport]
     [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]

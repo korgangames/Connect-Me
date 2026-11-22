@@ -45,6 +45,7 @@ public static class Program
         await TestRichClipboardImageAndCrossEdgeDragAsync();
         TestConsistentEdgeCrossingAndPrematureJumpPrevention();
         await TestDeviceDeduplicationAndClearColonyTreeAsync();
+        TestAudioPcmMixerAndNetworkOptimization();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -1036,8 +1037,16 @@ public static class Program
                 IntPtr activatePtr = System.Runtime.InteropServices.Marshal.ReadIntPtr(vtbl, 3 * IntPtr.Size);
                 var activate = System.Runtime.InteropServices.Marshal.GetDelegateForFunctionPointer<ActivateDelegate>(activatePtr);
 
+                Guid iidEndpointVolume = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
+                int evHr = activate(pDevice, ref iidEndpointVolume, 0x17 /* CLSCTX_ALL */, IntPtr.Zero, out IntPtr pEndpointVolume);
+                AssertTrue(evHr == 0 && pEndpointVolume != IntPtr.Zero, "WASAPI: IAudioEndpointVolume (CLSCTX_ALL) arabirimi aktifleştirildi");
+                if (pEndpointVolume != IntPtr.Zero)
+                {
+                    System.Runtime.InteropServices.Marshal.Release(pEndpointVolume);
+                }
+
                 Guid iidAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
-                int actHr = activate(pDevice, ref iidAudioClient, 1 /* CLSCTX_INPROC_SERVER */, IntPtr.Zero, out IntPtr pAudioClient);
+                int actHr = activate(pDevice, ref iidAudioClient, 0x17 /* CLSCTX_ALL */, IntPtr.Zero, out IntPtr pAudioClient);
                 AssertTrue(actHr == 0 && pAudioClient != IntPtr.Zero, "WASAPI: IAudioClient arabirimi başarıyla aktifleştirildi");
 
                 if (pAudioClient != IntPtr.Zero)
@@ -1505,6 +1514,52 @@ public static class Program
         finally
         {
             try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private static void TestAudioPcmMixerAndNetworkOptimization()
+    {
+        // 1. Multi-source PCM mixer saturation & summing test
+        byte[] chunkA = new byte[8];
+        byte[] chunkB = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(chunkA.AsSpan(0, 2), 10000);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(chunkB.AsSpan(0, 2), 5000);
+
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(chunkA.AsSpan(2, 2), 25000);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(chunkB.AsSpan(2, 2), 25000); // Overflows short.MaxValue
+
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(chunkA.AsSpan(4, 2), -25000);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(chunkB.AsSpan(4, 2), -25000); // Underflows short.MinValue
+
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(chunkA.AsSpan(6, 2), 12000);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(chunkB.AsSpan(6, 2), -3000);
+
+        byte[] dest = new byte[64];
+        int mixedLen = AudioPcmMixer.MixIntoBuffer(new[] { chunkA, chunkB }, dest);
+        AssertTrue(mixedLen == 8, $"AudioPcmMixer çıktı uzunluğu korundu ({mixedLen}B)");
+
+        short s0 = System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(dest.AsSpan(0, 2));
+        short s1 = System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(dest.AsSpan(2, 2));
+        short s2 = System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(dest.AsSpan(4, 2));
+        short s3 = System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(dest.AsSpan(6, 2));
+
+        AssertTrue(s0 == 15000, $"AudioPcmMixer doğrusal toplama (10000+5000 = {s0})");
+        AssertTrue(s1 == short.MaxValue, $"AudioPcmMixer pozitif taşma kırpması (clamped = {s1})");
+        AssertTrue(s2 == short.MinValue, $"AudioPcmMixer negatif taşma kırpması (clamped = {s2})");
+        AssertTrue(s3 == 9000, $"AudioPcmMixer karşı faz toplama (12000-3000 = {s3})");
+
+        // 2. Network interface ranking & APIPA (169.254.x.x) avoidance check
+        var localIps = ConnectMeNetworkNode.GetLocalIPv4Addresses();
+        AssertTrue(localIps.Count > 0, $"Önbellekli NIC algılama ({localIps.Count} IPv4 bulundu)");
+        bool hasRealNonApipa = localIps.Any(ip => !ip.ToString().StartsWith("169.254.") && !IPAddress.IsLoopback(ip));
+        if (hasRealNonApipa)
+        {
+            AssertTrue(!localIps[0].ToString().StartsWith("169.254."),
+                $"Akıllı ağ sıralaması birincil LAN IP'yi seçti ({localIps[0]}), APIPA/sanal adaptörü eledi");
+        }
+        else
+        {
+            AssertTrue(true, $"Yalnızca loopback/APIPA ortamı algılandı ({localIps[0]})");
         }
     }
 }

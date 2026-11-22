@@ -1169,6 +1169,17 @@ class ConnectMeLinuxGui:
         ttk.Label(matrix_card, text="Ağdaki tüm bağlı cihazların (Windows, Linux, Android) ses çıkışları (hoparlör/kulaklık) aşağıda listelenir. Seçtiğiniz ses çıkışına tüm bağlı cihazların sesleri anında yönlendirilir.",
                   foreground="#94A3B8", wraplength=720).pack(anchor=tk.W, pady=(4, 8))
 
+        # 1-Tık Kulaklık / Ses Merkezi Satırı
+        hub_row = ttk.Frame(matrix_card, style="Card.TFrame")
+        hub_row.pack(fill=tk.X, pady=(4, 10))
+        self.audio_hub_quick_btn = ttk.Button(
+            hub_row,
+            text="🎧 Bu Bilgisayarı Kulaklık / Ses Merkezi Yap (Tüm Cihazların Sesini Buraya Çek)",
+            style="Success.TButton",
+            command=self._activate_central_audio_hub_click
+        )
+        self.audio_hub_quick_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
         # Dropdown selection row
         sel_row = ttk.Frame(matrix_card, style="Card.TFrame")
         sel_row.pack(fill=tk.X, pady=4)
@@ -1360,6 +1371,25 @@ class ConnectMeLinuxGui:
 
         self._on_audio_route_changed_gui(self.node.active_audio_route)
 
+    def _activate_central_audio_hub_click(self):
+        curr = self.node.active_audio_route
+        if curr and curr.get("targetDeviceId") == self.node.device_id:
+            self.node.set_and_broadcast_audio_route(None)
+            self._log("[Ses & Kulaklık Merkezi] 🔄 Yerel çalma moduna dönüldü. Her cihaz kendi sesini çalıyor.")
+        else:
+            local_ip = self._get_local_ip()
+            route = {
+                "targetDeviceId": self.node.device_id,
+                "targetDeviceName": self.node.device_name,
+                "targetSinkId": "default",
+                "targetSinkName": "Varsayılan Kulaklık / Ses Çıkışı",
+                "targetIp": local_ip,
+                "targetUdpPort": 42852
+            }
+            self.node.set_and_broadcast_audio_route(route)
+            self._log(f"[Ses & Kulaklık Merkezi] 🎧 Aktif! Tüm bağlı cihazların sesleri bu Linux'a ({self.node.device_name}) yönlendirildi.")
+        self._refresh_audio_sinks_dropdown()
+
     def _reset_audio_route_click(self):
         self.node.set_and_broadcast_audio_route(None)
         self._log("[Ses Matrisi] 🔄 Ses matrisi sıfırlandı. Yerel çalma moduna dönüldü.")
@@ -1380,12 +1410,16 @@ class ConnectMeLinuxGui:
                 text="Durum: ⚪ Boşta (Her cihaz kendi yerel sesini çalıyor)",
                 foreground="#A5B4FC"
             )
+            if hasattr(self, "audio_hub_quick_btn"):
+                self.audio_hub_quick_btn.configure(text="🎧 Bu Bilgisayarı Kulaklık / Ses Merkezi Yap (Tüm Cihazların Sesini Buraya Çek)")
         elif route.get("targetDeviceId") == self.node.device_id:
             sink_str = route.get("targetSinkName", "Varsayılan")
             self.audio_matrix_status_lbl.configure(
                 text=f"Durum: 🟢 Aktif Alıcı — Diğer cihazların sesleri bu Linux'a ({sink_str}) akıyor.",
                 foreground="#4ADE80"
             )
+            if hasattr(self, "audio_hub_quick_btn"):
+                self.audio_hub_quick_btn.configure(text="🔄 Kulaklık Merkezi Aktif (Kapatmak İçin Tıklayın / Yerel Mod)")
         else:
             dev_str = route.get("targetDeviceName", "Merkez Cihaz")
             sink_str = route.get("targetSinkName", "Kulaklık/Hoparlör")
@@ -1393,6 +1427,8 @@ class ConnectMeLinuxGui:
                 text=f"Durum: 📡 Ses Yayını Aktif — Bu Linux'un sesi -> {dev_str} ({sink_str}) hedefine canlı akıyor.",
                 foreground="#FBBF24"
             )
+            if hasattr(self, "audio_hub_quick_btn"):
+                self.audio_hub_quick_btn.configure(text="🎧 Bu Bilgisayarı Kulaklık / Ses Merkezi Yap (Tüm Cihazların Sesini Buraya Çek)")
 
     def _build_tab_settings(self):
         tab = ttk.Frame(self.notebook, padding=16)
