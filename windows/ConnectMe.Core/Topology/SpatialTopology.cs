@@ -14,6 +14,13 @@ public sealed class PeerDeviceNode
 {
     public string DeviceId { get; set; } = string.Empty;
     public string DeviceName { get; set; } = string.Empty;
+    public string? Nickname { get; set; }
+
+    /// <summary>
+    /// User-assigned short alias/nickname if set; otherwise falls back to DeviceName.
+    /// </summary>
+    public string DisplayName => !string.IsNullOrWhiteSpace(Nickname) ? Nickname : DeviceName;
+
     public string Platform { get; set; } = "android"; // "windows", "linux-nobara", "android"
     public string IpAddress { get; set; } = string.Empty;
     public int UdpInputPort { get; set; } = ProtocolConstants.FastInputUdpPort;
@@ -467,9 +474,9 @@ public sealed class SpatialTopologyEngine
             {
                 peer.AttachedLocalMonitorId = targetLocalMonitorId;
             }
-            else if (string.IsNullOrEmpty(peer.AttachedLocalMonitorId))
+            else
             {
-                peer.AttachedLocalMonitorId = GetOutermostMonitorForEdge(localEdge).MonitorId;
+                peer.AttachedLocalMonitorId = string.Empty;
             }
 
             _peersById[peer.DeviceId] = peer;

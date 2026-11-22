@@ -425,6 +425,32 @@
                                         Content="✅ Doğrula"/>
                             </Grid>
 
+                            <!-- Device Nickname Section -->
+                            <StackPanel Margin="0,6,0,2">
+                                <TextBlock Text="🏷️ Cihaz Takma Adı (Örn: Laptop, Masaüstü):" FontSize="10" Foreground="#94A3B8" Margin="0,0,0,2"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="PeerNicknameInputBox"
+                                             Grid.Column="0"
+                                             MaxLength="30"
+                                             Background="#161B22"
+                                             Foreground="#F8FAFC"
+                                             BorderBrush="#30363D"
+                                             FontSize="11.5"
+                                             Padding="6,4"
+                                             VerticalContentAlignment="Center"
+                                             ToolTip="Bu cihaz için kısa, kolay tanınabilir bir takma ad belirleyin"/>
+                                    <Button x:Name="SaveNicknameBtn"
+                                            Grid.Column="1"
+                                            Click="SaveNicknameBtn_Click"
+                                            Background="#2563EB" Foreground="White" FontWeight="SemiBold" BorderThickness="0" Padding="8,4" Margin="5,0,0,0" Cursor="Hand"
+                                            Content="💾 Kaydet"/>
+                                </Grid>
+                            </StackPanel>
+
                             <CheckBox x:Name="RememberDeviceCheckBox"
                                       Content="⭐ Bu Cihaza Güven ve Hatırla (Otomatik Bağlan)"
                                       IsChecked="True"

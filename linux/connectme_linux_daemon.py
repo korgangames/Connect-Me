@@ -53,7 +53,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.31"
+    return "1.8.32"
 
 VERSION = _resolve_app_version()
 
@@ -193,11 +193,16 @@ class LinuxMultiMonitorTopology:
         return False
 
     def virtual_desktop_bounds(self) -> Tuple[int, int, int, int]:
+        if not self.monitors:
+            return 0, 0, 1920, 1080
         min_x = min(m.virtualX for m in self.monitors)
         min_y = min(m.virtualY for m in self.monitors)
         max_x = max(m.right for m in self.monitors)
         max_y = max(m.bottom for m in self.monitors)
         return min_x, min_y, max(320, max_x - min_x), max(240, max_y - min_y)
+
+    def get_monitor_signature(self) -> str:
+        return "|".join(f"{m.monitorId}:{m.virtualX},{m.virtualY},{m.width}x{m.height}:{m.isPrimary}" for m in self.monitors)
 
     @property
     def total_width(self) -> int:
@@ -1995,6 +2000,7 @@ class ConnectMeLinuxNode:
         self.topology_file = Path.home() / ".config" / "connectme" / "peer_topology.json"
         self.topology_file.parent.mkdir(parents=True, exist_ok=True)
         self.peer_arrangements: Dict[str, dict] = self._load_peer_arrangements()
+        self.device_nicknames: Dict[str, str] = dict(self.settings.get("deviceNicknames", {}))
 
         self.peers: Dict[str, dict] = {}
         self.gui_active: bool = False
@@ -2158,6 +2164,50 @@ class ConnectMeLinuxNode:
                 json.dump(list(self.trusted_devices.values()), f, indent=2)
         except Exception:
             pass
+
+    def get_device_nickname(self, device_id: str) -> Optional[str]:
+        if not device_id:
+            return None
+        return self.device_nicknames.get(device_id) or (self.trusted_devices.get(device_id, {}).get("nickname"))
+
+    def get_device_display_name(self, peer: Optional[dict]) -> str:
+        if not peer:
+            return "Cihaz"
+        pid = peer.get("deviceId", "")
+        nick = peer.get("nickname") or self.device_nicknames.get(pid) or (self.trusted_devices.get(pid, {}).get("nickname"))
+        if nick and str(nick).strip():
+            return str(nick).strip()
+        return peer.get("deviceName") or pid or "Cihaz"
+
+    def set_device_nickname(self, device_id: str, nickname: Optional[str]) -> None:
+        if not device_id:
+            return
+        clean_nick = (nickname or "").strip()
+        if clean_nick:
+            self.device_nicknames[device_id] = clean_nick
+        else:
+            self.device_nicknames.pop(device_id, None)
+
+        self.settings["deviceNicknames"] = self.device_nicknames
+        self._save_settings()
+
+        if device_id in self.trusted_devices:
+            if clean_nick:
+                self.trusted_devices[device_id]["nickname"] = clean_nick
+            else:
+                self.trusted_devices[device_id].pop("nickname", None)
+            self._save_trusted_devices()
+
+        if device_id in self.peers:
+            self.peers[device_id]["nickname"] = clean_nick if clean_nick else None
+            self.peers[device_id]["displayName"] = clean_nick if clean_nick else self.peers[device_id].get("deviceName", device_id)
+
+        self.log(f"[Takma Ad] '{device_id}' cihazına takma ad atandı: '{clean_nick or '(Varsayılana Dönüldü)'}'")
+        if self.on_peer_updated and device_id in self.peers:
+            try:
+                self.on_peer_updated(self.peers[device_id])
+            except Exception:
+                pass
 
     def _load_peer_arrangements(self) -> Dict[str, dict]:
         if not self.topology_file.exists():
@@ -3146,51 +3196,111 @@ class ConnectMeLinuxNode:
         threading.Thread(target=self._audio_receiver_loop, daemon=True).start()
         threading.Thread(target=self._monitor_hotplug_watcher_loop, daemon=True).start()
 
-    def _get_drm_display_signature(self) -> str:
+    def _get_display_signature(self) -> str:
         sig_parts = []
         try:
+            # 1. DRM hardware connector statuses
             drm_path = Path("/sys/class/drm")
             if drm_path.exists():
                 for p in sorted(drm_path.glob("card*-*")):
                     st_file = p / "status"
+                    en_file = p / "enabled"
                     if st_file.exists():
                         try:
                             content = st_file.read_text(encoding="utf-8", errors="ignore").strip()
+                            en_content = en_file.read_text(encoding="utf-8", errors="ignore").strip() if en_file.exists() else ""
                             modes_file = p / "modes"
                             top_mode = ""
                             if modes_file.exists():
                                 lines = modes_file.read_text(encoding="utf-8", errors="ignore").splitlines()
                                 if lines:
                                     top_mode = lines[0].strip()
-                            sig_parts.append(f"{p.name}:{content}:{top_mode}")
+                            sig_parts.append(f"{p.name}:{content}:{en_content}:{top_mode}")
                         except Exception:
                             pass
         except Exception:
             pass
+
+        # 2. Fast Compositor Output Check (kscreen-doctor -o, xrandr --current, or wlr-randr)
+        try:
+            if shutil.which("kscreen-doctor"):
+                proc = subprocess.run(["kscreen-doctor", "-o"], capture_output=True, text=True, timeout=1.5)
+                if proc.returncode == 0 and proc.stdout:
+                    for line in proc.stdout.splitlines():
+                        line_s = line.strip()
+                        if line_s.startswith("Output:") or "scale" in line_s or "*" in line_s or "connected" in line_s:
+                            sig_parts.append(line_s)
+            elif shutil.which("xrandr"):
+                proc = subprocess.run(["xrandr", "--current"], capture_output=True, text=True, timeout=1.5)
+                if proc.returncode == 0 and proc.stdout:
+                    for line in proc.stdout.splitlines():
+                        if " connected" in line or "Screen " in line:
+                            sig_parts.append(line.strip())
+        except Exception:
+            pass
+
         return "|".join(sig_parts)
 
-    def _monitor_hotplug_watcher_loop(self) -> None:
-        """Polls DRM connector status and display changes every 1.5s to dynamically handle hotplug events."""
-        last_sig = self._get_drm_display_signature()
-        while self.running:
-            time.sleep(1.5)
+    def handle_display_configuration_changed(self, root_w: Optional[int] = None, root_h: Optional[int] = None) -> List[PhysicalMonitor]:
+        """Explicitly re-scans display hardware/compositor, recomputes network topology,
+        broadcasts updated beacons to peers, updates edge config, and triggers on_topology_changed."""
+        new_mons = self.topology.refresh_monitors(root_w=root_w, root_h=root_h)
+        self.recompute_colony_world_coordinates()
+        self.send_colony_topology_sync_to_all_peers()
+        threading.Thread(target=self.send_discovery_broadcast, daemon=True).start()
+        for p in self.peers.values():
+            if p.get("isMutuallyPaired"):
+                self.send_edge_config(p, p.get("assignedEdge", EDGE_RIGHT), p.get("edgeOffsetStart", 0.0), p.get("edgeOffsetEnd", 1.0))
+        if self.on_topology_changed:
             try:
-                curr_sig = self._get_drm_display_signature()
-                if curr_sig != last_sig:
-                    last_sig = curr_sig
-                    self.log("[Donanım Ekran Algılama] 🔌 Ekran donanımında değişiklik algılandı, topoloji güncelleniyor...")
-                    old_mons = [(m.monitorId, m.virtualX, m.virtualY, m.width, m.height) for m in self.topology.monitors]
+                self.on_topology_changed()
+            except Exception:
+                pass
+        return new_mons
+
+    def _monitor_hotplug_watcher_loop(self) -> None:
+        """Continuously monitors display hardware and compositor output changes.
+        Uses debounced multi-pass refresh to guarantee newly connected monitors are captured
+        even while the Wayland/KDE/GNOME compositor negotiates modes and scales."""
+        last_display_sig = self._get_display_signature()
+        last_active_mons_sig = self.topology.get_monitor_signature()
+        pending_rescan_passes = 0
+
+        while self.running:
+            time.sleep(1.2)
+            try:
+                curr_display_sig = self._get_display_signature()
+                if curr_display_sig != last_display_sig:
+                    last_display_sig = curr_display_sig
+                    self.log("[Donanım Ekran Algılama] 🔌 Ekran donanımında veya kompozitör çıktılarında değişiklik algılandı, topoloji güncelleniyor...")
+                    pending_rescan_passes = 3
+
+                if pending_rescan_passes > 0:
+                    pending_rescan_passes -= 1
                     new_mons = self.topology.refresh_monitors()
-                    new_mons_sig = [(m.monitorId, m.virtualX, m.virtualY, m.width, m.height) for m in new_mons]
-                    if new_mons_sig != old_mons:
-                        self.log(f"[Donanım Ekran Algılama] 🖥️ Yeni monitör düzeni başarıyla uygulandı ({len(new_mons)} ekran).")
+                    new_sig = self.topology.get_monitor_signature()
+
+                    if new_sig != last_active_mons_sig:
+                        last_active_mons_sig = new_sig
+                        pending_rescan_passes = 0
+                        self.log(f"[Donanım Ekran Algılama] 🖥️ Yeni monitör düzeni başarıyla uygulandı ({len(new_mons)} ekran algılandı):")
+                        for m in new_mons:
+                            prim = " [Birincil]" if m.isPrimary else ""
+                            self.log(f"   • {m.monitorId}: {m.width}x{m.height} @ ({m.virtualX}, {m.virtualY}){prim}")
+
                         self.recompute_colony_world_coordinates()
                         self.send_colony_topology_sync_to_all_peers()
+                        threading.Thread(target=self.send_discovery_broadcast, daemon=True).start()
+
+                        for p in self.peers.values():
+                            if p.get("isMutuallyPaired"):
+                                self.send_edge_config(p, p.get("assignedEdge", EDGE_RIGHT), p.get("edgeOffsetStart", 0.0), p.get("edgeOffsetEnd", 1.0))
+
                         if self.on_topology_changed:
                             try:
                                 self.on_topology_changed()
-                            except Exception:
-                                pass
+                            except Exception as ex:
+                                self.log(f"[Topoloji Hata] on_topology_changed geri çağırma hatası: {ex}")
             except Exception:
                 pass
 
@@ -3473,9 +3583,12 @@ class ConnectMeLinuxNode:
                 sender_ip = addr[0]
 
                 is_new = dev_id not in self.peers
+                saved_nick = self.get_device_nickname(dev_id)
                 peer = self.peers.setdefault(dev_id, {
                     "deviceId": dev_id,
                     "deviceName": sender_name,
+                    "nickname": saved_nick,
+                    "displayName": saved_nick or sender_name,
                     "platform": sender_plat,
                     "ipAddress": sender_ip,
                     "udpInputPort": payload.get("udpInputPort", FAST_INPUT_UDP_PORT),
@@ -3491,6 +3604,8 @@ class ConnectMeLinuxNode:
 
                 peer["ipAddress"] = sender_ip
                 peer["deviceName"] = sender_name
+                peer["nickname"] = saved_nick
+                peer["displayName"] = saved_nick or sender_name
                 peer["platform"] = sender_plat
                 peer["monitors"] = payload.get("monitors", peer.get("monitors", []))
                 peer["screenWidth"] = payload.get("screenWidth", peer.get("screenWidth", 1920))
@@ -3621,9 +3736,12 @@ class ConnectMeLinuxNode:
 
         self.suppressed_autoconnect.discard(dev_id)
 
+        saved_nick = self.get_device_nickname(dev_id)
         peer = self.peers.setdefault(dev_id, {
             "deviceId": dev_id,
             "deviceName": device_name or f"Cihaz ({ip})",
+            "nickname": saved_nick,
+            "displayName": saved_nick or (device_name or f"Cihaz ({ip})"),
             "platform": platform,
             "ipAddress": ip,
             "udpInputPort": FAST_INPUT_UDP_PORT,
@@ -3638,6 +3756,8 @@ class ConnectMeLinuxNode:
             "lastSeen": time.time()
         })
         peer["ipAddress"] = ip
+        peer["nickname"] = saved_nick
+        peer["displayName"] = saved_nick or peer.get("deviceName", f"Cihaz ({ip})")
         peer["lastSeen"] = time.time()
         arr = self.get_peer_arrangement(dev_id)
         peer["assignedEdge"] = arr.get("assignedEdge", EDGE_RIGHT)

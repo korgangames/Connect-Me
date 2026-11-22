@@ -1,3 +1,27 @@
+# Connect Me v1.8.32 — Dinamik Linux Monitör Tak-Çıkar (Hotplug) Düzeltmesi ve Cihazlara Özel Takma Ad (Nickname) Sistemi (Windows & Linux)
+
+Bu sürüm; uygulama açıkken Linux'a yeni bir monitör bağlandığında veya çözünürlük değiştiğinde topolojinin güncellenmemesi sorununu giderir ve imleç diğer ekrandayken görünen uzun/karmaşık cihaz adları yerine kullanıcının tek bakışta kolayca tanıyabileceği özel takma adlar (nickname) atayabilmesini sağlar:
+
+1. **Linux Çalışma Zamanı Dinamik Monitör Tak-Çıkar (Hotplug) & Çözünürlük Algılama Düzeltmesi:**
+   - **Compositor Yarış Durumunun (Race Condition) Giderilmesi:** Önceki sürümlerde `/sys/class/drm` üzerinde kablo takılma olayı algılandığında hemen tek seferlik sorgu yapılıyordu; ancak Wayland (KDE KScreen / GNOME Mutter) donanımı algılayıp modu uygulayana kadar geçen sürede yeni monitör henüz aktif modda görünmüyor ve eski imza kaydedildiği için döngü bir daha kontrol etmiyordu. Çok geçişli (`pending_rescan_passes = 3`) ve DRM konnektör durumları ile kompozitör çıktısını (`kscreen-doctor -o` / `xrandr --current`) birleştiren yeni imza mimarisine geçildi.
+   - **İç Dikiş Bariyerlerinin Otomatik Temizlenmesi & Dış Kenar Güncellemesi:** Yeni monitör bağlandığında veya çıkarıldığında `handle_display_configuration_changed()` tetiklenerek yerel sanal masaüstü sınırları (`virtual_desktop_bounds`) baştan hesaplanır, eski monitörün sağ kenarındaki iç dikiş bariyerleri kaldırılır ve yalnızca yeni monitörün en dış kenarına geçiş bariyeri kurulur. Ayrıca `COLONY_TOPOLOGY_SYNC` ve yeni UDP keşif sinyalleri ağdaki tüm cihazlara yayınlanarak koloni düzeni canlı olarak senkronize edilir.
+   - **Yüzen HUD Bilgi Çubuğunun Yeniden Konumlandırılması:** İmleç uzaktaki cihazdayken tepede beliren durum şeridi (`HostCaptureOverlay` / `_remoteHostHudWindow`), monitör takıldığında genişleyen masaüstüne göre otomatik olarak yeni merkez koordinatına taşınır (`reposition()`).
+
+2. **Cihazlara Özel Takma Ad (Custom Nickname / Alias) Sistemi (Windows & Linux):**
+   - **Kalıcı Depolama:** Kullanıcının atadığı takma adlar Windows'ta `TrustedDeviceStore` (`trusted_devices.json`) ve Linux'ta `settings.json` ile `trusted_devices.json` dosyalarına kalıcı olarak kaydedilir.
+   - **Arayüz Entegrasyonu:**
+     - **Windows WPF:** Seçili Cihaz kartına Takma Ad metin kutusu ve `💾 Takma Adı Kaydet` butonu eklendi. Cihaz listesinde, eşleşme kartında ve 2D Kanvas üzerinde cihazın takma adı birincil olarak görüntülenir (`Laptop [DESKTOP-ABC1234]`).
+     - **Linux GUI:** Eşleşme sekmesine `🏷️ Cihaz Takma Adı` giriş alanı, `💾 Takma Adı Kaydet` ve `❌ Kaldır` butonları eklendi. 2D Kanvas üzerinde kartlara sağ tıklandığında açılan içerik menüsünden (`🏷️ Takma Ad Belirle / Değiştir...`) doğrudan takma ad atanabilir.
+   - **Yüzen HUD Şeridi ve Durum Rozetleri:** İmleç başka bir cihazın ekranındayken ekranda beliren yüzen HUD banner'ında uzun ve karmaşık makine adı yerine kısa ve net takma ad görüntülenir (Örn: `🟢 Kontrol 'Laptop' Ekranında | Geri Dönüş: [Ctrl+Alt+L] / [ScrollLock] veya [⬅️ Kontrolü Geri Al]`).
+   - `DisplayName` geri dönüş fallback mekanizması sayesinde takma ad tanımlanmamışsa orijinal makine adı kesintisiz olarak kullanılmaya devam eder.
+
+3. **Otomatik Birim Testleri:**
+   - `windows/ConnectMe.Tests/Program.cs`:
+     - `TestDynamicMonitorHotplugTopologyUpdate`: Uygulama açıkken ikinci bir monitör bağlandığında sağdaki uzak cihazın yeni dış sınıra (X=4480) taşındığı, eski sınırın iç dikiş olarak geçişi engellediği ve yeni monitörün dış kenarından geçişin sağlandığı doğrulandı.
+     - `TestTrustedDeviceStorePersistence`: Takma ad atama, bellekten sorgulama, JSON dosyasına kalıcı yazma/okuma ve `DisplayName` fallback mantığı test edildi (86/86 test başarılı).
+
+---
+
 # Connect Me v1.8.31 — İstemci Cihazlar İçin Acil Durum "Fareyi Ana Makineye Gönder" Düğmesi (Linux, Windows, Android)
 
 Bu sürüm; KVM fare paylaşımı sırasında istemci / ikincil cihazlarda (Linux, Windows veya Android) oluşabilecek fare donmaları, ağ kopmaları veya imlecin istemci ekranda kilitli kalması durumlarına karşı tek tıklamayla kontrolü ana bilgisayara iade eden acil durum butonlarını tüm platformlara ekler:

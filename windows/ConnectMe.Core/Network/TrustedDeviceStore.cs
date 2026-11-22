@@ -18,6 +18,9 @@ public sealed class TrustedDeviceRecord
     [JsonPropertyName("deviceName")]
     public string DeviceName { get; set; } = string.Empty;
 
+    [JsonPropertyName("nickname")]
+    public string? Nickname { get; set; }
+
     [JsonPropertyName("platform")]
     public string Platform { get; set; } = string.Empty;
 
@@ -218,6 +221,39 @@ public sealed class TrustedDeviceStore
             }
 
             return false;
+        }
+    }
+
+    public void SetDeviceNickname(string deviceId, string? nickname)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return;
+        lock (_sync)
+        {
+            string? clean = string.IsNullOrWhiteSpace(nickname) ? null : nickname.Trim();
+            if (_trustedDevices.TryGetValue(deviceId, out var record))
+            {
+                record.Nickname = clean;
+            }
+            else
+            {
+                record = new TrustedDeviceRecord
+                {
+                    DeviceId = deviceId,
+                    Nickname = clean,
+                    AutoConnect = false
+                };
+                _trustedDevices[deviceId] = record;
+            }
+            Save();
+        }
+    }
+
+    public string? GetDeviceNickname(string deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return null;
+        lock (_sync)
+        {
+            return _trustedDevices.TryGetValue(deviceId, out var rec) ? rec.Nickname : null;
         }
     }
 

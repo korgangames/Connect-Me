@@ -31,6 +31,7 @@ public static class Program
         TestLinuxXRandrOutputParser();
         TestMultiMonitorCanvasMagneticSnapping();
         TestMultiMonitorPerMonitorTopEdgeMatching();
+        TestDynamicMonitorHotplugTopologyUpdate();
         TestTrustedDeviceStorePersistence();
         await TestTcpFrameCodecAsync();
         await TestEndToEndMutualSixDigitPinAndLoopbackAsync();
@@ -601,6 +602,67 @@ public static class Program
         try { Directory.Delete(tempShelf, true); } catch { }
     }
 
+    private static void TestDynamicMonitorHotplugTopologyUpdate()
+    {
+        var topo = new SpatialTopologyEngine();
+        // 1. Adım: Başlangıçta tek monitör (1920x1080)
+        var mon1 = new PhysicalMonitorDescriptor
+        {
+            MonitorId = "HDMI-1",
+            Name = "Birincil Ekran",
+            VirtualX = 0,
+            VirtualY = 0,
+            Width = 1920,
+            Height = 1080,
+            IsPrimary = true
+        };
+        topo.UpdateLocalMonitors([mon1]);
+
+        var peer = new PeerDeviceNode
+        {
+            DeviceId = "peer-laptop",
+            DeviceName = "Laptop",
+            Platform = "linux",
+            ScreenWidth = 1920,
+            ScreenHeight = 1080,
+            MyEnteredPinVerifiedByRemote = true,
+            RemoteEnteredMyPinVerified = true
+        };
+        // Peer masaüstünün sağına yerleştirildi
+        topo.AssignPeerToEdge(ScreenEdge.Right, peer);
+        topo.RecomputeColonyWorldCoordinates("local-host");
+        AssertTrue(peer.ColonyX == 1920 && peer.ColonyY == 0,
+            "Dinamik Monitör: Tek ekranda sağdaki cihaz X=1920 konumunda");
+
+        // 2. Adım: Kullanıcı açıkken ikinci bir monitör bağladı (DP-1: X=1920, Y=0, 2560x1440)
+        var mon2 = new PhysicalMonitorDescriptor
+        {
+            MonitorId = "DP-1",
+            Name = "Yeni Bağlanan 2K Monitör",
+            VirtualX = 1920,
+            VirtualY = 0,
+            Width = 2560,
+            Height = 1440,
+            IsPrimary = false
+        };
+        topo.UpdateLocalMonitors([mon1, mon2]);
+        topo.RecomputeColonyWorldCoordinates("local-host");
+
+        // Toplam masaüstü genişliği artık 1920 + 2560 = 4480.
+        AssertTrue(peer.ColonyX == 4480,
+            "Dinamik Monitör Hotplug: Yeni monitör bağlandığında sağdaki uzak cihaz otomatik olarak yeni dış sınıra (X=4480) kaydırıldı");
+
+        // İç dikiş (Internal Seam): X=1919'dan sağa X=1920'ye geçiş artık HDMI-1 ve DP-1 arası iç dikiştir, GEÇİŞ YAPILMAMALIDIR!
+        var internalStep = topo.EvaluateCursorStep(1919, 500, deltaX: 20, deltaY: 0);
+        AssertTrue(!internalStep.ShouldTransition,
+            "Dinamik Monitör Hotplug: Eski dış sınır olan X=1920 artık iki monitör arası iç dikiş (internal seam) oldu ve geçiş tetiklemedi");
+
+        // Gerçek dış kenar: DP-1'in en sağ kenarı (X=4479) uzak cihaza geçmelidir!
+        var outerStep = topo.EvaluateCursorStep(4479, 500, deltaX: 30, deltaY: 0);
+        AssertTrue(outerStep.ShouldTransition && outerStep.TargetPeer?.DeviceId == "peer-laptop",
+            "Dinamik Monitör Hotplug: Yeni bağlanan monitörün dış sağ kenarı (X=4479) uzak cihaza geçişi başarıyla sağladı");
+    }
+
     private static void TestTrustedDeviceStorePersistence()
     {
         string tempFile = Path.Combine(Path.GetTempPath(), $"connectme_trust_test_{Guid.NewGuid():N}.json");
@@ -613,7 +675,7 @@ public static class Program
             store.AddOrUpdateTrustedDevice(new TrustedDeviceRecord
             {
                 DeviceId = "android-device-1",
-                DeviceName = "Pixel 9 Pro",
+                DeviceName = "Pixel 9 Pro Extra Long Hostname",
                 Platform = "android",
                 TrustToken = token,
                 AssignedEdge = ScreenEdge.Left,
@@ -623,20 +685,46 @@ public static class Program
                 AutoConnect = true
             });
 
-            AssertTrue(store.IsDeviceTrusted("android-device-1", out var rec) && rec != null && rec.DeviceName == "Pixel 9 Pro",
+            AssertTrue(store.IsDeviceTrusted("android-device-1", out var rec) && rec != null && rec.DeviceName == "Pixel 9 Pro Extra Long Hostname",
                 "TrustedDeviceStore: Güvenilir cihaz eklendi ve hafızada doğrulandı");
             AssertTrue(store.VerifyTrustToken("android-device-1", token),
                 "TrustedDeviceStore: Kriptografik güven belirteci doğru eşleşti");
             AssertTrue(!store.VerifyTrustToken("android-device-1", "wrong-token"),
                 "TrustedDeviceStore: Yanlış güven belirteci reddedildi");
 
+            // Test Nickname Assignment & Retrieval
+            store.SetDeviceNickname("android-device-1", "Telefonum");
+            AssertTrue(store.GetDeviceNickname("android-device-1") == "Telefonum",
+                "TrustedDeviceStore: Cihaza özel takma ad (Nickname) atandı ve hafızada doğrulandı");
+
             // Reload from disk into a fresh store instance to verify JSON persistence
             var storeReloaded = new TrustedDeviceStore(tempFile);
             AssertTrue(storeReloaded.IsDeviceTrusted("android-device-1", out var reloadedRec) &&
                        reloadedRec != null &&
                        reloadedRec.AssignedEdge == ScreenEdge.Left &&
+                       reloadedRec.Nickname == "Telefonum" &&
+                       storeReloaded.GetDeviceNickname("android-device-1") == "Telefonum" &&
                        Math.Abs(reloadedRec.EdgeOffsetStart - 0.2f) < 0.001f,
-                "TrustedDeviceStore: Diske JSON olarak kaydedildi ve yeni store örneğinde tam topolojiyle okundu");
+                "TrustedDeviceStore: Diske JSON olarak kaydedildi ve yeni store örneğinde takma ad (Nickname) dahil tam topolojiyle okundu");
+
+            // Test PeerDeviceNode DisplayName property fallback
+            var peerWithNick = new PeerDeviceNode
+            {
+                DeviceId = "android-device-1",
+                DeviceName = "Pixel 9 Pro Extra Long Hostname",
+                Nickname = "Telefonum"
+            };
+            AssertTrue(peerWithNick.DisplayName == "Telefonum",
+                "PeerDeviceNode.DisplayName: Takma ad varsa takma adı döndürür");
+
+            var peerWithoutNick = new PeerDeviceNode
+            {
+                DeviceId = "android-device-2",
+                DeviceName = "DESKTOP-ABC1234-WIN11-PRO",
+                Nickname = ""
+            };
+            AssertTrue(peerWithoutNick.DisplayName == "DESKTOP-ABC1234-WIN11-PRO",
+                "PeerDeviceNode.DisplayName: Takma ad boşsa orijinal cihaz adına (DeviceName) geri döner");
 
             // Test trust revocation
             bool revoked = storeReloaded.RevokeTrust("android-device-1");

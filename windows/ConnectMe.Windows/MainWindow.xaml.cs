@@ -290,6 +290,9 @@ public partial class MainWindow : Window
                     if (p.DeviceId == selectedId) restoreIdx = currentIdx;
 
                     string icon = GetPlatformIcon(p.Platform);
+                    string nameDisplay = !string.IsNullOrWhiteSpace(p.Nickname)
+                        ? $"{p.Nickname} [{p.DeviceName}]"
+                        : p.DeviceName;
                     string multiMonTag = p.RemoteMonitorCount > 1 ? $" [{p.RemoteMonitorCount} Ekran]" : string.Empty;
                     string monPrefix = !string.IsNullOrEmpty(p.AttachedLocalMonitorId) && _topology.LocalMonitors.Count > 1
                         ? $"{p.AttachedLocalMonitorId} "
@@ -305,7 +308,7 @@ public partial class MainWindow : Window
 
                     var itemBlock = new TextBlock
                     {
-                        Text = $"   └ {icon} {p.DeviceName}{multiMonTag} ({p.IpAddress})\n      {stateBadge}",
+                        Text = $"   └ {icon} {nameDisplay}{multiMonTag} ({p.IpAddress})\n      {stateBadge}",
                         FontSize = 11.5,
                         TextWrapping = TextWrapping.Wrap,
                         Margin = new Thickness(4, 2, 2, 3),
@@ -328,6 +331,9 @@ public partial class MainWindow : Window
                 restoreIdx = currentIdx;
 
             string icon = GetPlatformIcon(p.Platform);
+            string nameDisplay = !string.IsNullOrWhiteSpace(p.Nickname)
+                ? $"{p.Nickname} [{p.DeviceName}]"
+                : p.DeviceName;
             string multiMonTag = p.RemoteMonitorCount > 1 ? $" [{p.RemoteMonitorCount} Ekran]" : string.Empty;
             string monPrefix = !string.IsNullOrEmpty(p.AttachedLocalMonitorId) && _topology.LocalMonitors.Count > 1
                 ? $"{p.AttachedLocalMonitorId} "
@@ -343,7 +349,7 @@ public partial class MainWindow : Window
 
             var itemBlock = new TextBlock
             {
-                Text = $"{icon} {p.DeviceName}{multiMonTag} ({p.IpAddress})\n   {stateBadge}",
+                Text = $"{icon} {nameDisplay}{multiMonTag} ({p.IpAddress})\n   {stateBadge}",
                 FontSize = 11.5,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(2, 3, 2, 3),
@@ -363,7 +369,9 @@ public partial class MainWindow : Window
         if (_selectedPeer == null)
         {
             SelectedPeerTitleText.Text = "🔐 Çift Taraflı 6 Haneli Kod Onayı";
+            SelectedPeerTitleText.ToolTip = null;
             SelectedPeerStatusText.Text = "Listeden bir cihaz seçip ekrandaki 6 haneli kodunu girin.";
+            PeerNicknameInputBox.Text = string.Empty;
             SimConfirmOurPinBtn.Visibility = Visibility.Collapsed;
             RevokeTrustBtn.Visibility = Visibility.Collapsed;
             DisconnectPeerBtn.Visibility = Visibility.Collapsed;
@@ -373,10 +381,12 @@ public partial class MainWindow : Window
         }
 
         var p = _selectedPeer;
+        PeerNicknameInputBox.Text = p.Nickname ?? string.Empty;
         string multiMonBadge = p.RemoteMonitorCount > 1 ? $" ({p.RemoteMonitorCount} Monitör)" : string.Empty;
         string trustBadge = p.IsTrusted ? " ⭐ [GÜVENİLİR]" : "";
         string colonyBadge = !string.IsNullOrEmpty(p.ColonyId) ? " 🪐 [KOLONİ]" : "";
-        SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DeviceName}{multiMonBadge}{trustBadge}{colonyBadge}";
+        SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DisplayName}{multiMonBadge}{trustBadge}{colonyBadge}";
+        SelectedPeerTitleText.ToolTip = $"Gerçek Cihaz Adı: {p.DeviceName}\nIP Adresi: {p.IpAddress}\nPlatform: {p.Platform}";
 
         string simHint = !string.IsNullOrEmpty(p.SimulatedLocalPin)
             ? $" (Kod: {p.SimulatedLocalPin})"
@@ -398,7 +408,7 @@ public partial class MainWindow : Window
 
         if (ConnectToColonyBtn.Visibility == Visibility.Visible)
         {
-            ConnectToColonyBtn.Content = $"🪐 '{p.DeviceName}' Üzerinden Tüm Koloniye ({p.ColonyMembers.Count} Cihaz) Bağlan";
+            ConnectToColonyBtn.Content = $"🪐 '{p.DisplayName}' Üzerinden Tüm Koloniye ({p.ColonyMembers.Count} Cihaz) Bağlan";
         }
 
         SelectedPeerStatusText.Text = p.PairingState switch
@@ -408,15 +418,15 @@ public partial class MainWindow : Window
                     ? "⭐ Bu cihaz güvenilir olarak kaydedildi. İki tarafta da program açık olduğu sürece PIN sormadan otomatik bağlanır. 2D Haritada dilediğiniz gibi konumlandırabilirsiniz."
                     : "✅ Çift taraflı 6 haneli PIN onayı tamamlandı! Sağdaki 2D Haritada istediğiniz monitörün kenarına sürükleyebilirsiniz.",
             PeerPairingState.OutboundPinVerified =>
-                $"⏳ Karşı kod doğrulandı! Şimdi '{p.DeviceName}' üzerinde sizin kodunuzu ({_network.PairingPin}) onaylayın.",
+                $"⏳ Karşı kod doğrulandı! Şimdi '{p.DisplayName}' üzerinde sizin kodunuzu ({_network.PairingPin}) onaylayın.",
             PeerPairingState.InboundPinVerified =>
-                $"🔔 '{p.DeviceName}' sizin kodunuzu doğruladı! Yukarıdaki yeşil 'Hemen Onayla' butonuyla tek tıkla kabul edebilir veya onun 6 haneli kodunu{simHint} girip onaylayabilirsiniz:",
+                $"🔔 '{p.DisplayName}' sizin kodunuzu doğruladı! Yukarıdaki yeşil 'Hemen Onayla' butonuyla tek tıkla kabul edebilir veya onun 6 haneli kodunu{simHint} girip onaylayabilirsiniz:",
             _ =>
                 p.IsTrusted
                     ? $"⭐ Güvenilir cihaz aranıyor ve otomatik bağlanılıyor... Veya PIN ile manuel doğrulamak için kodu{simHint} girin."
                     : (!string.IsNullOrEmpty(p.ColonyId) && p.ColonyMembers.Count > 1)
                         ? $"🪐 Bu cihaz bir koloniye dahil ({p.ColonyMembers.Count} cihaz bağlı). Cihazın 6 haneli kodunu{simHint} girip 'Tüm Koloniye Bağlan' butonuna basarak tüm sisteme tek seferde bağlanabilirsiniz."
-                        : $"'{p.DeviceName}' ekranındaki 6 haneli kodu{simHint} girin ve karşı cihazda da sizin kodunuzu ({_network.PairingPin}) onaylayın."
+                        : $"'{p.DisplayName}' ekranındaki 6 haneli kodu{simHint} girin ve karşı cihazda da sizin kodunuzu ({_network.PairingPin}) onaylayın."
         };
 
         if (!string.IsNullOrEmpty(p.SimulatedLocalPin) && !p.RemoteEnteredMyPinVerified)
@@ -428,6 +438,22 @@ public partial class MainWindow : Window
         {
             SimConfirmOurPinBtn.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private void SaveNicknameBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedPeer == null)
+        {
+            AppendLog("[Uyarı] Lütfen önce listeden takma ad atamak istediğiniz cihazı seçin.");
+            return;
+        }
+
+        string newNick = PeerNicknameInputBox.Text.Trim();
+        _network.SetPeerNickname(_selectedPeer.DeviceId, newNick);
+        AppendLog($"[Takma Ad] '{_selectedPeer.DeviceId}' cihazına takma ad atandı: '{_selectedPeer.DisplayName}'");
+        RefreshPeersList();
+        RedrawDisplayArrangementCanvas();
+        UpdateSelectedPeerPairingPanel();
     }
 
     // =========================================================================
@@ -809,7 +835,7 @@ public partial class MainWindow : Window
                 CornerRadius = new CornerRadius(8),
                 Cursor = Cursors.SizeAll,
                 Tag = peer,
-                ToolTip = $"{peer.DeviceName}{multiMonInfo}\nDurum: {(isPaired ? "Çift Taraflı Aktif" : "PIN Onayı Bekleniyor")}\nBağlı Ekran/Cihaz: {anchorName} — {FormatEdgeTr(peer.AssignedEdgeOnLocal)} Kenar (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek herhangi bir monitörün veya cihazın kenarına yapıştırabilirsiniz."
+                ToolTip = $"{peer.DisplayName} (Gerçek: {peer.DeviceName}){multiMonInfo}\nDurum: {(isPaired ? "Çift Taraflı Aktif" : "PIN Onayı Bekleniyor")}\nBağlı Ekran/Cihaz: {anchorName} — {FormatEdgeTr(peer.AssignedEdgeOnLocal)} Kenar (%{peer.EdgeOffsetStart * 100:F0} - %{peer.EdgeOffsetEnd * 100:F0})\nSürükleyerek herhangi bir monitörün veya cihazın kenarına yapıştırabilirsiniz."
             };
 
             var stack = new StackPanel
@@ -822,7 +848,7 @@ public partial class MainWindow : Window
             // Peer Device Title Banner
             stack.Children.Add(new TextBlock
             {
-                Text = $"{GetPlatformIcon(peer.Platform)} {peer.DeviceName}",
+                Text = $"{GetPlatformIcon(peer.Platform)} {peer.DisplayName}",
                 FontWeight = FontWeights.Bold,
                 FontSize = 10.5,
                 Foreground = Brushes.White,
@@ -1765,6 +1791,94 @@ public partial class MainWindow : Window
 
     private void StopCursorTrackingTimer() { }
 
+    private Window? _remoteHostHudWindow;
+
+    private void ShowRemoteHostHud(PeerDeviceNode activePeer)
+    {
+        try
+        {
+            if (_remoteHostHudWindow == null)
+            {
+                _remoteHostHudWindow = new Window
+                {
+                    WindowStyle = WindowStyle.None,
+                    AllowsTransparency = true,
+                    Background = Brushes.Transparent,
+                    Topmost = true,
+                    ShowInTaskbar = false,
+                    ShowActivated = false,
+                    Focusable = false,
+                    Width = 660,
+                    Height = 44,
+                    WindowStartupLocation = WindowStartupLocation.Manual
+                };
+
+                var border = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(15, 23, 42)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94)),
+                    BorderThickness = new Thickness(1.5),
+                    CornerRadius = new CornerRadius(7),
+                    Padding = new Thickness(12, 6, 12, 6)
+                };
+
+                var dock = new DockPanel();
+
+                var reclaimBtn = new Button
+                {
+                    Content = "⬅️ Kontrolü Geri Al",
+                    Background = new SolidColorBrush(Color.FromRgb(220, 38, 38)),
+                    Foreground = Brushes.White,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 11,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(8, 3, 8, 3),
+                    Margin = new Thickness(10, 0, 0, 0),
+                    Cursor = Cursors.Hand
+                };
+                DockPanel.SetDock(reclaimBtn, Dock.Right);
+                reclaimBtn.Click += (s, e) =>
+                {
+                    _inputEngine.EmergencyReclaimOrReturnToHost();
+                };
+                dock.Children.Add(reclaimBtn);
+
+                var hudText = new TextBlock
+                {
+                    Text = $"🟢 Kontrol '{activePeer.DisplayName}' Ekranında | Geri Dönüş: [Ctrl+Alt+L] / [ScrollLock] veya",
+                    Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128)),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 11.5,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                dock.Children.Add(hudText);
+
+                border.Child = dock;
+                _remoteHostHudWindow.Content = border;
+            }
+            else if (_remoteHostHudWindow.Content is Border b && b.Child is DockPanel dp && dp.Children.OfType<TextBlock>().FirstOrDefault() is TextBlock tb)
+            {
+                tb.Text = $"🟢 Kontrol '{activePeer.DisplayName}' Ekranında | Geri Dönüş: [Ctrl+Alt+L] / [ScrollLock] veya";
+            }
+
+            double primW = SystemParameters.PrimaryScreenWidth;
+            _remoteHostHudWindow.Left = Math.Max(20, (primW - _remoteHostHudWindow.Width) / 2);
+            _remoteHostHudWindow.Top = 16;
+            _remoteHostHudWindow.Show();
+        }
+        catch { }
+    }
+
+    private void HideRemoteHostHud()
+    {
+        try
+        {
+            _remoteHostHudWindow?.Hide();
+        }
+        catch { }
+    }
+
     private void OnActiveTargetChanged(PeerDeviceNode? activePeer, ScreenEdge edge, float normalizedPos)
     {
         Dispatcher.InvokeAsync(() =>
@@ -1774,8 +1888,9 @@ public partial class MainWindow : Window
                 ActiveFocusBadge.Background = new SolidColorBrush(Color.FromRgb(30, 58, 138));
                 ActiveFocusBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
                 ActiveFocusText.Foreground = new SolidColorBrush(Color.FromRgb(125, 211, 252));
-                ActiveFocusText.Text = $"{GetPlatformIcon(activePeer.Platform)} Kontrol: {activePeer.DeviceName}";
-                AppendLog($"[Kenar Geçişi] ➡️ İmleç ve klavye '{activePeer.DeviceName}' ekranına geçti.");
+                ActiveFocusText.Text = $"{GetPlatformIcon(activePeer.Platform)} Kontrol: {activePeer.DisplayName}";
+                AppendLog($"[Kenar Geçişi] ➡️ İmleç ve klavye '{activePeer.DisplayName}' ekranına geçti.");
+                ShowRemoteHostHud(activePeer);
             }
             else
             {
@@ -1784,6 +1899,7 @@ public partial class MainWindow : Window
                 ActiveFocusText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));
                 ActiveFocusText.Text = "🪟 Kontrol: Bu Bilgisayar (Yerel)";
                 AppendLog("[Kenar Geçişi] ⬅️ İmleç ve klavye ana ekrana geri döndü.");
+                HideRemoteHostHud();
             }
             RedrawDisplayArrangementCanvas();
         });

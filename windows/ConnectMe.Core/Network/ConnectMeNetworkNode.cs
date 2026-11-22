@@ -377,6 +377,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             {
                 DeviceId = id,
                 DeviceName = deviceName,
+                Nickname = TrustStore.GetDeviceNickname(id),
                 Platform = platform,
                 IpAddress = ipAddress,
                 UdpInputPort = udpPort,
@@ -393,6 +394,10 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             {
                 existing.IpAddress = ipAddress;
                 existing.DeviceName = deviceName;
+                if (string.IsNullOrEmpty(existing.Nickname))
+                {
+                    existing.Nickname = TrustStore.GetDeviceNickname(id);
+                }
                 existing.UdpInputPort = udpPort;
                 existing.TcpControlPort = tcpPort;
                 existing.ScreenWidth = screenWidth;
@@ -996,7 +1001,25 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
             rec.CanvasX = peer.CanvasX;
             rec.CanvasY = peer.CanvasY;
             rec.HasCustomCanvasPosition = peer.HasCustomCanvasPosition;
+            if (!string.IsNullOrEmpty(peer.Nickname))
+            {
+                rec.Nickname = peer.Nickname;
+            }
             TrustStore.AddOrUpdateTrustedDevice(rec);
+        }
+    }
+
+    public void SetPeerNickname(string deviceId, string? nickname)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return;
+        string? clean = string.IsNullOrWhiteSpace(nickname) ? null : nickname.Trim();
+        TrustStore.SetDeviceNickname(deviceId, clean);
+
+        var peer = DiscoveredPeers.FirstOrDefault(p => string.Equals(p.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
+        if (peer != null)
+        {
+            peer.Nickname = clean;
+            PeerDiscoveredOrUpdated?.Invoke(peer);
         }
     }
 
@@ -1642,6 +1665,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         {
                             DeviceId = beacon.DeviceId,
                             DeviceName = beacon.DeviceName,
+                            Nickname = TrustStore.GetDeviceNickname(beacon.DeviceId),
                             Platform = beacon.Platform,
                             IpAddress = senderIp,
                             UdpInputPort = beacon.UdpInputPort,
@@ -1659,6 +1683,10 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                     (_, existing) =>
                     {
                         existing.DeviceName = beacon.DeviceName;
+                        if (string.IsNullOrEmpty(existing.Nickname))
+                        {
+                            existing.Nickname = TrustStore.GetDeviceNickname(beacon.DeviceId);
+                        }
                         existing.Platform = beacon.Platform;
                         existing.IpAddress = senderIp;
                         existing.UdpInputPort = beacon.UdpInputPort;

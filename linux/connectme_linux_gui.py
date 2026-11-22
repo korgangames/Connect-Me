@@ -31,7 +31,7 @@ import urllib.error
 from pathlib import Path
 from typing import Optional, Dict, Set, List, Tuple, Any, Callable
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
@@ -439,7 +439,7 @@ class HostCaptureOverlay:
         self.overlay.configure(bg="#0F172A", bd=1, relief="ridge")
         self.overlay.geometry(f"{hud_w}x{hud_h}+{hud_x}+{hud_y}")
 
-        peer_name = peer.get("deviceName", "Cihaz")
+        peer_name = self.node.get_device_display_name(peer)
         grab_tag = " [Donanım 1000Hz]" if grab_ok else " [Yazılımsal Takip]"
         lbl = tk.Label(
             self.overlay,
@@ -612,6 +612,20 @@ class HostCaptureOverlay:
 
         if self.gui and hasattr(self.gui, "edge_sentinels"):
             self.gui.edge_sentinels.show_with_cooldown(0.8)
+
+    def reposition(self):
+        """Re-centers the floating HUD banner across the updated virtual desktop bounds."""
+        if not self.is_active or not self.overlay:
+            return
+        try:
+            min_x, min_y, vw, vh = self.node.topology.virtual_desktop_bounds()
+            hud_w = 710
+            hud_h = 46
+            hud_x = min_x + max(20, (vw - hud_w) // 2)
+            hud_y = min_y + 16
+            self.overlay.geometry(f"{hud_w}x{hud_h}+{hud_x}+{hud_y}")
+        except Exception:
+            pass
 
 
 class ConnectMeLinuxGui:
@@ -1046,6 +1060,27 @@ class ConnectMeLinuxGui:
         disc_btn = ttk.Button(act_box, text="🔌 Bağlantıyı Kes", style="Danger.TButton", command=self._on_disconnect_click)
         disc_btn.pack(side=tk.RIGHT, padx=6)
 
+        # Cihaz Takma Adı (Nickname) Satırı
+        nick_box = ttk.Frame(tab, style="Card.TFrame", padding=8)
+        nick_box.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(nick_box, text="🏷️ Cihaz Takma Adı (Örn: Laptop, Masaüstü):", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=6)
+        self.nickname_entry = tk.Entry(
+            nick_box,
+            width=20,
+            font=("Segoe UI", 10),
+            bg="#1E293B",
+            fg="#F8FAFC",
+            insertbackground="#38BDF8",
+            relief="solid",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground="#475569",
+            highlightcolor="#38BDF8"
+        )
+        self.nickname_entry.pack(side=tk.LEFT, padx=6)
+        ttk.Button(nick_box, text="💾 Takma Adı Kaydet", command=self._on_save_nickname_click).pack(side=tk.LEFT, padx=6)
+        ttk.Button(nick_box, text="❌ Kaldır", command=self._on_remove_nickname_click).pack(side=tk.LEFT, padx=2)
+
         # Kayıtlı Güvenilir Cihazlar
         ttk.Label(tab, text="Kayıtlı Güvenilir Cihazlar (Otomatik Bağlananlar):", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(12, 4))
         self.trusted_list = tk.Listbox(tab, bg="#1E293B", fg="#4ADE80", selectbackground="#0284C7",
@@ -1425,6 +1460,13 @@ class ConnectMeLinuxGui:
             self.pair_prompt_lbl.configure(text=f"'{peer.get('deviceName')}' 6 Haneli Kodu:")
             if hasattr(self, "pair_btn"):
                 self.pair_btn.configure(text=f"🔗 '{peer.get('deviceName')}' ile Doğrula ve Bağlan")
+            if hasattr(self, "nickname_entry"):
+                nick = self.node.get_device_nickname(self.selected_peer_id) or ""
+                try:
+                    self.nickname_entry.delete(0, tk.END)
+                    self.nickname_entry.insert(0, nick)
+                except Exception:
+                    pass
             self.pin_entry.focus_set()
 
     def _on_inbound_accept_click(self):
@@ -1487,7 +1529,9 @@ class ConnectMeLinuxGui:
         else:
             for pid, p in self.node.peers.items():
                 self._displayed_peer_ids.append(pid)
-                name = p.get("deviceName", pid)
+                real_name = p.get("deviceName", pid)
+                nick = self.node.get_device_nickname(pid)
+                name = f"{nick} [{real_name}]" if nick else real_name
                 ip = p.get("ipAddress", "")
                 is_mut = p.get("isMutuallyPaired", False)
                 is_trust = p.get("is_trusted", False)
@@ -1509,6 +1553,17 @@ class ConnectMeLinuxGui:
                 idx = keys.index(self.selected_peer_id)
                 self.peer_list.selection_set(idx)
 
+            if hasattr(self, "nickname_entry"):
+                curr_sel_id = self.selected_peer_id or (keys[0] if keys else None)
+                if curr_sel_id:
+                    cur_nick = self.node.get_device_nickname(curr_sel_id) or ""
+                    try:
+                        if self.root.focus_get() != self.nickname_entry:
+                            self.nickname_entry.delete(0, tk.END)
+                            self.nickname_entry.insert(0, cur_nick)
+                    except Exception:
+                        pass
+
         has_pending_inbound = any(p.get("in_ok") and not p.get("isMutuallyPaired") for p in self.node.peers.values())
         if not has_pending_inbound and self.inbound_card.winfo_ismapped():
             self.inbound_card.pack_forget()
@@ -1519,7 +1574,9 @@ class ConnectMeLinuxGui:
             self.trusted_list.insert(tk.END, "  (Henüz kayıtlı güvenilir cihaz yok)")
         else:
             for d in self.node.trusted_devices.values():
-                self.trusted_list.insert(tk.END, f"  ⭐ {d.get('deviceName')} ({d.get('deviceId')}) — Otomatik Bağlantı: AÇIK")
+                d_nick = d.get("nickname")
+                d_name = f"{d_nick} [{d.get('deviceName')}]" if d_nick else d.get('deviceName')
+                self.trusted_list.insert(tk.END, f"  ⭐ {d_name} ({d.get('deviceId')}) — Otomatik Bağlantı: AÇIK")
 
         # 3. Ortak Cep Dosyaları
         self._capture_tk_selections(include_drag=False)
@@ -2554,7 +2611,7 @@ class ConnectMeLinuxGui:
                 self.canvas.create_rectangle(px1, py1, px2, py2, fill=card_fill, outline=card_outline, width=outline_w, tags=(card_tag, f"peer_box_{pid}", "peer_card"))
 
                 dev_icon = "🪟" if "win" in p.get("platform", "").lower() else ("📱" if "android" in p.get("platform", "").lower() else "💻")
-                dev_name = p.get("deviceName", pid)[:18]
+                dev_name = self.node.get_device_display_name(p)[:18]
                 self.canvas.create_text(px1 + 10, py1 + 14, anchor=tk.W, text=f"{dev_icon} {dev_name}", fill="#FFFFFF", font=("Segoe UI", 10, "bold"), tags=(card_tag,))
                 self.canvas.create_text(px1 + 10, py1 + 32, anchor=tk.W, text=status_txt, fill=status_col, font=("Segoe UI", 8, "bold"), tags=(card_tag,))
 
@@ -2640,6 +2697,7 @@ class ConnectMeLinuxGui:
                 self.canvas.tag_bind(card_tag, "<B1-Motion>", self._on_peer_drag_motion)
                 self.canvas.tag_bind(card_tag, "<ButtonRelease-1>", self._on_peer_drag_release)
                 self.canvas.tag_bind(card_tag, "<Double-Button-1>", lambda e, peer_obj=p: self._show_enter_pin_dialog(peer_obj))
+                self.canvas.tag_bind(card_tag, "<Button-3>", lambda e, peer_obj=p: self._show_peer_context_menu(e, peer_obj))
                 self.canvas.tag_bind(card_tag, "<Enter>", lambda e: self.canvas.config(cursor="fleur"))
                 self.canvas.tag_bind(card_tag, "<Leave>", lambda e: self.canvas.config(cursor=""))
         else:
@@ -2824,11 +2882,13 @@ class ConnectMeLinuxGui:
             rh = self.root.winfo_screenheight()
         except Exception:
             rw, rh = None, None
-        mons = self.node.topology.refresh_monitors(root_w=rw, root_h=rh)
+        mons = self.node.handle_display_configuration_changed(root_w=rw, root_h=rh)
         self._log(f"[Topoloji] Çoklu monitör düzeni güncellendi ({len(mons)} ekran algılandı).")
         self._draw_2d_canvas()
         if hasattr(self, "edge_sentinels"):
             self.edge_sentinels.update_sentinels()
+        if hasattr(self, "host_capture_overlay") and self.host_capture_overlay.is_active:
+            self.host_capture_overlay.reposition()
 
     def _jump_to_manual_ip(self):
         self.notebook.select(1)
@@ -2903,30 +2963,100 @@ class ConnectMeLinuxGui:
         self._log(f"'{target_peer.get('deviceName')}' için PIN ({pin}) doğrulanıyor...")
         threading.Thread(target=self._send_pair_request, args=(target_peer, pin, req_trust, token), daemon=True).start()
 
-    def _on_disconnect_click(self):
-        target_peer = None
+    def _get_target_peer(self) -> Optional[Dict[str, Any]]:
+        """Returns the currently selected peer or the single available peer."""
         if self.selected_peer_id and self.selected_peer_id in self.node.peers:
-            target_peer = self.node.peers[self.selected_peer_id]
+            return self.node.peers[self.selected_peer_id]
+        if len(self.node.peers) == 1:
+            return next(iter(self.node.peers.values()))
+        if hasattr(self, "peer_list"):
+            sel = self.peer_list.curselection()
+            if sel:
+                if hasattr(self, "_displayed_peer_ids") and sel[0] < len(self._displayed_peer_ids):
+                    pid = self._displayed_peer_ids[sel[0]]
+                    return self.node.peers.get(pid)
+                keys = list(self.node.peers.keys())
+                if sel[0] < len(keys):
+                    return self.node.peers.get(keys[sel[0]])
+        return None
+
+    def _on_save_nickname_click(self):
+        peer = self._get_target_peer()
+        if not peer:
+            messagebox.showinfo("Cihaz Seçilmedi", "Lütfen takma ad belirlemek için bir cihaz seçin.")
+            return
+        nick = self.nickname_entry.get().strip()
+        dev_id = peer.get("deviceId", "")
+        self.node.set_device_nickname(dev_id, nick)
+        disp_name = self.node.get_device_display_name(peer)
+        self._log(f"[Takma Ad] 🏷️ '{peer.get('deviceName')}' cihazına '{disp_name}' takma adı atandı.")
+        self._refresh_state()
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.config(text=f"🏷️ Takma ad kaydedildi: {disp_name}", fg="#38BDF8")
+
+    def _on_remove_nickname_click(self):
+        peer = self._get_target_peer()
+        if not peer:
+            return
+        dev_id = peer.get("deviceId", "")
+        self.node.set_device_nickname(dev_id, "")
+        self.nickname_entry.delete(0, tk.END)
+        self._log(f"[Takma Ad] ❌ '{peer.get('deviceName')}' cihazının takma adı kaldırıldı.")
+        self._refresh_state()
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.config(text=f"Takma ad kaldırıldı: {peer.get('deviceName')}", fg="#94A3B8")
+
+    def _prompt_set_nickname(self, peer: Dict[str, Any]):
+        dev_id = peer.get("deviceId", "")
+        cur_nick = self.node.get_device_nickname(dev_id) or ""
+        new_nick = simpledialog.askstring(
+            "Cihaz Takma Adı",
+            f"'{peer.get('deviceName')}' için yeni takma ad girin (Örn: Laptop, Masaüstü):",
+            initialvalue=cur_nick,
+            parent=self.root
+        )
+        if new_nick is not None:
+            self.node.set_device_nickname(dev_id, new_nick.strip())
+            disp_name = self.node.get_device_display_name(peer)
+            self._log(f"[Takma Ad] 🏷️ '{peer.get('deviceName')}' -> '{disp_name}' olarak güncellendi.")
+            self._refresh_state()
+
+    def _remove_nickname(self, peer: Dict[str, Any]):
+        dev_id = peer.get("deviceId", "")
+        self.node.set_device_nickname(dev_id, "")
+        self._log(f"[Takma Ad] ❌ '{peer.get('deviceName')}' takma adı silindi.")
+        self._refresh_state()
+
+    def _show_peer_context_menu(self, event, peer: Dict[str, Any]):
+        menu = tk.Menu(self.root, tearoff=0, bg="#1E293B", fg="#F8FAFC", activebackground="#0284C7", activeforeground="#FFFFFF")
+        disp_name = self.node.get_device_display_name(peer)
+        cur_nick = self.node.get_device_nickname(peer.get("deviceId", ""))
+
+        menu.add_command(label=f"🏷️ Takma Ad Belirle / Değiştir...", command=lambda: self._prompt_set_nickname(peer))
+        if cur_nick:
+            menu.add_command(label="❌ Takma Adı Kaldır", command=lambda: self._remove_nickname(peer))
+        menu.add_separator()
+        is_mut = peer.get("isMutuallyPaired", False)
+        if is_mut:
+            menu.add_command(label="🖱️ İmleci Bu Ekrana Gönder", command=lambda: self._activate_host_capture(peer, peer.get("assignedEdge", EDGE_RIGHT)))
+            menu.add_command(label="🔌 Bağlantıyı Kes", command=lambda: self.node.disconnect_peer(peer.get("deviceId", "")))
         else:
+            menu.add_command(label="🔐 6 Haneli Kodu Gir ve Bağlan", command=lambda: self._show_enter_pin_dialog(peer))
+
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _on_disconnect_click(self):
+        target_peer = self._get_target_peer()
+        if not target_peer:
             paired = [p for p in self.node.peers.values() if p.get("isMutuallyPaired")]
             if len(paired) == 1:
                 target_peer = paired[0]
             elif len(paired) > 1:
-                sel = self.peer_list.curselection()
-                if sel:
-                    keys = list(self.node.peers.keys())
-                    if sel[0] < len(keys):
-                        target_peer = self.node.peers[keys[sel[0]]]
-                if not target_peer:
-                    messagebox.showinfo("Cihaz Seçin", "Lütfen bağlantısını kesmek istediğiniz cihazı listeden seçin.")
-                    return
-
-        if not target_peer:
-            sel = self.peer_list.curselection()
-            if sel:
-                keys = list(self.node.peers.keys())
-                if sel[0] < len(keys):
-                    target_peer = self.node.peers[keys[sel[0]]]
+                messagebox.showinfo("Cihaz Seçin", "Lütfen bağlantısını kesmek istediğiniz cihazı listeden seçin.")
+                return
 
         if not target_peer:
             messagebox.showinfo("Cihaz Yok", "Bağlantısı kesilecek aktif bir cihaz seçilmedi.")
