@@ -53,7 +53,7 @@ def _resolve_app_version() -> str:
                     return v
             except Exception:
                 pass
-    return "1.8.33"
+    return "1.8.34"
 
 VERSION = _resolve_app_version()
 
@@ -3571,12 +3571,15 @@ class ConnectMeLinuxNode:
                     continue
 
                 dev_id = payload.get("deviceId", "")
-                if not dev_id or dev_id == self.device_id:
+                if not dev_id or dev_id.lower() == self.device_id.lower():
+                    continue
+
+                sender_ip = addr[0]
+                if sender_ip == "127.0.0.1" or sender_ip == self.get_local_ip():
                     continue
 
                 sender_name = payload.get("deviceName", dev_id)
                 sender_plat = payload.get("platform", "unknown")
-                sender_ip = addr[0]
 
                 is_new = dev_id not in self.peers
                 saved_nick = self.get_device_nickname(dev_id)
@@ -3607,6 +3610,27 @@ class ConnectMeLinuxNode:
                 peer["screenWidth"] = payload.get("screenWidth", peer.get("screenWidth", 1920))
                 peer["screenHeight"] = payload.get("screenHeight", peer.get("screenHeight", 1080))
                 peer["lastSeen"] = time.time()
+
+                # Deduplicate: if another peer in self.peers has the same IP address, transfer state and remove duplicate
+                for old_id, old_p in list(self.peers.items()):
+                    if old_id.lower() != dev_id.lower() and old_p.get("ipAddress") == sender_ip:
+                        if old_p.get("isMutuallyPaired"):
+                            peer["isMutuallyPaired"] = True
+                            peer["in_ok"] = True
+                            peer["out_ok"] = True
+                        if old_p.get("is_trusted"):
+                            peer["is_trusted"] = True
+                        if not peer.get("nickname") and old_p.get("nickname"):
+                            peer["nickname"] = old_p["nickname"]
+                            peer["displayName"] = old_p["displayName"]
+                        del self.peers[old_id]
+
+                # Prune stale unpaired & untrusted peers unseen for > 45 seconds
+                now_ts = time.time()
+                for stale_id, stale_p in list(self.peers.items()):
+                    if not stale_p.get("isMutuallyPaired") and not stale_p.get("is_trusted"):
+                        if now_ts - stale_p.get("lastSeen", now_ts) > 45.0:
+                            del self.peers[stale_id]
 
                 arr = self.get_peer_arrangement(dev_id)
                 peer["assignedEdge"] = arr.get("assignedEdge", EDGE_RIGHT)

@@ -1,3 +1,34 @@
+# Connect Me v1.8.34 — Simülasyon Butonunun Kaldırılması, Cihaz Ağacında Mükerrer Cihaz (Duplication) Düzeltmesi ve Koloni Görünümü İyileştirmesi (Windows & Linux)
+
+Bu sürüm; arayüzdeki gereksiz simülasyon butonunu ve test kalıntılarını temizler, cihaz listesindeki mükerrer/çift cihaz (duplication) oluşumunu kökten engeller ve Koloni (Colony) ağaç hiyerarşisini yerel makineyi de kapsayacak şekilde net ve anlaşılır hale getirir:
+
+1. **Simülasyon Butonunun ve Test Kalıntılarının Kaldırılması:**
+   - **Arayüz Temizliği:** Windows WPF başlık çubuğunda bulunan `+Simüle Et` (`AddMultiSimBtn`) butonu ve eşleşme kartındaki `[Sim] Karşı Cihazda Da Kodumu Onayla` (`SimConfirmOurPinBtn`) butonu tamamen kaldırıldı.
+   - **Arka Plan Kod Temizliği:** Arka planda sanal soket döngüleri çalıştıran simülasyon metodları (`RunSimulatedDeviceNodeLoopAsync`, simülasyon sayaçları, CTS ve soket koleksiyonları) `MainWindow.xaml.cs` üzerinden bütünüyle temizlendi; prodüksiyon arayüzü sade ve kararlı hale getirildi.
+
+2. **Cihaz Ağacındaki Mükerrer / Çift Cihaz (Duplication) Sorununun Giderilmesi:**
+   - **Büyük/Küçük Harf Duyarsızlığı (Case-Insensitive DeviceId):** Ağ düğümünde (`ConnectMeNetworkNode.cs`) eşlerin tutulduğu `_peers` sözlüğü `StringComparer.OrdinalIgnoreCase` ile güncellendi. Böylece aynı makinenin farklı harf büyüklüklerindeki anonsları (`WIN-PC` vs `win-pc`) iki ayrı cihaz olarak listelenmez.
+   - **Aynı Fiziksel Cihaz / IP Mükerrerlik Çözümü (`ArePeersSamePhysicalEndpoint`):** Koloniden tanıtılan (`COLONY_INTRODUCE`) veya manuel eklenen geçici eşlerin (`peer-192.168.1.50:42850`), sonradan UDP keşif paketi yaydıklarında aynı fiziksel IP adresi için ikinci bir kayıt oluşturması engellendi. Aynı IP'ye sahip eski kayıt tespit edildiğinde güven ve eşleşme durumu yeni kayda aktarılır (`MigrateState`) ve eski geçici kayıt listeden silinir.
+   - **Hayalet Cihazların Temizlenmesi (`PruneStalePeers`):** Ağdan aniden ayrılan veya kapatılan eşleştirilmemiş cihazların listede kalmasını önlemek için 45 saniyeden uzun süredir sinyal göndermeyen hayalet kayıtlar periyodik olarak temizlenir.
+   - **Kendi Kendini Keşfetme (Loopback / Self-Detection Koruması):** Çoklu ağ bağdaştırıcısına (Ethernet + Wi-Fi) sahip bilgisayarlarda yerel makinenin kendi broadcast paketlerini dış bir cihazmış gibi listeye eklemesi `IsSelf` ve `IsLocalAddress` kontrolleriyle engellendi.
+
+3. **Koloni (Colony) Hiyerarşisinin Netleştirilmesi ve Seçim Kayması Düzeltmesi:**
+   - **Aktif Koloni Ağı (`🪐 AKTİF KOLONİ AĞI - N Cihaz Bağlı`):** Tek bir cihazla eşleşildiğinde bile beliren yanıltıcı "Koloni: [Cihaz] (1 Cihaz)" başlığı yerine; yerel makineyi kök alan (`💻 [Bu Bilgisayar] (Yerel Makine)`), doğrudan bağlı eşleri (`└ 🐧 Linux-Laptop`) ve aktarma düğümlerini içeren tek ve net bir Aktif Koloni Ağacı oluşturuldu.
+   - **Keşfedilen Harici Koloniler:** Ağdaki bağımsız ve çok üyeli harici koloniler `🟣 TEK ŞİFRE İLE BAĞLANILABİLİR` başlığı altında ayrı bir grup olarak sunulur.
+   - **Bağımsız Cihazlar:** Henüz bir koloniye dahil olmayan cihazlar `🌐 BAĞIMSIZ CİHAZLAR` başlığı altında listelenir.
+   - **Liste Seçim Kayması (Selection Index Drift) Çözümü:** Arayüzdeki dekoratif başlıkların indeks kaydırmasını önlemek amacıyla `PeersListBox_SelectionChanged` mantığı `tb.Tag` üzerinden tip güvenli (`PeerDeviceNode`, `"LOCAL"`, `"HEADER"`) hale getirildi. Başlıklara tıklanması engellendi ve yanlış cihaz seçilme riski tamamen ortadan kaldırıldı.
+   - **Linux GUI Senkronizasyonu:** `connectme_linux_gui.py` üzerinde de aynı IP tekilleştirme ve `🪐 AKTİF KOLONİ: Bu Bilgisayar + ...` ağaç yapısı uygulandı.
+
+4. **Otomatik Birim Testleri:**
+   - `windows/ConnectMe.Tests/Program.cs` içerisine `TestDeviceDeduplicationAndClearColonyTreeAsync` birim testi eklendi:
+     - Aynı IP adresine sahip cihazların tekilleştirildiği ve eşleşme durumunun başarıyla taşındığı,
+     - Farklı harf büyüklüklerindeki cihaz kimliklerinin tek bir kayıtta birleştiği,
+     - 45 saniyeyi aşan sahipsiz hayalet cihazların `PruneStalePeers` ile temizlendiği,
+     - Aktif koloni cihaz sayısının yerel makine dahil doğru hesaplandığı doğrulandı.
+   - Test paketindeki 97 testin 97'si de başarıyla geçti.
+
+---
+
 # Connect Me v1.8.33 — Ekran Sınırı Geçiş Tutarsızlıkları, Erken Atlama (Premature Jump) ve Sınırda Kilitlenme/Takılma Düzeltmeleri (Windows & Linux)
 
 Bu sürüm; cihazlar arası ekran sınırı geçişlerinde yaşanan tutarsızlıkları, imlecin ekrandan çıkamayıp kilitlenmesi/takılması (locked out / stuck) ve ekranın henüz %25'i varken istemci cihaza erkenden atlaması (premature jump) sorunlarını kökten çözer:

@@ -28,13 +28,10 @@ public partial class MainWindow : Window
     private readonly WindowsAudioPlaybackEngine _audioPlayback;
     private readonly WindowsAudioCaptureEngine _audioCapture;
     private readonly List<ShelfItemEntry> _shelfItems = new();
-    private readonly List<UdpClient> _simSockets = new();
-    private readonly CancellationTokenSource _simCts = new();
 
     private UpdateReleaseInfo? _latestAvailableUpdate;
     private PeerDeviceNode? _selectedPeer;
     private PeerDeviceNode? _inboundRequestPeer;
-    private int _simDeviceCounter;
 
     // 2D Canvas Dragging state
     private PeerDeviceNode? _draggingPeer;
@@ -147,11 +144,6 @@ public partial class MainWindow : Window
     private async void MainWindow_Closed(object? sender, EventArgs e)
     {
         StopCursorTrackingTimer();
-        _simCts.Cancel();
-        foreach (var s in _simSockets)
-        {
-            try { s.Dispose(); } catch { }
-        }
         _clipboardService.Dispose();
         _audioCapture.Dispose();
         _audioPlayback.Dispose();
@@ -231,10 +223,32 @@ public partial class MainWindow : Window
 
     private void RefreshPeersList()
     {
-        var peers = _network.DiscoveredPeers
+        // 1. Prune stale offline peers that are neither trusted nor paired
+        _network.PruneStalePeers();
+
+        var localIps = ConnectMeNetworkNode.GetLocalIPv4Addresses().Select(a => a.ToString()).ToHashSet();
+
+        // 2. Filter out self (local machine) and deduplicate any peers in memory
+        var rawPeers = _network.DiscoveredPeers
+            .Where(p => !string.Equals(p.DeviceId, _network.LocalDeviceId, StringComparison.OrdinalIgnoreCase) &&
+                        !localIps.Contains(p.IpAddress) &&
+                        !IPAddress.IsLoopback(IPAddress.TryParse(p.IpAddress, out var ip) ? ip : IPAddress.Any))
             .OrderByDescending(p => p.IsMutuallyPaired)
+            .ThenByDescending(p => p.IsTrusted)
             .ThenByDescending(p => p.LastSeen)
             .ToList();
+
+        // Deduplicate in display list by unique IP and unique DeviceId (prevent any ghost/duplicate entries)
+        var seenIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var peers = new List<PeerDeviceNode>();
+        foreach (var p in rawPeers)
+        {
+            if (seenIds.Add(p.DeviceId) && (string.IsNullOrEmpty(p.IpAddress) || seenIps.Add(p.IpAddress)))
+            {
+                peers.Add(p);
+            }
+        }
 
         var waitingPeer = peers.FirstOrDefault(p => p.RemoteEnteredMyPinVerified && !p.IsMutuallyPaired);
         if (waitingPeer != null)
@@ -252,111 +266,190 @@ public partial class MainWindow : Window
         }
 
         string? selectedId = _selectedPeer?.DeviceId;
+        bool selectLocal = (_selectedPeer == null && string.Equals(selectedId, "LOCAL", StringComparison.OrdinalIgnoreCase));
 
         PeersListBox.SelectionChanged -= PeersListBox_SelectionChanged;
         PeersListBox.Items.Clear();
 
-        // Check for Colony Groups
-        var colonyGroups = peers.Where(p => !string.IsNullOrEmpty(p.ColonyId))
-                                .GroupBy(p => p.ColonyId!)
-                                .ToDictionary(g => g.Key, g => g.ToList());
-
         int restoreIdx = -1;
-        var renderedIds = new HashSet<string>();
+        var renderedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // 1. Render Colony groups if any have multiple peers or connected members
-        foreach (var (colonyId, groupPeers) in colonyGroups)
+        // 3. Active Colony Mesh (Our Local Machine + Mutually Paired Peers)
+        var activePairedPeers = peers.Where(p => p.IsMutuallyPaired).ToList();
+        if (activePairedPeers.Count > 0)
         {
-            if (groupPeers.Count > 1 || groupPeers.Any(p => p.IsMutuallyPaired))
+            int totalActiveColonyCount = 1 + activePairedPeers.Count;
+            var activeColonyHeader = new TextBlock
             {
-                string colonyNames = string.Join(" + ", groupPeers.Select(p => p.DeviceName).Distinct());
-                bool isColonyActive = groupPeers.Any(p => p.IsMutuallyPaired);
-                string colStatus = isColonyActive ? "🟢 KOLONİ AKTİF" : "🪐 BAĞLANILABİLİR KOLONİ";
+                Text = $"🪐 AKTİF KOLONİ AĞI ({totalActiveColonyCount} Cihaz Bağlı)\n   🟢 KVM İmleç & Pano Senkronizasyonu Aktif",
+                FontSize = 11.5,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(52, 211, 153)), // Emerald green
+                Margin = new Thickness(2, 6, 2, 2),
+                Tag = "HEADER"
+            };
+            PeersListBox.Items.Add(activeColonyHeader);
 
-                var colHeader = new TextBlock
+            // Local machine node as root of active colony
+            int localIdx = PeersListBox.Items.Count;
+            if (selectLocal) restoreIdx = localIdx;
+
+            var localItemBlock = new TextBlock
+            {
+                Text = $"   ├ 💻 [Bu Bilgisayar] {_network.LocalDeviceName} (Yerel Makine)\n      🟢 YEREL KONTROL MERKEZİ ({_topology.LocalWidth}x{_topology.LocalHeight})",
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(Color.FromRgb(147, 197, 253)), // Sky blue
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(4, 2, 2, 3),
+                Tag = "LOCAL"
+            };
+            PeersListBox.Items.Add(localItemBlock);
+
+            for (int i = 0; i < activePairedPeers.Count; i++)
+            {
+                var p = activePairedPeers[i];
+                renderedIds.Add(p.DeviceId);
+                int currentIdx = PeersListBox.Items.Count;
+                if (p.DeviceId == selectedId) restoreIdx = currentIdx;
+
+                bool isLast = (i == activePairedPeers.Count - 1);
+                string branch = isLast ? "   └" : "   ├";
+
+                string icon = GetPlatformIcon(p.Platform);
+                string nameDisplay = !string.IsNullOrWhiteSpace(p.Nickname)
+                    ? $"{p.Nickname} [{p.DeviceName}]"
+                    : p.DeviceName;
+                string multiMonTag = p.RemoteMonitorCount > 1 ? $" [{p.RemoteMonitorCount} Ekran]" : string.Empty;
+                string monPrefix = !string.IsNullOrEmpty(p.AttachedLocalMonitorId) && _topology.LocalMonitors.Count > 1
+                    ? $"{p.AttachedLocalMonitorId} "
+                    : string.Empty;
+                string trustStar = p.IsTrusted ? "⭐ " : "";
+
+                string targetDesc = !string.IsNullOrEmpty(p.AttachedToDeviceId) && p.AttachedToDeviceId != _network.LocalDeviceId
+                    ? $"[Bağlı: {p.AttachedToDeviceId}] "
+                    : "";
+
+                string stateBadge = $"{trustStar}🟢 ONAYLI ({targetDesc}{monPrefix}{FormatEdgeShortTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-{p.EdgeOffsetEnd * 100:F0})";
+
+                var itemBlock = new TextBlock
                 {
-                    Text = $"🪐 KOLONİ: [{colonyNames}] ({groupPeers.Count} Cihaz)\n   {colStatus}",
+                    Text = $"{branch} {icon} {nameDisplay}{multiMonTag} ({p.IpAddress})\n      {stateBadge}",
                     FontSize = 11.5,
-                    FontWeight = FontWeights.Bold,
-                    Foreground = isColonyActive ? new SolidColorBrush(Color.FromRgb(52, 211, 153)) : new SolidColorBrush(Color.FromRgb(192, 132, 252)),
-                    Margin = new Thickness(2, 6, 2, 2)
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(4, 2, 2, 3),
+                    Tag = p
                 };
-                PeersListBox.Items.Add(colHeader);
-
-                foreach (var p in groupPeers)
-                {
-                    renderedIds.Add(p.DeviceId);
-                    int currentIdx = PeersListBox.Items.Count;
-                    if (p.DeviceId == selectedId) restoreIdx = currentIdx;
-
-                    string icon = GetPlatformIcon(p.Platform);
-                    string nameDisplay = !string.IsNullOrWhiteSpace(p.Nickname)
-                        ? $"{p.Nickname} [{p.DeviceName}]"
-                        : p.DeviceName;
-                    string multiMonTag = p.RemoteMonitorCount > 1 ? $" [{p.RemoteMonitorCount} Ekran]" : string.Empty;
-                    string monPrefix = !string.IsNullOrEmpty(p.AttachedLocalMonitorId) && _topology.LocalMonitors.Count > 1
-                        ? $"{p.AttachedLocalMonitorId} "
-                        : string.Empty;
-                    string trustStar = p.IsTrusted ? "⭐ " : "";
-                    string stateBadge = p.PairingState switch
-                    {
-                        PeerPairingState.MutuallyPaired => $"{trustStar}🟢 ONAYLI ({monPrefix}{FormatEdgeShortTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-{p.EdgeOffsetEnd * 100:F0})",
-                        PeerPairingState.OutboundPinVerified => $"{trustStar}🟡 KARŞI ONAY BEKLİYOR",
-                        PeerPairingState.InboundPinVerified => $"{trustStar}🟠 ONAYINIZ BEKLENİYOR",
-                        _ => p.IsTrusted ? "⭐ ⚪ GÜVENİLİR (Bağlanıyor...)" : "⚪ PIN GEREKLİ"
-                    };
-
-                    var itemBlock = new TextBlock
-                    {
-                        Text = $"   └ {icon} {nameDisplay}{multiMonTag} ({p.IpAddress})\n      {stateBadge}",
-                        FontSize = 11.5,
-                        TextWrapping = TextWrapping.Wrap,
-                        Margin = new Thickness(4, 2, 2, 3),
-                        Tag = p
-                    };
-                    PeersListBox.Items.Add(itemBlock);
-                }
+                PeersListBox.Items.Add(itemBlock);
             }
         }
 
-        // 2. Render remaining independent peers
-        for (int i = 0; i < peers.Count; i++)
+        // 4. Discovered External Colonies (Remote devices forming a colony on LAN, not yet joined by local machine)
+        var externalColonyPeers = peers
+            .Where(p => !renderedIds.Contains(p.DeviceId) &&
+                        !string.IsNullOrEmpty(p.ColonyId) &&
+                        (p.ColonyMembers.Count > 1 || peers.Count(x => x.ColonyId == p.ColonyId) > 1))
+            .GroupBy(p => p.ColonyId!)
+            .ToList();
+
+        foreach (var colGroup in externalColonyPeers)
         {
-            var p = peers[i];
-            if (renderedIds.Contains(p.DeviceId))
-                continue;
+            var colMembers = colGroup.ToList();
+            string colonyNames = string.Join(" + ", colMembers.Select(p => p.DisplayName).Distinct());
+            int colCount = Math.Max(colMembers.Count, colMembers.Max(p => p.ColonyMembers.Count));
 
-            int currentIdx = PeersListBox.Items.Count;
-            if (p.DeviceId == selectedId)
-                restoreIdx = currentIdx;
-
-            string icon = GetPlatformIcon(p.Platform);
-            string nameDisplay = !string.IsNullOrWhiteSpace(p.Nickname)
-                ? $"{p.Nickname} [{p.DeviceName}]"
-                : p.DeviceName;
-            string multiMonTag = p.RemoteMonitorCount > 1 ? $" [{p.RemoteMonitorCount} Ekran]" : string.Empty;
-            string monPrefix = !string.IsNullOrEmpty(p.AttachedLocalMonitorId) && _topology.LocalMonitors.Count > 1
-                ? $"{p.AttachedLocalMonitorId} "
-                : string.Empty;
-            string trustStar = p.IsTrusted ? "⭐ " : "";
-            string stateBadge = p.PairingState switch
+            var colHeader = new TextBlock
             {
-                PeerPairingState.MutuallyPaired => $"{trustStar}🟢 ONAYLI ({monPrefix}{FormatEdgeShortTr(p.AssignedEdgeOnLocal)} %{p.EdgeOffsetStart * 100:F0}-{p.EdgeOffsetEnd * 100:F0})",
-                PeerPairingState.OutboundPinVerified => $"{trustStar}🟡 KARŞI ONAY BEKLİYOR",
-                PeerPairingState.InboundPinVerified => $"{trustStar}🟠 ONAYINIZ BEKLENİYOR",
-                _ => p.IsTrusted ? "⭐ ⚪ GÜVENİLİR (Bağlanıyor...)" : "⚪ PIN GEREKLİ"
-            };
-
-            var itemBlock = new TextBlock
-            {
-                Text = $"{icon} {nameDisplay}{multiMonTag} ({p.IpAddress})\n   {stateBadge}",
+                Text = $"🪐 KEŞFEDİLEN KOLONİ: [{colonyNames}] ({colCount} Cihaz)\n   🟣 TEK ŞİFRE İLE BAĞLANILABİLİR",
                 FontSize = 11.5,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(2, 3, 2, 3),
-                Tag = p
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(192, 132, 252)), // Purple
+                Margin = new Thickness(2, 6, 2, 2),
+                Tag = "HEADER"
             };
+            PeersListBox.Items.Add(colHeader);
 
-            PeersListBox.Items.Add(itemBlock);
+            for (int i = 0; i < colMembers.Count; i++)
+            {
+                var p = colMembers[i];
+                renderedIds.Add(p.DeviceId);
+                int currentIdx = PeersListBox.Items.Count;
+                if (p.DeviceId == selectedId) restoreIdx = currentIdx;
+
+                bool isLast = (i == colMembers.Count - 1);
+                string branch = isLast ? "   └" : "   ├";
+
+                string icon = GetPlatformIcon(p.Platform);
+                string nameDisplay = !string.IsNullOrWhiteSpace(p.Nickname)
+                    ? $"{p.Nickname} [{p.DeviceName}]"
+                    : p.DeviceName;
+                string multiMonTag = p.RemoteMonitorCount > 1 ? $" [{p.RemoteMonitorCount} Ekran]" : string.Empty;
+                string trustStar = p.IsTrusted ? "⭐ " : "";
+                string stateBadge = p.PairingState switch
+                {
+                    PeerPairingState.OutboundPinVerified => $"{trustStar}🟡 KARŞI ONAY BEKLİYOR",
+                    PeerPairingState.InboundPinVerified => $"{trustStar}🟠 ONAYINIZ BEKLENİYOR",
+                    _ => p.IsTrusted ? "⭐ ⚪ GÜVENİLİR (Bağlanıyor...)" : "⚪ PIN GEREKLİ"
+                };
+
+                var itemBlock = new TextBlock
+                {
+                    Text = $"{branch} {icon} {nameDisplay}{multiMonTag} ({p.IpAddress})\n      {stateBadge}",
+                    FontSize = 11.5,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(4, 2, 2, 3),
+                    Tag = p
+                };
+                PeersListBox.Items.Add(itemBlock);
+            }
+        }
+
+        // 5. Remaining Independent / Discovered Devices
+        var independentPeers = peers.Where(p => !renderedIds.Contains(p.DeviceId)).ToList();
+        if (independentPeers.Count > 0)
+        {
+            if (activePairedPeers.Count > 0 || externalColonyPeers.Count > 0)
+            {
+                var indHeader = new TextBlock
+                {
+                    Text = "📡 Bağımsız Cihazlar (Ağda Keşfedilen):",
+                    FontSize = 11,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)), // Slate gray
+                    Margin = new Thickness(2, 6, 2, 2),
+                    Tag = "HEADER"
+                };
+                PeersListBox.Items.Add(indHeader);
+            }
+
+            foreach (var p in independentPeers)
+            {
+                int currentIdx = PeersListBox.Items.Count;
+                if (p.DeviceId == selectedId) restoreIdx = currentIdx;
+
+                string icon = GetPlatformIcon(p.Platform);
+                string nameDisplay = !string.IsNullOrWhiteSpace(p.Nickname)
+                    ? $"{p.Nickname} [{p.DeviceName}]"
+                    : p.DeviceName;
+                string multiMonTag = p.RemoteMonitorCount > 1 ? $" [{p.RemoteMonitorCount} Ekran]" : string.Empty;
+                string trustStar = p.IsTrusted ? "⭐ " : "";
+                string stateBadge = p.PairingState switch
+                {
+                    PeerPairingState.OutboundPinVerified => $"{trustStar}🟡 KARŞI ONAY BEKLİYOR",
+                    PeerPairingState.InboundPinVerified => $"{trustStar}🟠 ONAYINIZ BEKLENİYOR",
+                    _ => p.IsTrusted ? "⭐ ⚪ GÜVENİLİR (Bağlanıyor...)" : "⚪ PIN GEREKLİ"
+                };
+
+                var itemBlock = new TextBlock
+                {
+                    Text = $"{icon} {nameDisplay}{multiMonTag} ({p.IpAddress})\n   {stateBadge}",
+                    FontSize = 11.5,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(2, 3, 2, 3),
+                    Tag = p
+                };
+
+                PeersListBox.Items.Add(itemBlock);
+            }
         }
 
         if (restoreIdx >= 0)
@@ -372,7 +465,6 @@ public partial class MainWindow : Window
             SelectedPeerTitleText.ToolTip = null;
             SelectedPeerStatusText.Text = "Listeden bir cihaz seçip ekrandaki 6 haneli kodunu girin.";
             PeerNicknameInputBox.Text = string.Empty;
-            SimConfirmOurPinBtn.Visibility = Visibility.Collapsed;
             RevokeTrustBtn.Visibility = Visibility.Collapsed;
             DisconnectPeerBtn.Visibility = Visibility.Collapsed;
             SelectedPeerAcceptBtn.Visibility = Visibility.Collapsed;
@@ -387,10 +479,6 @@ public partial class MainWindow : Window
         string colonyBadge = !string.IsNullOrEmpty(p.ColonyId) ? " 🪐 [KOLONİ]" : "";
         SelectedPeerTitleText.Text = $"🔐 {GetPlatformIcon(p.Platform)} {p.DisplayName}{multiMonBadge}{trustBadge}{colonyBadge}";
         SelectedPeerTitleText.ToolTip = $"Gerçek Cihaz Adı: {p.DeviceName}\nIP Adresi: {p.IpAddress}\nPlatform: {p.Platform}";
-
-        string simHint = !string.IsNullOrEmpty(p.SimulatedLocalPin)
-            ? $" (Kod: {p.SimulatedLocalPin})"
-            : string.Empty;
 
         RememberDeviceCheckBox.IsChecked = p.IsTrusted || true;
         RevokeTrustBtn.Visibility = p.IsTrusted ? Visibility.Visible : Visibility.Collapsed;
@@ -420,24 +508,14 @@ public partial class MainWindow : Window
             PeerPairingState.OutboundPinVerified =>
                 $"⏳ Karşı kod doğrulandı! Şimdi '{p.DisplayName}' üzerinde sizin kodunuzu ({_network.PairingPin}) onaylayın.",
             PeerPairingState.InboundPinVerified =>
-                $"🔔 '{p.DisplayName}' sizin kodunuzu doğruladı! Yukarıdaki yeşil 'Hemen Onayla' butonuyla tek tıkla kabul edebilir veya onun 6 haneli kodunu{simHint} girip onaylayabilirsiniz:",
+                $"🔔 '{p.DisplayName}' sizin kodunuzu doğruladı! Yukarıdaki yeşil 'Hemen Onayla' butonuyla tek tıkla kabul edebilir veya onun 6 haneli kodunu girip onaylayabilirsiniz:",
             _ =>
                 p.IsTrusted
-                    ? $"⭐ Güvenilir cihaz aranıyor ve otomatik bağlanılıyor... Veya PIN ile manuel doğrulamak için kodu{simHint} girin."
+                    ? $"⭐ Güvenilir cihaz aranıyor ve otomatik bağlanılıyor... Veya PIN ile manuel doğrulamak için kodu girin."
                     : (!string.IsNullOrEmpty(p.ColonyId) && p.ColonyMembers.Count > 1)
-                        ? $"🪐 Bu cihaz bir koloniye dahil ({p.ColonyMembers.Count} cihaz bağlı). Cihazın 6 haneli kodunu{simHint} girip 'Tüm Koloniye Bağlan' butonuna basarak tüm sisteme tek seferde bağlanabilirsiniz."
-                        : $"'{p.DisplayName}' ekranındaki 6 haneli kodu{simHint} girin ve karşı cihazda da sizin kodunuzu ({_network.PairingPin}) onaylayın."
+                        ? $"🪐 Bu cihaz bir koloniye dahil ({p.ColonyMembers.Count} cihaz bağlı). Cihazın 6 haneli kodunu girip 'Tüm Koloniye Bağlan' butonuna basarak tüm sisteme tek seferde bağlanabilirsiniz."
+                        : $"'{p.DisplayName}' ekranındaki 6 haneli kodu girin ve karşı cihazda da sizin kodunuzu ({_network.PairingPin}) onaylayın."
         };
-
-        if (!string.IsNullOrEmpty(p.SimulatedLocalPin) && !p.RemoteEnteredMyPinVerified)
-        {
-            SimConfirmOurPinBtn.Visibility = Visibility.Visible;
-            SimConfirmOurPinBtn.Content = $"📲 [Sim] Karşı Cihazda Kodumu ({_network.PairingPin}) Onayla";
-        }
-        else
-        {
-            SimConfirmOurPinBtn.Visibility = Visibility.Collapsed;
-        }
     }
 
     private void SaveNicknameBtn_Click(object sender, RoutedEventArgs e)
@@ -1591,200 +1669,6 @@ public partial class MainWindow : Window
         RedrawDisplayArrangementCanvas();
     }
 
-    private void SimConfirmOurPinBtn_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedPeer == null)
-            return;
-
-        var (_, _, msg) = _network.VerifyInboundPinFromSimulatedPeer(_selectedPeer, _network.PairingPin);
-        CanvasSelectionInfoText.Text = msg;
-        if (_selectedPeer.IsMutuallyPaired)
-        {
-            EnsurePeerPlacedOnTopology(_selectedPeer);
-        }
-        UpdateSelectedPeerPairingPanel();
-        RefreshPeersList();
-        RedrawDisplayArrangementCanvas();
-    }
-
-    private void AddMultiSimBtn_Click(object sender, RoutedEventArgs e)
-    {
-        _simDeviceCounter++;
-        int simPort = 42860 + _simDeviceCounter;
-        string simPin = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
-
-        (string name, string platform, int w, int h, ScreenEdge preferredEdge) = (_simDeviceCounter % 4) switch
-        {
-            1 => ($"Android Telefon #{_simDeviceCounter}", "android", 1080, 2400, ScreenEdge.Right),
-            2 => ($"Nobara KDE PC #{_simDeviceCounter}", "linux-nobara", 4480, 1440, ScreenEdge.Left),
-            3 => ($"Windows İş İstasyonu #{_simDeviceCounter}", "windows", 3840, 1080, ScreenEdge.Right),
-            _ => ($"Android Tablet #{_simDeviceCounter}", "android", 2560, 1600, ScreenEdge.Bottom)
-        };
-
-        var simUdp = new UdpClient(new IPEndPoint(IPAddress.Loopback, simPort));
-        _simSockets.Add(simUdp);
-
-        var simPeer = _network.RegisterManualPeer(
-            "127.0.0.1",
-            name,
-            platform,
-            udpPort: simPort,
-            tcpPort: _network.ControlTcpPort,
-            screenWidth: w,
-            screenHeight: h,
-            customDeviceId: $"sim-{_simDeviceCounter}",
-            simulatedPin: simPin,
-            autoMutuallyPair: false);
-
-        if (platform == "linux-nobara")
-        {
-            simPeer.RemoteMonitors =
-            [
-                new PhysicalMonitorDescriptor { MonitorId = "DP-1", Name = "DP-1 (Ana)", VirtualX = 0, VirtualY = 0, Width = 2560, Height = 1440, ScaleFactor = 1.25, IsPrimary = true },
-                new PhysicalMonitorDescriptor { MonitorId = "HDMI-A-1", Name = "HDMI-A-1", VirtualX = 2560, VirtualY = 0, Width = 1920, Height = 1080, ScaleFactor = 1.0, IsPrimary = false }
-            ];
-        }
-        else if (platform == "windows")
-        {
-            simPeer.RemoteMonitors =
-            [
-                new PhysicalMonitorDescriptor { MonitorId = "DISPLAY1", Name = "DISPLAY1", VirtualX = 0, VirtualY = 0, Width = 1920, Height = 1080, ScaleFactor = 1.0, IsPrimary = true },
-                new PhysicalMonitorDescriptor { MonitorId = "DISPLAY2", Name = "DISPLAY2", VirtualX = 1920, VirtualY = 0, Width = 1920, Height = 1080, ScaleFactor = 1.0, IsPrimary = false }
-            ];
-        }
-
-        simPeer.AssignedEdgeOnLocal = preferredEdge;
-        simPeer.AttachedLocalMonitorId = _topology.GetOutermostMonitorForEdge(preferredEdge).MonitorId;
-        _selectedPeer = simPeer;
-        RemotePinInputBox.Text = simPin;
-
-        _ = Task.Run(() => RunSimulatedDeviceNodeLoopAsync(simPeer, simUdp, _simCts.Token));
-
-        RefreshPeersList();
-        UpdateSelectedPeerPairingPanel();
-        AppendLog(
-            $"[Simülatör] '{name}' ({simPeer.RemoteMonitorCount} ekran, {w}x{h}) eklendi (Kod: {simPin}). Sol alttan '✅ Doğrula' ve '📲 Karşı Cihazda Onayla' ile eşleştirin.");
-    }
-
-    private async Task RunSimulatedDeviceNodeLoopAsync(PeerDeviceNode simPeer, UdpClient simUdp, CancellationToken ct)
-    {
-        float simX = simPeer.ScreenWidth / 2f;
-        float simY = simPeer.ScreenHeight / 2f;
-        float simW = simPeer.ScreenWidth;
-        float simH = simPeer.ScreenHeight;
-        int moveCount = 0;
-
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                var res = await simUdp.ReceiveAsync(ct).ConfigureAwait(false);
-                var buf = res.Buffer;
-                if (!WirePacketCodec.TryValidateHeader(buf, out var type))
-                    continue;
-
-                switch (type)
-                {
-                    case PacketType.EdgeHandOff:
-                        if (WirePacketCodec.TryDecodeEdgeHandOff(buf, out var ho))
-                        {
-                            (simX, simY) = ho.TargetEntranceEdge switch
-                            {
-                                ScreenEdge.Left => (12f, ho.NormalizedPosition * simH),
-                                ScreenEdge.Right => (simW - 12f, ho.NormalizedPosition * simH),
-                                ScreenEdge.Top => (ho.NormalizedPosition * simW, 12f),
-                                ScreenEdge.Bottom => (ho.NormalizedPosition * simW, simH - 12f),
-                                _ => (simW / 2f, simH / 2f)
-                            };
-                            moveCount = 0;
-                            AppendLog($"[{simPeer.DeviceName}] İmleç ekrana girdi -> ({simX:F0}, {simY:F0})");
-                        }
-                        break;
-
-                    case PacketType.MouseMove:
-                        if (WirePacketCodec.TryDecodeMouseMove(buf, out var mm))
-                        {
-                            simX += mm.DeltaX;
-                            simY += mm.DeltaY;
-                            moveCount++;
-
-                            ScreenEdge returnEdgeOnLocal = ScreenEdge.None;
-                            float normPos = 0.5f;
-                            var edge = simPeer.AssignedEdgeOnLocal;
-
-                            if (edge == ScreenEdge.Right && simX < 0)
-                            {
-                                returnEdgeOnLocal = ScreenEdge.Right;
-                                normPos = Math.Clamp(simY / simH, 0f, 1f);
-                            }
-                            else if (edge == ScreenEdge.Left && simX > simW)
-                            {
-                                returnEdgeOnLocal = ScreenEdge.Left;
-                                normPos = Math.Clamp(simY / simH, 0f, 1f);
-                            }
-                            else if (edge == ScreenEdge.Bottom && simY < 0)
-                            {
-                                returnEdgeOnLocal = ScreenEdge.Bottom;
-                                normPos = Math.Clamp(simX / simW, 0f, 1f);
-                            }
-                            else if (edge == ScreenEdge.Top && simY > simH)
-                            {
-                                returnEdgeOnLocal = ScreenEdge.Top;
-                                normPos = Math.Clamp(simX / simW, 0f, 1f);
-                            }
-
-                            simX = Math.Clamp(simX, 0f, simW);
-                            simY = Math.Clamp(simY, 0f, simH);
-
-                            if (returnEdgeOnLocal != ScreenEdge.None)
-                            {
-                                byte[] backPkt = WirePacketCodec.EncodeEdgeHandOff(
-                                    new EdgeHandOffPacket(returnEdgeOnLocal, false, normPos));
-                                await simUdp.SendAsync(backPkt, backPkt.Length, new IPEndPoint(IPAddress.Loopback, _network.InputUdpPort))
-                                    .ConfigureAwait(false);
-                            }
-                            else if (moveCount % 30 == 0)
-                            {
-                                AppendLog($"[{simPeer.DeviceName}] İmleç: ({simX:F0}, {simY:F0}) / {simW:F0}x{simH:F0}");
-                            }
-                        }
-                        break;
-
-                    case PacketType.MouseButton:
-                        if (WirePacketCodec.TryDecodeMouseButton(buf, out var mb) && mb.IsPressed)
-                        {
-                            AppendLog($"[{simPeer.DeviceName}] Tıklama: {mb.Button} @ ({simX:F0}, {simY:F0})");
-                        }
-                        break;
-
-                    case PacketType.KeyEvent:
-                        if (WirePacketCodec.TryDecodeKeyEvent(buf, out var ke) && ke.IsPressed)
-                        {
-                            string chDisp = ke.UnicodeChar != '\0' ? $"'{ke.UnicodeChar}'" : $"VK_{ke.VirtualKey}";
-                            AppendLog($"[{simPeer.DeviceName}] Klavye: {chDisp} (Mod: {ke.Modifiers})");
-                        }
-                        break;
-
-                    case PacketType.HeartbeatPing:
-                        if (WirePacketCodec.TryDecodeHeartbeat(buf, out var ping))
-                        {
-                            byte[] pong = WirePacketCodec.EncodeHeartbeat(PacketType.HeartbeatPong, ping.TimestampMs);
-                            await simUdp.SendAsync(pong, pong.Length, res.RemoteEndPoint).ConfigureAwait(false);
-                        }
-                        break;
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch
-            {
-                // Ignore
-            }
-        }
-    }
-
     // =========================================================================
     // Active Focus, Lock & Peer Selection
     // =========================================================================
@@ -1985,33 +1869,33 @@ public partial class MainWindow : Window
 
     private void PeersListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (PeersListBox.SelectedItem is TextBlock tb && tb.Tag is PeerDeviceNode peer)
+        if (PeersListBox.SelectedItem is TextBlock tb)
         {
-            _selectedPeer = peer;
-            if (!string.IsNullOrEmpty(_selectedPeer.SimulatedLocalPin) && !_selectedPeer.MyEnteredPinVerifiedByRemote)
+            if (tb.Tag is PeerDeviceNode peer)
             {
-                RemotePinInputBox.Text = _selectedPeer.SimulatedLocalPin;
+                _selectedPeer = peer;
+                UpdateSelectedPeerPairingPanel();
+                RedrawDisplayArrangementCanvas();
+                return;
             }
-            UpdateSelectedPeerPairingPanel();
-            RedrawDisplayArrangementCanvas();
-            return;
-        }
-
-        int idx = PeersListBox.SelectedIndex;
-        var peers = _network.DiscoveredPeers
-            .OrderByDescending(p => p.IsMutuallyPaired)
-            .ThenByDescending(p => p.LastSeen)
-            .ToList();
-
-        if (idx >= 0 && idx < peers.Count)
-        {
-            _selectedPeer = peers[idx];
-            if (!string.IsNullOrEmpty(_selectedPeer.SimulatedLocalPin) && !_selectedPeer.MyEnteredPinVerifiedByRemote)
+            else if (tb.Tag is string localTag && localTag == "LOCAL")
             {
-                RemotePinInputBox.Text = _selectedPeer.SimulatedLocalPin;
+                _selectedPeer = null;
+                SelectedPeerTitleText.Text = $"💻 {_network.LocalDeviceName} [Bu Bilgisayar]";
+                SelectedPeerTitleText.ToolTip = $"Yerel IP: {_network.LocalIpv4}\nEkran: {_topology.LocalWidth}x{_topology.LocalHeight} ({_topology.LocalMonitors.Count} Monitör)";
+                SelectedPeerStatusText.Text = $"Bu bilgisayar Connect Me KVM ağının yerel kontrol merkezidir. Bağlı cihazların ekranlarına fareyi ekran sınırına doğru iterek pürüzsüzce geçiş yapabilirsiniz. Diğer cihazları yönetmek için listeden bir cihaz seçin.";
+                PeerNicknameInputBox.Text = string.Empty;
+                RevokeTrustBtn.Visibility = Visibility.Collapsed;
+                DisconnectPeerBtn.Visibility = Visibility.Collapsed;
+                SelectedPeerAcceptBtn.Visibility = Visibility.Collapsed;
+                ConnectToColonyBtn.Visibility = Visibility.Collapsed;
+                RedrawDisplayArrangementCanvas();
+                return;
             }
-            UpdateSelectedPeerPairingPanel();
-            RedrawDisplayArrangementCanvas();
+            else if (tb.Tag is string headerTag && headerTag == "HEADER")
+            {
+                return;
+            }
         }
     }
 

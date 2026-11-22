@@ -295,13 +295,8 @@
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button x:Name="ScanDevicesBtn"
                                     Click="ScanDevicesBtn_Click"
-                                    Background="#1F2937" Foreground="#38BDF8" BorderBrush="#30363D" Padding="7,3" Margin="0,0,5,0" Cursor="Hand"
+                                    Background="#1F2937" Foreground="#38BDF8" BorderBrush="#30363D" Padding="7,3" Cursor="Hand"
                                     Content="🔍 Tara"/>
-                            <Button x:Name="AddMultiSimBtn"
-                                    Click="AddMultiSimBtn_Click"
-                                    Background="#374151" Foreground="#F0F6FC" BorderThickness="0" Padding="7,3" Cursor="Hand"
-                                    ToolTip="Test için sanal Android / Nobara Linux / Laptop cihazı ekler"
-                                    Content="🧪 +Simüle Et"/>
                         </StackPanel>
                     </DockPanel>
 
@@ -471,12 +466,6 @@
                                     Visibility="Collapsed"
                                     Background="#7F1D1D" Foreground="#FCA5A5" FontSize="10.5" BorderThickness="0" Padding="6,3" Margin="0,4,0,0" Cursor="Hand"
                                     Content="🗑️ Bu Cihazın Güvenini Kaldır (Unut)"/>
-
-                            <Button x:Name="SimConfirmOurPinBtn"
-                                    Click="SimConfirmOurPinBtn_Click"
-                                    Visibility="Collapsed"
-                                    Background="#1D4ED8" Foreground="White" FontSize="11" BorderThickness="0" Padding="6,4" Margin="0,6,0,0" Cursor="Hand"
-                                    Content="📲 [Sim] Karşı Cihazda Da Kodumu Onayla"/>
                         </StackPanel>
                     </Border>
 

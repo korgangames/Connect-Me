@@ -44,6 +44,7 @@ public static class Program
         await TestRelativeSpatialTopologyAndMultiDeviceColonySyncAsync();
         await TestRichClipboardImageAndCrossEdgeDragAsync();
         TestConsistentEdgeCrossingAndPrematureJumpPrevention();
+        await TestDeviceDeduplicationAndClearColonyTreeAsync();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -1455,6 +1456,56 @@ public static class Program
         var (entryX, entryY) = topo.ComputeLocalEntryPoint(ScreenEdge.Right, 0.5f, peer);
         AssertTrue(entryX == 1912 && entryY == 540,
             "Güvenli İniş Koordinatı: Uzak cihazdan Windows'a geri dönüşte imleç sınırın içine (1912, 540) güvenle iniş yaptı");
+    }
+
+    private static async Task TestDeviceDeduplicationAndClearColonyTreeAsync()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "ConnectMeDedupTest_" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            await using var node = new ConnectMeNetworkNode("win-host-1", "Windows-Host", "windows", tempDir);
+
+            // 1. IP bazlı tekilleştirme: Aynı IP adresine (192.168.1.100) sahip iki cihaz eklendiğinde eski placeholder temizlenmeli
+            var peer1 = node.RegisterManualPeer("192.168.1.100", "Laptop-Eski", "linux", customDeviceId: "linux-old-id");
+            peer1.Nickname = "Çalışma Bilgisayarı";
+
+            var peer2 = node.RegisterManualPeer("192.168.1.100", "Laptop-Yeni", "linux", customDeviceId: "linux-new-id");
+
+            int ipCount = node.DiscoveredPeers.Count(p => p.IpAddress == "192.168.1.100");
+            AssertTrue(ipCount == 1, "Cihaz Tekilleştirme: Aynı IP adresine sahip cihazlar tekilleştirildi ve eski kopya silindi");
+            AssertTrue(node.DiscoveredPeers.Any(p => p.DeviceId == "linux-new-id"),
+                "Cihaz Tekilleştirme: Yeni DeviceId aktif cihaz olarak kaydedildi");
+
+            // 2. Büyük/Küçük Harf (Case-Insensitive) tekilleştirme
+            node.RegisterManualPeer("192.168.1.105", "PC-A", "windows", customDeviceId: "WIN-CAPS-TEST");
+            node.RegisterManualPeer("192.168.1.105", "PC-A", "windows", customDeviceId: "win-caps-test");
+            int caseCount = node.DiscoveredPeers.Count(p => p.DeviceId.Equals("win-caps-test", StringComparison.OrdinalIgnoreCase));
+            AssertTrue(caseCount == 1, "Cihaz Tekilleştirme: Büyük/küçük harf farklılığı tekilleştirildi ve çift kayıt engellendi");
+
+            // 3. Hayalet (Stale) çevrimdışı cihaz temizleme
+            var ghostPeer = node.RegisterManualPeer("192.168.1.200", "Hayalet-Cihaz", "android", customDeviceId: "ghost-1");
+            ghostPeer.LastSeen = DateTimeOffset.UtcNow.AddMinutes(-5); // 5 dakika önce görüldü
+            ghostPeer.MyEnteredPinVerifiedByRemote = false;
+            ghostPeer.RemoteEnteredMyPinVerified = false;
+
+            node.PruneStalePeers(TimeSpan.FromSeconds(30));
+            bool ghostExists = node.DiscoveredPeers.Any(p => p.DeviceId == "ghost-1");
+            AssertTrue(!ghostExists, "Hayalet Cihaz Temizleme: Çevrimdışı kalan eşleşmemiş cihazlar listeden otomatik temizlendi");
+
+            // 4. Aktif Koloni Cihaz Sayısı Doğrulaması: Yerel Makine (1) + Eşleşmiş Cihazlar (N)
+            var pairedPeer = node.RegisterManualPeer("192.168.1.110", "Eşleşmiş-Tablet", "android", customDeviceId: "android-paired-1");
+            pairedPeer.MyEnteredPinVerifiedByRemote = true;
+            pairedPeer.RemoteEnteredMyPinVerified = true;
+
+            int activeColonyTotalCount = 1 + node.MutuallyPairedPeers.Count;
+            AssertTrue(activeColonyTotalCount == 2,
+                "Net Koloni Görünümü: Aktif koloni ağında yerel bilgisayar dahil toplam 2 cihaz başarıyla hesaplandı");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
     }
 }
 

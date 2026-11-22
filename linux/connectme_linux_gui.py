@@ -1447,7 +1447,10 @@ class ConnectMeLinuxGui:
         if not sel:
             return
         if hasattr(self, "_displayed_peer_ids") and sel[0] < len(self._displayed_peer_ids):
-            self.selected_peer_id = self._displayed_peer_ids[sel[0]]
+            pid = self._displayed_peer_ids[sel[0]]
+            if pid == "__COLONY_HEADER__":
+                return
+            self.selected_peer_id = pid
         else:
             keys = list(self.node.peers.keys())
             if sel[0] < len(keys):
@@ -1527,7 +1530,27 @@ class ConnectMeLinuxGui:
         if not self.node.peers:
             self.peer_list.insert(tk.END, "  [Henüz ağda başka bir Connect Me cihazı bulunamadı. Cihazlarınızda programı açık tutun.]")
         else:
+            # Deduplicate by unique IP address and filter out local machine
+            seen_ips = set()
+            unique_peers = []
             for pid, p in self.node.peers.items():
+                if pid.lower() == self.node.device_id.lower():
+                    continue
+                ip = p.get("ipAddress", "")
+                if ip and ip in seen_ips:
+                    continue
+                if ip:
+                    seen_ips.add(ip)
+                unique_peers.append((pid, p))
+
+            # Active Colony summary if any mutually paired peers exist
+            paired = [p for _, p in unique_peers if p.get("isMutuallyPaired")]
+            if paired:
+                col_names = " + ".join([p.get("displayName") or p.get("deviceName", "") for p in paired])
+                self.peer_list.insert(tk.END, f"  🪐 AKTİF KOLONİ: Bu Bilgisayar + {col_names} ({len(paired) + 1} Cihaz)")
+                self._displayed_peer_ids.append("__COLONY_HEADER__")
+
+            for pid, p in unique_peers:
                 self._displayed_peer_ids.append(pid)
                 real_name = p.get("deviceName", pid)
                 nick = self.node.get_device_nickname(pid)
@@ -1538,6 +1561,7 @@ class ConnectMeLinuxGui:
                 tag = "⭐ " if is_trust else ""
                 mon_cnt = len(p.get("monitors", []))
                 mon_str = f" [{mon_cnt} Ekran]" if mon_cnt > 1 else ""
+                prefix = "    └ " if is_mut else "  🖥️ "
                 if is_mut:
                     status = f"{tag}🟢 ÇİFT TARAFLI ONAYLI (Aktif)"
                 elif p.get("in_ok"):
@@ -1546,7 +1570,7 @@ class ConnectMeLinuxGui:
                     status = f"{tag}🟡 Karşı Onay Bekliyor"
                 else:
                     status = f"{tag}⚪ Eşleşme Bekleniyor"
-                self.peer_list.insert(tk.END, f"  🖥️ {name} ({ip}){mon_str} — {status}")
+                self.peer_list.insert(tk.END, f"{prefix}{name} ({ip}){mon_str} — {status}")
 
             keys = list(self.node.peers.keys())
             if self.selected_peer_id and self.selected_peer_id in keys:

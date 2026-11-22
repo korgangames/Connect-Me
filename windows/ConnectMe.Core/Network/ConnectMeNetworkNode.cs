@@ -86,7 +86,7 @@ public static class BleProximityCodec
 public sealed class ConnectMeNetworkNode : IAsyncDisposable
 {
     private readonly CancellationTokenSource _cts = new();
-    private readonly ConcurrentDictionary<string, PeerDeviceNode> _peers = new();
+    private readonly ConcurrentDictionary<string, PeerDeviceNode> _peers = new(StringComparer.OrdinalIgnoreCase);
     private UdpClient? _discoveryUdp;
     private UdpClient? _inputUdp;
     private UdpClient? _audioUdp;
@@ -357,6 +357,87 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         return result;
     }
 
+    /// <summary>
+    /// Determines whether the specified IP string or address belongs to this local computer.
+    /// </summary>
+    public static bool IsLocalAddress(string? ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip)) return false;
+        if (ip == "127.0.0.1" || ip == "::1") return true;
+        if (IPAddress.TryParse(ip, out var parsed))
+        {
+            return IsLocalAddress(parsed);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Determines whether the specified IPAddress belongs to this local computer or is loopback.
+    /// </summary>
+    public static bool IsLocalAddress(IPAddress address)
+    {
+        if (IPAddress.IsLoopback(address)) return true;
+        return GetLocalIPv4Addresses().Any(a => a.Equals(address));
+    }
+
+    /// <summary>
+    /// Checks whether an incoming endpoint or ID represents this local node instance itself.
+    /// </summary>
+    public bool IsSelf(string? deviceId, string? ipAddress = null, int? tcpPort = null, int? udpPort = null)
+    {
+        if (!string.IsNullOrEmpty(deviceId) && string.Equals(deviceId, LocalDeviceId, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrEmpty(ipAddress) && IPAddress.TryParse(ipAddress, out var addr))
+        {
+            if (IsLocalAddress(addr))
+            {
+                if (tcpPort.HasValue && tcpPort.Value == ControlTcpPort) return true;
+                if (udpPort.HasValue && (udpPort.Value == InputUdpPort || udpPort.Value == DiscoveryPort)) return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Determines whether an existing peer node represents the exact same physical machine endpoint.
+    /// On a real LAN, same non-loopback IP implies same physical host. On loopback (e.g. tests), ports are compared.
+    /// </summary>
+    public static bool ArePeersSamePhysicalEndpoint(PeerDeviceNode a, string targetIp, int targetTcp, int targetUdp)
+    {
+        if (string.IsNullOrEmpty(a.IpAddress) || string.IsNullOrEmpty(targetIp))
+            return false;
+
+        if (!string.Equals(a.IpAddress, targetIp, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (a.IpAddress == "127.0.0.1" || a.IpAddress == "::1")
+        {
+            return (a.TcpControlPort == targetTcp || a.UdpInputPort == targetUdp);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Prunes stale untrusted and unpaired peers that haven't been seen for the specified age threshold.
+    /// Prevents offline discovery ghosts from cluttering the colony and device tree.
+    /// </summary>
+    public void PruneStalePeers(TimeSpan? maxAge = null)
+    {
+        var threshold = DateTimeOffset.UtcNow - (maxAge ?? TimeSpan.FromSeconds(45));
+        var stale = _peers.Values.Where(p =>
+            !p.IsMutuallyPaired &&
+            !p.IsTrusted &&
+            p.LastSeen < threshold).ToList();
+
+        foreach (var sp in stale)
+        {
+            _peers.TryRemove(sp.DeviceId, out _);
+        }
+    }
+
     public PeerDeviceNode RegisterManualPeer(
         string ipAddress,
         string deviceName = "Android Cihaz",
@@ -371,6 +452,15 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
         bool autoMutuallyPair = false)
     {
         string id = customDeviceId ?? $"{platform}-{ipAddress}:{udpPort}";
+
+        // Remove any prior duplicate entry with the same physical endpoint
+        var dup = _peers.Values.FirstOrDefault(p =>
+            !string.Equals(p.DeviceId, id, StringComparison.OrdinalIgnoreCase) &&
+            ArePeersSamePhysicalEndpoint(p, ipAddress, tcpPort, udpPort));
+        if (dup != null)
+        {
+            _peers.TryRemove(dup.DeviceId, out _);
+        }
         var peer = _peers.AddOrUpdate(
             id,
             _ => new PeerDeviceNode
@@ -822,8 +912,18 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
         if (colonyPeer.ColonyMembers is { Count: > 0 })
         {
-            foreach (var member in colonyPeer.ColonyMembers.Where(m => m.DeviceId != LocalDeviceId && m.DeviceId != colonyPeer.DeviceId))
+            foreach (var member in colonyPeer.ColonyMembers.Where(m =>
+                !IsSelf(m.DeviceId, m.IpAddress, m.TcpControlPort, m.UdpInputPort) &&
+                !string.Equals(m.DeviceId, colonyPeer.DeviceId, StringComparison.OrdinalIgnoreCase)))
             {
+                var dup = _peers.Values.FirstOrDefault(x =>
+                    !string.Equals(x.DeviceId, member.DeviceId, StringComparison.OrdinalIgnoreCase) &&
+                    ArePeersSamePhysicalEndpoint(x, member.IpAddress, member.TcpControlPort, member.UdpInputPort));
+                if (dup != null)
+                {
+                    _peers.TryRemove(dup.DeviceId, out _);
+                }
+
                 var p = _peers.AddOrUpdate(
                     member.DeviceId,
                     _ => new PeerDeviceNode
@@ -1575,6 +1675,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
     {
         while (!ct.IsCancellationRequested)
         {
+            PruneStalePeers();
             await BroadcastDiscoveryBeaconAsync().ConfigureAwait(false);
             await Task.Delay(3000, ct).ConfigureAwait(false);
         }
@@ -1605,7 +1706,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 if (msgType == "PAIR_REQUEST")
                 {
                     var header = JsonSerializer.Deserialize<TcpControlHeader>(res.Buffer, JsonOptions);
-                    if (header != null && !string.IsNullOrEmpty(header.SenderId) && header.SenderId != LocalDeviceId)
+                    if (header != null && !IsSelf(header.SenderId, senderIp, header.SenderTcpPort, header.SenderUdpPort))
                     {
                         var (success, resp) = ProcessInboundPairRequest(header, senderIp);
                         byte[] respBytes = JsonSerializer.SerializeToUtf8Bytes(resp, JsonOptions);
@@ -1617,7 +1718,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 else if (msgType == "PAIR_VERIFY_ACK")
                 {
                     var header = JsonSerializer.Deserialize<TcpControlHeader>(res.Buffer, JsonOptions);
-                    if (header != null && !string.IsNullOrEmpty(header.SenderId) && header.SenderId != LocalDeviceId)
+                    if (header != null && !IsSelf(header.SenderId, senderIp, header.SenderTcpPort, header.SenderUdpPort))
                     {
                         ProcessInboundPairVerifyAck(header, senderIp);
                         Log($"[Hızlı UDP Eşleşme] ⚡ '{senderIp}' cihazından UDP üzerinden PAIR_VERIFY_ACK alındı ve doğrulandı.");
@@ -1627,7 +1728,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 else if (msgType == "PAIR_ACCEPT")
                 {
                     var header = JsonSerializer.Deserialize<TcpControlHeader>(res.Buffer, JsonOptions);
-                    if (header != null && !string.IsNullOrEmpty(header.SenderId) && header.SenderId != LocalDeviceId)
+                    if (header != null && !IsSelf(header.SenderId, senderIp, header.SenderTcpPort, header.SenderUdpPort))
                     {
                         var resp = ProcessInboundPairAccept(header, senderIp);
                         byte[] respBytes = JsonSerializer.SerializeToUtf8Bytes(resp, JsonOptions);
@@ -1639,7 +1740,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 else if (msgType == "PAIR_ACCEPT_ACK")
                 {
                     var header = JsonSerializer.Deserialize<TcpControlHeader>(res.Buffer, JsonOptions);
-                    if (header != null && !string.IsNullOrEmpty(header.SenderId) && header.SenderId != LocalDeviceId)
+                    if (header != null && !IsSelf(header.SenderId, senderIp, header.SenderTcpPort, header.SenderUdpPort))
                     {
                         ProcessInboundPairVerifyAck(header, senderIp);
                         Log($"[Hızlı UDP Eşleşme] ⚡ '{senderIp}' cihazından UDP üzerinden PAIR_ACCEPT_ACK teyit edildi.");
@@ -1652,7 +1753,7 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 }
 
                 var beacon = JsonSerializer.Deserialize<DiscoveryBeacon>(res.Buffer, JsonOptions);
-                if (beacon == null || string.IsNullOrEmpty(beacon.DeviceId) || beacon.DeviceId == LocalDeviceId)
+                if (beacon == null || string.IsNullOrEmpty(beacon.DeviceId) || IsSelf(beacon.DeviceId, senderIp, beacon.TcpControlPort, beacon.UdpInputPort))
                     continue;
 
                 bool isNew = !_peers.ContainsKey(beacon.DeviceId);
@@ -1710,32 +1811,46 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                         return existing;
                     });
 
-                // If a temporary manual placeholder existed for this IP under a synthetic ID, transfer state & clean up placeholder
-                var placeholder = _peers.Values.FirstOrDefault(p =>
-                    p.IpAddress == senderIp &&
-                    p.DeviceId != beacon.DeviceId &&
-                    (p.DeviceId.StartsWith("peer-") || p.DeviceId.StartsWith("manual-")) &&
-                    p.TcpControlPort == beacon.TcpControlPort);
-                if (placeholder != null)
+                // Deduplicate by physical endpoint: If ANY existing peer entry represents the same physical host, transfer state and remove the old entry!
+                var duplicatePeer = _peers.Values.FirstOrDefault(p =>
+                    !string.Equals(p.DeviceId, beacon.DeviceId, StringComparison.OrdinalIgnoreCase) &&
+                    ArePeersSamePhysicalEndpoint(p, senderIp, beacon.TcpControlPort, beacon.UdpInputPort));
+                if (duplicatePeer != null)
                 {
-                    if (placeholder.MyEnteredPinVerifiedByRemote) peer.MyEnteredPinVerifiedByRemote = true;
-                    if (placeholder.RemoteEnteredMyPinVerified) peer.RemoteEnteredMyPinVerified = true;
-                    if (placeholder.IsTrusted) { peer.IsTrusted = true; peer.TrustToken = placeholder.TrustToken; }
-                    if (!string.IsNullOrEmpty(placeholder.ColonyId)) peer.ColonyId = placeholder.ColonyId;
-                    if (placeholder.ColonyMembers.Count > 0) peer.ColonyMembers = placeholder.ColonyMembers;
-                    if (placeholder.HasCustomCanvasPosition)
+                    if (duplicatePeer.MyEnteredPinVerifiedByRemote) peer.MyEnteredPinVerifiedByRemote = true;
+                    if (duplicatePeer.RemoteEnteredMyPinVerified) peer.RemoteEnteredMyPinVerified = true;
+                    if (duplicatePeer.IsTrusted) { peer.IsTrusted = true; peer.TrustToken = duplicatePeer.TrustToken; }
+                    if (!string.IsNullOrEmpty(duplicatePeer.ColonyId) && string.IsNullOrEmpty(peer.ColonyId)) peer.ColonyId = duplicatePeer.ColonyId;
+                    if (duplicatePeer.ColonyMembers.Count > 0 && peer.ColonyMembers.Count == 0) peer.ColonyMembers = duplicatePeer.ColonyMembers;
+                    if (duplicatePeer.HasCustomCanvasPosition)
                     {
                         peer.HasCustomCanvasPosition = true;
-                        peer.CanvasX = placeholder.CanvasX;
-                        peer.CanvasY = placeholder.CanvasY;
+                        peer.CanvasX = duplicatePeer.CanvasX;
+                        peer.CanvasY = duplicatePeer.CanvasY;
                     }
-                    peer.AssignedEdgeOnLocal = placeholder.AssignedEdgeOnLocal;
-                    peer.EdgeOffsetStart = placeholder.EdgeOffsetStart;
-                    peer.EdgeOffsetEnd = placeholder.EdgeOffsetEnd;
-                    if (!string.IsNullOrEmpty(placeholder.AttachedLocalMonitorId))
-                        peer.AttachedLocalMonitorId = placeholder.AttachedLocalMonitorId;
+                    if (peer.AssignedEdgeOnLocal == ScreenEdge.Right && duplicatePeer.AssignedEdgeOnLocal != ScreenEdge.Right)
+                    {
+                        peer.AssignedEdgeOnLocal = duplicatePeer.AssignedEdgeOnLocal;
+                        peer.EdgeOffsetStart = duplicatePeer.EdgeOffsetStart;
+                        peer.EdgeOffsetEnd = duplicatePeer.EdgeOffsetEnd;
+                    }
+                    if (string.IsNullOrEmpty(peer.AttachedLocalMonitorId) && !string.IsNullOrEmpty(duplicatePeer.AttachedLocalMonitorId))
+                        peer.AttachedLocalMonitorId = duplicatePeer.AttachedLocalMonitorId;
+                    if (string.IsNullOrEmpty(peer.Nickname) && !string.IsNullOrEmpty(duplicatePeer.Nickname))
+                        peer.Nickname = duplicatePeer.Nickname;
 
-                    _peers.TryRemove(placeholder.DeviceId, out _);
+                    _peers.TryRemove(duplicatePeer.DeviceId, out _);
+                }
+
+                // If another unpaired & untrusted peer had the exact same DeviceName and Platform, remove it (e.g. IP changed via DHCP)
+                var staleNamed = _peers.Values.FirstOrDefault(p =>
+                    !p.IsMutuallyPaired && !p.IsTrusted &&
+                    !string.Equals(p.DeviceId, beacon.DeviceId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(p.DeviceName, beacon.DeviceName, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(p.Platform, beacon.Platform, StringComparison.OrdinalIgnoreCase));
+                if (staleNamed != null)
+                {
+                    _peers.TryRemove(staleNamed.DeviceId, out _);
                 }
 
                 if (TrustStore.IsDeviceTrusted(peer.DeviceId, out var trustedRec) && trustedRec != null)
@@ -1936,6 +2051,17 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
     public (bool Success, TcpControlHeader Response) ProcessInboundPairRequest(TcpControlHeader header, string remoteIp)
     {
+        if (IsSelf(header.SenderId, remoteIp, header.SenderTcpPort, header.SenderUdpPort))
+        {
+            return (false, new TcpControlHeader
+            {
+                Type = "PAIR_REJECT",
+                SenderId = LocalDeviceId,
+                SenderName = LocalDeviceName,
+                SenderPlatform = LocalPlatform
+            });
+        }
+
         string peerId = !string.IsNullOrEmpty(header.SenderId)
             ? header.SenderId
             : $"{header.SenderPlatform ?? "peer"}-{remoteIp}:{header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort}";
@@ -1980,33 +2106,34 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 return existing;
             });
 
-        // Merge and clean up any placeholder peer entry with the same IP but different DeviceId
+        // Merge and clean up ANY existing duplicate peer entry with the same physical endpoint
         int senderTcp = header.SenderTcpPort ?? ProtocolConstants.DataControlTcpPort;
-        var placeholder = _peers.Values.FirstOrDefault(p =>
-            p.IpAddress == remoteIp &&
-            p.DeviceId != peerId &&
-            (p.DeviceId.StartsWith("peer-") || p.DeviceId.StartsWith("manual-")) &&
-            p.TcpControlPort == senderTcp);
-        if (placeholder != null)
+        int senderUdp = header.SenderUdpPort ?? ProtocolConstants.FastInputUdpPort;
+        var duplicate = _peers.Values.FirstOrDefault(p =>
+            !string.Equals(p.DeviceId, peerId, StringComparison.OrdinalIgnoreCase) &&
+            ArePeersSamePhysicalEndpoint(p, remoteIp, senderTcp, senderUdp));
+        if (duplicate != null)
         {
-            if (placeholder.MyEnteredPinVerifiedByRemote) peer.MyEnteredPinVerifiedByRemote = true;
-            if (placeholder.RemoteEnteredMyPinVerified) peer.RemoteEnteredMyPinVerified = true;
-            if (placeholder.IsTrusted) { peer.IsTrusted = true; peer.TrustToken = placeholder.TrustToken; }
-            if (!string.IsNullOrEmpty(placeholder.ColonyId)) peer.ColonyId = placeholder.ColonyId;
-            if (placeholder.ColonyMembers.Count > 0) peer.ColonyMembers = placeholder.ColonyMembers;
-            if (placeholder.HasCustomCanvasPosition)
+            if (duplicate.MyEnteredPinVerifiedByRemote) peer.MyEnteredPinVerifiedByRemote = true;
+            if (duplicate.RemoteEnteredMyPinVerified) peer.RemoteEnteredMyPinVerified = true;
+            if (duplicate.IsTrusted) { peer.IsTrusted = true; peer.TrustToken = duplicate.TrustToken; }
+            if (!string.IsNullOrEmpty(duplicate.ColonyId)) peer.ColonyId = duplicate.ColonyId;
+            if (duplicate.ColonyMembers.Count > 0) peer.ColonyMembers = duplicate.ColonyMembers;
+            if (duplicate.HasCustomCanvasPosition)
             {
                 peer.HasCustomCanvasPosition = true;
-                peer.CanvasX = placeholder.CanvasX;
-                peer.CanvasY = placeholder.CanvasY;
+                peer.CanvasX = duplicate.CanvasX;
+                peer.CanvasY = duplicate.CanvasY;
             }
-            peer.AssignedEdgeOnLocal = placeholder.AssignedEdgeOnLocal;
-            peer.EdgeOffsetStart = placeholder.EdgeOffsetStart;
-            peer.EdgeOffsetEnd = placeholder.EdgeOffsetEnd;
-            if (!string.IsNullOrEmpty(placeholder.AttachedLocalMonitorId))
-                peer.AttachedLocalMonitorId = placeholder.AttachedLocalMonitorId;
+            peer.AssignedEdgeOnLocal = duplicate.AssignedEdgeOnLocal;
+            peer.EdgeOffsetStart = duplicate.EdgeOffsetStart;
+            peer.EdgeOffsetEnd = duplicate.EdgeOffsetEnd;
+            if (!string.IsNullOrEmpty(duplicate.AttachedLocalMonitorId))
+                peer.AttachedLocalMonitorId = duplicate.AttachedLocalMonitorId;
+            if (string.IsNullOrEmpty(peer.Nickname) && !string.IsNullOrEmpty(duplicate.Nickname))
+                peer.Nickname = duplicate.Nickname;
 
-            _peers.TryRemove(placeholder.DeviceId, out _);
+            _peers.TryRemove(duplicate.DeviceId, out _);
         }
 
         string submittedPin = (header.TargetPin ?? string.Empty).Trim();
@@ -2337,7 +2464,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
 
                 case "COLONY_INTRODUCE":
                 {
-                    if (header.NewMember != null && !string.IsNullOrEmpty(header.NewMember.DeviceId) && header.NewMember.DeviceId != LocalDeviceId)
+                    if (header.NewMember != null && !string.IsNullOrEmpty(header.NewMember.DeviceId) &&
+                        !IsSelf(header.NewMember.DeviceId, header.NewMember.IpAddress, header.NewMember.TcpControlPort, header.NewMember.UdpInputPort))
                     {
                         var nm = header.NewMember;
                         var peer = _peers.AddOrUpdate(
@@ -2373,14 +2501,12 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                                 return existing;
                             });
 
-                        var placeholder = _peers.Values.FirstOrDefault(p =>
-                            p.IpAddress == nm.IpAddress &&
-                            p.DeviceId != nm.DeviceId &&
-                            (p.DeviceId.StartsWith("peer-") || p.DeviceId.StartsWith("manual-")) &&
-                            p.TcpControlPort == nm.TcpControlPort);
-                        if (placeholder != null)
+                        var dup = _peers.Values.FirstOrDefault(p =>
+                            !string.Equals(p.DeviceId, nm.DeviceId, StringComparison.OrdinalIgnoreCase) &&
+                            ArePeersSamePhysicalEndpoint(p, nm.IpAddress, nm.TcpControlPort, nm.UdpInputPort));
+                        if (dup != null)
                         {
-                            _peers.TryRemove(placeholder.DeviceId, out _);
+                            _peers.TryRemove(dup.DeviceId, out _);
                         }
 
                         Log($"[Koloni Eşleşmesi] 🪐 '{header.SenderName}' tarafından yeni koloni üyesi '{peer.DeviceName}' ({peer.IpAddress}) tanıtıldı ve sisteme otomatik bağlandı!");
@@ -2394,7 +2520,8 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                 {
                     if (header.ColonyMembers != null)
                     {
-                        foreach (var m in header.ColonyMembers.Where(m => m.DeviceId != LocalDeviceId))
+                        foreach (var m in header.ColonyMembers.Where(m =>
+                            !IsSelf(m.DeviceId, m.IpAddress, m.TcpControlPort, m.UdpInputPort)))
                         {
                             var peer = _peers.AddOrUpdate(
                                 m.DeviceId,
@@ -2429,14 +2556,12 @@ public sealed class ConnectMeNetworkNode : IAsyncDisposable
                                     return existing;
                                 });
 
-                            var placeholder = _peers.Values.FirstOrDefault(p =>
-                                p.IpAddress == m.IpAddress &&
-                                p.DeviceId != m.DeviceId &&
-                                (p.DeviceId.StartsWith("peer-") || p.DeviceId.StartsWith("manual-")) &&
-                                p.TcpControlPort == m.TcpControlPort);
-                            if (placeholder != null)
+                            var dup = _peers.Values.FirstOrDefault(p =>
+                                !string.Equals(p.DeviceId, m.DeviceId, StringComparison.OrdinalIgnoreCase) &&
+                                ArePeersSamePhysicalEndpoint(p, m.IpAddress, m.TcpControlPort, m.UdpInputPort));
+                            if (dup != null)
                             {
-                                _peers.TryRemove(placeholder.DeviceId, out _);
+                                _peers.TryRemove(dup.DeviceId, out _);
                             }
 
                             PeerPairingStatusChanged?.Invoke(peer);
