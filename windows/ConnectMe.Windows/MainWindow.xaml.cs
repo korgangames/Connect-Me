@@ -55,11 +55,21 @@ public partial class MainWindow : Window
 
     private static string GetAppVersion()
     {
-        string ver = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.8.4";
-        if (File.Exists("VERSION"))
+        string ver = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.8.36";
+        try
         {
-            try { ver = File.ReadAllText("VERSION").Trim(); } catch { }
+            string exeDir = AppContext.BaseDirectory;
+            string versionFilePath = System.IO.Path.Combine(exeDir, "VERSION");
+            if (File.Exists(versionFilePath))
+            {
+                ver = File.ReadAllText(versionFilePath).Trim();
+            }
+            else if (File.Exists("VERSION"))
+            {
+                ver = File.ReadAllText("VERSION").Trim();
+            }
         }
+        catch { }
         return ver;
     }
 
@@ -2893,7 +2903,7 @@ public partial class MainWindow : Window
         string currentVer = GetAppVersion();
         if (isManual)
         {
-            AppendLog("🔍 [Güncelleme] GitHub Releases üzerinden yeni sürüm denetleniyor...");
+            AppendLog($"🔍 [Güncelleme] GitHub üzerinden yeni sürüm denetleniyor (Mevcut: v{currentVer})...");
         }
 
         try
@@ -2945,6 +2955,8 @@ public partial class MainWindow : Window
                 else
                 {
                     UpdateBadge.Visibility = Visibility.Collapsed;
+                    string remoteTag = result.UpdateInfo?.VersionTag ?? ("v" + currentVer);
+                    AppendLog($"ℹ️ [Güncelleme] Connect Me güncel (Mevcut: v{currentVer}, GitHub: {remoteTag}).");
                     if (isManual)
                     {
                         MessageBox.Show(
@@ -2959,10 +2971,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (isManual)
-            {
-                AppendLog($"[Güncelleme Hatası] Sürüm denetlenemedi: {ex.Message}");
-            }
+            AppendLog($"[Güncelleme Hatası] Sürüm denetlenemedi: {ex.Message}");
         }
     }
 

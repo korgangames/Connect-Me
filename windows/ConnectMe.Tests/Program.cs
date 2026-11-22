@@ -3,6 +3,7 @@ using System.Text;
 using ConnectMe.Core.Network;
 using ConnectMe.Core.Protocol;
 using ConnectMe.Core.Topology;
+using ConnectMe.Windows.Updater;
 
 namespace ConnectMe.Tests;
 
@@ -46,6 +47,7 @@ public static class Program
         TestConsistentEdgeCrossingAndPrematureJumpPrevention();
         await TestDeviceDeduplicationAndClearColonyTreeAsync();
         TestAudioPcmMixerAndNetworkOptimization();
+        await TestWindowsUpdateDetectionAndSemverAsync();
 
         Console.WriteLine($"\nSONUÇ: {_passed} Başarılı, {_failed} Başarısız.");
         return _failed == 0 ? 0 : 1;
@@ -1560,6 +1562,38 @@ public static class Program
         else
         {
             AssertTrue(true, $"Yalnızca loopback/APIPA ortamı algılandı ({localIps[0]})");
+        }
+    }
+
+    private static async Task TestWindowsUpdateDetectionAndSemverAsync()
+    {
+        // 1. Semantic Versioning unit tests
+        AssertTrue(WindowsUpdateService.IsNewerVersion("v1.8.36", "1.8.35"), "Semver: 1.8.36 > 1.8.35");
+        AssertTrue(WindowsUpdateService.IsNewerVersion("1.8.36", "1.8.35"), "Semver: 'v' olmadan sürüm karşılaştırması");
+        AssertTrue(!WindowsUpdateService.IsNewerVersion("v1.8.35", "1.8.35"), "Semver: Aynı sürüm yeni değil");
+        AssertTrue(!WindowsUpdateService.IsNewerVersion("v1.8.34", "1.8.35"), "Semver: Eski sürüm yeni değil");
+        AssertTrue(!WindowsUpdateService.IsNewerVersion("v1.8.35", "1.8.35 (v1-8-35)"), "Semver: Parantezli derleme bilgisi doğru ayıklandı (aynı sürüm)");
+        AssertTrue(WindowsUpdateService.IsNewerVersion("v1.8.36", "1.8.35 (v1-8-35)"), "Semver: Parantezli derleme bilgisi varken yeni sürüm tespit edildi");
+        AssertTrue(WindowsUpdateService.IsNewerVersion("v1.9.0", "1.8.36"), "Semver: Küçük sürüm (minor) artışı tespit edildi");
+        AssertTrue(WindowsUpdateService.IsNewerVersion("v2.0.0", "1.8.36"), "Semver: Büyük sürüm (major) artışı tespit edildi");
+        AssertTrue(WindowsUpdateService.CompareVersions("v1.8.36", "1.8.36") == 0, "Semver: Eşit sürümler CompareVersions == 0");
+
+        // 2. Multi-tier GitHub live update check
+        try
+        {
+            var resultOld = await WindowsUpdateService.CheckForUpdatesAsync("1.0.0");
+            AssertTrue(resultOld.IsSuccess, $"GitHub Güncelleme Denetimi başarılı (Son Sürüm: {resultOld.UpdateInfo?.VersionTag})");
+            AssertTrue(resultOld.HasUpdate, "1.0.0 için yeni sürüm tespit edildi (HasUpdate == true)");
+            AssertTrue(!string.IsNullOrEmpty(resultOld.UpdateInfo?.DownloadUrl), $"İndirme bağlantısı oluşturuldu: {resultOld.UpdateInfo?.DownloadUrl}");
+
+            var resultCurrent = await WindowsUpdateService.CheckForUpdatesAsync("99.99.99");
+            AssertTrue(resultCurrent.IsSuccess, "Gelecek sürüm (99.99.99) için denetim başarılı");
+            AssertTrue(!resultCurrent.HasUpdate, "Gelecek sürüm için güncelleme yok (HasUpdate == false)");
+            AssertTrue(resultCurrent.UpdateInfo != null, "Güncelleme olmasa dahi GitHub son sürüm bilgisi nesne olarak döndü");
+        }
+        catch (Exception ex)
+        {
+            AssertTrue(false, $"Güncelleme testi beklenmeyen hata verdi: {ex.Message}");
         }
     }
 }

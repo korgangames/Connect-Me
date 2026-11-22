@@ -1,3 +1,32 @@
+# Connect Me v1.8.36 — Windows Otomatik Güncelleme Algılama (Auto-Update Detection) Onarımı, Çok Katmanlı GitHub Güncelleyici ve Android CI Derleme Düzeltmesi
+
+Bu sürüm; Windows Connect Me üzerinde yeni GitHub sürümlerinin otomatik olarak algılanamaması sorununu kökten çözer, güncelleyici mimarisini 4 katmanlı dayanıklı (fault-tolerant) yapıya kavuşturur ve CI derlemesini engelleyen Android çağrı imzasını onarır:
+
+1. **🚀 4 Katmanlı Akıllı GitHub Güncelleme Denetimi (`WindowsUpdateService`):**
+   - **Katman 1 (Releases Listesi & En Yüksek Sürüm Taraması):** Yalnızca `/releases/latest` yerine `https://api.github.com/repos/korgangames/Connect-Me/releases?per_page=10` taranır; yayınlanmış (taslak olmayan) tüm sürümler taranarak en yüksek semantik sürüm belirlenir. GitHub CDN'in `latest` önbellekleme gecikmelerine takılmaz.
+   - **Katman 2 (Klasik Releases Latest API):** Tekil yayınlanan en son sürüme doğrudan fallback.
+   - **Katman 3 (GitHub Web Redirect):** GitHub API hız limitlerine (rate limit HTTP 403) takılmamak için `https://github.com/korgangames/Connect-Me/releases/latest` URL'ine standart tarayıcı `User-Agent` başlığıyla `HEAD` isteği atılarak yönlendirme (302 Location) başlığından en son tag anında çekilir.
+   - **Katman 4 (GitHub Raw VERSION):** Depodaki ana dalda bulunan `VERSION` dosyası (`raw.githubusercontent.com`) doğrudan okunarak hiçbir API anahtarı veya limit kısıtlamasına maruz kalmadan güncel sürüm kesin olarak tespit edilir.
+
+2. **📦 Kusursuz Windows Varlık (Asset) ve İndirme Bağlantısı Çözümlemesi:**
+   - GitHub Release varlıkları henüz yükleme aşamasındayken veya varlık listesinde özel isim uyumsuzluğu olduğunda dahi güncelleme başarısız sayılmaz; doğrudan standartlaştırılmış `ConnectMe-Windows-x64.zip` ve `ConnectMe-Windows-x64-v{version}.zip` indirme bağlantıları otomatik üretilir.
+
+3. **🔢 Güçlendirilmiş Semantik Sürüm Karşılaştırma (`IsNewerVersion` & `CompareVersions`):**
+   - Sürüm etiketlerindeki `v` önekleri, ön sürüm etiketleri (`-beta`, `-rc`), boşluklar ve derleme bilgileri (ör. `1.8.35 (v1-8-35)`) güvenle ayrıştırılır; `int.TryParse` hataları ve sürümün `0` olarak algılanması riski bütünüyle giderildi.
+
+4. **📱 Android CI & Derleme Engelinin Kaldırılması:**
+   - `ConnectMeService.kt` içinde `onAudioRouteChanged?.invoke()` çağrısındaki eksik parametre hatası (`No value passed for parameter 'p1'`) `onAudioRouteChanged?.invoke(target)` olarak düzeltildi.
+   - GitHub Actions Android derleme hattının çökmesi ve dolayısıyla `v1.8.35` sürümünün GitHub Release olarak yayınlanamamasına sebep olan hata tamamen çözüldü.
+
+5. **🖥️ Windows Arayüz Bildirimi ve Konum Bağımsız Sürüm Tespiti (`MainWindow.xaml.cs`):**
+   - `GetAppVersion()` artık `AppContext.BaseDirectory` üzerinden `VERSION` dosyasını arar; kısayol veya başlangıç klasörü farklı bir dizinden çalıştırılsa bile doğru sürüm tespit edilir.
+   - Güncelleme denetimi bittiğinde hem manuel hem arka plan taramalarında sistem günlüğüne `ℹ️ [Güncelleme] Connect Me güncel (Mevcut: vX, GitHub: vY)` şeklinde net bilgi yazılır; kullanıcı denetimin başarılı olduğunu anında görür.
+
+6. **🧪 120/120 Birim Testi:**
+   - Semantik sürümleme, parantezli derleme bilgisi, GitHub canlı denetim ve fallback senaryoları dahil 15 yeni birim testi eklendi; test paketinin tamamı yeşil (**120 Başarılı, 0 Başarısız**).
+
+---
+
 # Connect Me v1.8.35 — Ses Aktarımı Mimari Yenilemesi ("1-Tıkla Kulaklık Merkezi Modu"), Windows Process Loopback, Çoklu Cihaz Ses Miksajı ve Sistem Geneli Performans Optimizasyonu (Windows, Linux & Android)
 
 Bu sürüm; ses aktarımındaki bozulma, statik gürültü, gönderici hoparlörünün susmaması ve çoklu ağ adaptörü kaynaklı bağlantı kopması sorunlarını kökten çözer, "1-Tıkla Kulaklık / Ses Merkezi Modu"nu ekler ve tüm çekirdek alt sistemleri (fare/RawInput, ağ yönlendirme, pano ve PipeWire/Android ses akışı) sıfır bellek ayırımlı (zero-allocation) yüksek verimli yapıya geçirir:

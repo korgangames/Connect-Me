@@ -1805,7 +1805,7 @@ class ConnectMeService : Service() {
                         } else {
                             log("[Ses Matrisi] 🔔 '${target.targetDeviceName}' sesinizi istiyor. İzin vermek için bildirime veya uygulamaya dokunun.")
                             showAudioPermissionPromptNotification(target.targetDeviceName)
-                            onAudioRouteChanged?.invoke()
+                            onAudioRouteChanged?.invoke(target)
                         }
                     }
                 }
@@ -1846,6 +1846,6 @@ class ConnectMeService : Service() {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .build()
             nm.notify(4287, notif)
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) {}
     }
 }

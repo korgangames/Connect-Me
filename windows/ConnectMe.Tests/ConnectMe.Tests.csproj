@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ConnectMe.Core\ConnectMe.Core.csproj" />
+    <Compile Include="..\ConnectMe.Windows\Updater\WindowsUpdateService.cs" Link="WindowsUpdateService.cs" />
   </ItemGroup>
 
 </Project>
